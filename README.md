@@ -1,0 +1,2 @@
+# goscan
+go
