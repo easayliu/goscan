@@ -1,7 +1,7 @@
-config.cluster.yaml
-config.example.yaml
-config.json
+# 配置文件（包含敏感信息）
 config.yaml
+config.json
+config.cluster.yaml
 
 # Node.js / MCP
 node_modules/
@@ -24,9 +24,7 @@ workflow-*.json
 .DS_Store
 Thumbs.db
 
-config.cluster.yaml
-config.json
-config.yaml
+# 其他
 .claude
 CLAUDE.md
-USAGE.md
+CLAUDE.md.backup

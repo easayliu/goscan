@@ -1,0 +1,108 @@
+
+# 本文件展示了如何配置 goscan daemon 服务
+
+clickhouse:
+  hosts:
+    - localhost
+  port: 9000  # Native协议端口，HTTP协议使用8123
+  database: default
+  username: default
+  password: ""
+  debug: false
+  cluster: ""  # 集群名称，用于分布式表
+  protocol: "native"  # 协议类型：native 或 http
+
+server:
+  port: 8080
+  address: "0.0.0.0"
+
+scheduler:
+  enabled: true
+  jobs:
+    # 火山云每日同步任务
+    - name: "volcengine_daily_sync"
+      provider: "volcengine"
+      cron: "0 2 * * *"  # 每天凌晨2点执行
+      config:
+        sync_mode: "sync-optimal"
+        use_distributed: false
+        create_table: true
+        clean_before: true
+
+    # 阿里云每日同步任务
+    - name: "alicloud_daily_sync"
+      provider: "alicloud"
+      cron: "0 3 * * *"  # 每天凌晨3点执行
+      config:
+        sync_mode: "sync-optimal"
+        use_distributed: false
+        create_table: true
+        clean_before: true
+        granularity: "both"
+
+runtime:
+  max_concurrent_tasks: 3
+  task_timeout: 3600  # 任务超时时间（秒）
+  graceful_shutdown_timeout: 30  # 优雅关闭超时时间（秒）
+
+# 多云服务商配置
+cloud_providers:
+  # 火山云配置
+  volcengine:
+    access_key: ""    # 火山云访问密钥 ID
+    secret_key: ""    # 火山云访问密钥
+    region: "cn-north-1"
+    host: "billing.volcengineapi.com"
+    timeout: 30
+    batch_size: 50
+    max_retries: 5
+    retry_delay: 3
+    default_sync_mode: "all_periods"
+    max_historical_months: 12
+    auto_detect_periods: true
+    skip_empty_periods: true
+
+  # 阿里云配置
+  alicloud:
+    access_key_id: ""     # 阿里云访问密钥 ID
+    access_key_secret: "" # 阿里云访问密钥
+    region: "cn-hangzhou"
+    endpoint: ""
+    timeout: 30
+    batch_size: 100
+    max_retries: 5
+    retry_delay: 2
+    default_granularity: "monthly"
+    enable_daily_sync: false
+    daily_sync_days: 30
+    monthly_table: "alicloud_bill_monthly"
+    daily_table: "alicloud_bill_daily"
+    default_sync_mode: "all_periods"
+    max_historical_months: 18
+    auto_detect_periods: true
+    skip_empty_periods: true
+
+  # AWS 配置（即将支持）
+  aws:
+    access_key: ""
+    secret_key: ""
+    region: "us-east-1"
+    timeout: 30
+
+  # Azure 配置（即将支持）
+  azure:
+    client_id: ""
+    client_secret: ""
+    tenant_id: ""
+    subscription_id: ""
+    timeout: 30
+
+  # GCP 配置（即将支持）
+  gcp:
+    project_id: ""
+    service_account_key: ""
+    timeout: 30
+
+app:
+  log_level: info
+  log_file: ""

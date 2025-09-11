@@ -44,8 +44,12 @@ func NewBillService(aliConfig *config.AliCloudConfig, chClient *clickhouse.Clien
 	return service, nil
 }
 
-// CreateMonthlyBillTable 创建按月账单表
+// CreateMonthlyBillTable 创建按月账单表（支持自动表名解析）
 func (s *BillService) CreateMonthlyBillTable(ctx context.Context) error {
+	// 获取解析器，用于确定实际要检查和创建的表名
+	resolver := s.chClient.GetTableNameResolver()
+	actualTableName := resolver.ResolveQueryTarget(s.monthlyTableName)
+	
 	// 检查表是否已存在
 	exists, err := s.chClient.TableExists(ctx, s.monthlyTableName)
 	if err != nil {
@@ -53,7 +57,7 @@ func (s *BillService) CreateMonthlyBillTable(ctx context.Context) error {
 	}
 
 	if exists {
-		log.Printf("[阿里云按月表] 表 %s 已存在，跳过创建", s.monthlyTableName)
+		log.Printf("[阿里云按月表] 表 %s 已存在，跳过创建", actualTableName)
 		return nil
 	}
 
@@ -137,12 +141,24 @@ func (s *BillService) CreateMonthlyBillTable(ctx context.Context) error {
 	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
 	PARTITION BY toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))`
 
-	log.Printf("[阿里云按月表] 创建表: %s", s.monthlyTableName)
-	return s.chClient.CreateTable(ctx, s.monthlyTableName, schema)
+	// 使用自动表名解析机制创建表
+	if resolver.IsClusterEnabled() {
+		// 集群模式：创建完整的分布式表结构（本地表+分布式表）
+		log.Printf("[阿里云按月表] 在集群模式下创建分布式表结构，基础表名: %s", s.monthlyTableName)
+		return s.chClient.CreateDistributedTableWithResolver(ctx, s.monthlyTableName, schema)
+	} else {
+		// 单机模式：直接创建表
+		log.Printf("[阿里云按月表] 在单机模式下创建表: %s", actualTableName)
+		return s.chClient.CreateTable(ctx, s.monthlyTableName, schema)
+	}
 }
 
-// CreateDailyBillTable 创建按天账单表
+// CreateDailyBillTable 创建按天账单表（支持自动表名解析）
 func (s *BillService) CreateDailyBillTable(ctx context.Context) error {
+	// 获取解析器，用于确定实际要检查和创建的表名
+	resolver := s.chClient.GetTableNameResolver()
+	actualTableName := resolver.ResolveQueryTarget(s.dailyTableName)
+	
 	// 检查表是否已存在
 	exists, err := s.chClient.TableExists(ctx, s.dailyTableName)
 	if err != nil {
@@ -150,7 +166,7 @@ func (s *BillService) CreateDailyBillTable(ctx context.Context) error {
 	}
 
 	if exists {
-		log.Printf("[阿里云按天表] 表 %s 已存在，跳过创建", s.dailyTableName)
+		log.Printf("[阿里云按天表] 表 %s 已存在，跳过创建", actualTableName)
 		return nil
 	}
 
@@ -234,8 +250,16 @@ func (s *BillService) CreateDailyBillTable(ctx context.Context) error {
 	ORDER BY (billing_date, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
 	PARTITION BY toYYYYMMDD(billing_date)`
 
-	log.Printf("[阿里云按天表] 创建表: %s", s.dailyTableName)
-	return s.chClient.CreateTable(ctx, s.dailyTableName, schema)
+	// 使用自动表名解析机制创建表
+	if resolver.IsClusterEnabled() {
+		// 集群模式：创建完整的分布式表结构（本地表+分布式表）
+		log.Printf("[阿里云按天表] 在集群模式下创建分布式表结构，基础表名: %s", s.dailyTableName)
+		return s.chClient.CreateDistributedTableWithResolver(ctx, s.dailyTableName, schema)
+	} else {
+		// 单机模式：直接创建表
+		log.Printf("[阿里云按天表] 在单机模式下创建表: %s", actualTableName)
+		return s.chClient.CreateTable(ctx, s.dailyTableName, schema)
+	}
 }
 
 // CreateDistributedMonthlyBillTable 创建分布式按月账单表
@@ -1021,4 +1045,242 @@ func (s *BillService) CleanSpecificTableData(ctx context.Context, tableName, con
 	}
 
 	return nil
+}
+
+// DataComparisonResult 数据比较结果
+type DataComparisonResult struct {
+	APICount      int32  // API返回的数据总数
+	DatabaseCount int64  // 数据库中的记录总数
+	NeedSync      bool   // 是否需要同步
+	NeedCleanup   bool   // 是否需要先清理数据
+	Reason        string // 决策原因
+	Period        string // 时间段
+	Granularity   string // 粒度（daily/monthly）
+}
+
+// PreSyncCheckResult 同步前检查结果
+type PreSyncCheckResult struct {
+	ShouldSkip bool                    // 是否跳过同步
+	Results    []*DataComparisonResult // 比较结果列表（支持多个时间段）
+	Summary    string                  // 检查摘要
+}
+
+// GetBillDataCount 获取账单数据总数（通用方法）
+func (s *BillService) GetBillDataCount(ctx context.Context, granularity, period string) (int32, error) {
+	switch strings.ToUpper(granularity) {
+	case "DAILY":
+		return s.GetDailyAPIDataCount(ctx, period)
+	case "MONTHLY":
+		return s.GetMonthlyAPIDataCount(ctx, period)
+	default:
+		return 0, fmt.Errorf("unsupported granularity: %s", granularity)
+	}
+}
+
+// GetDatabaseRecordCount 获取数据库记录总数（通用方法）
+func (s *BillService) GetDatabaseRecordCount(ctx context.Context, granularity, period string) (int64, error) {
+	tableName := s.GetTableName(granularity)
+
+	switch strings.ToUpper(granularity) {
+	case "DAILY":
+		_, count, err := s.CheckDailyDataExists(ctx, tableName, period)
+		return count, err
+	case "MONTHLY":
+		_, count, err := s.CheckMonthlyDataExists(ctx, tableName, period)
+		return count, err
+	default:
+		return 0, fmt.Errorf("unsupported granularity: %s", granularity)
+	}
+}
+
+// PerformDataComparison 执行数据比较（决定是否需要同步）
+func (s *BillService) PerformDataComparison(ctx context.Context, granularity, period string) (*DataComparisonResult, error) {
+	log.Printf("[阿里云数据预检查] 开始比较 %s %s 的数据量", granularity, period)
+
+	// 获取API数据总数
+	apiCount, err := s.GetBillDataCount(ctx, granularity, period)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get API data count: %w", err)
+	}
+
+	// 获取数据库记录总数
+	dbCount, err := s.GetDatabaseRecordCount(ctx, granularity, period)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database record count: %w", err)
+	}
+
+	// 比较数据量并决定是否需要同步和清理
+	result := &DataComparisonResult{
+		APICount:      apiCount,
+		DatabaseCount: dbCount,
+		Period:        period,
+		Granularity:   granularity,
+		NeedCleanup:   false,
+		NeedSync:      false,
+	}
+
+	if apiCount == 0 && dbCount == 0 {
+		// 双方都无数据
+		result.NeedSync = false
+		result.NeedCleanup = false
+		result.Reason = "API和数据库都无数据，跳过同步"
+	} else if apiCount == 0 && dbCount > 0 {
+		// API无数据但数据库有数据，保持现状
+		result.NeedSync = false
+		result.NeedCleanup = false
+		result.Reason = "API无数据但数据库有数据，跳过同步"
+	} else if apiCount > 0 && dbCount == 0 {
+		// API有数据但数据库无数据，需要同步但不需要清理
+		result.NeedSync = true
+		result.NeedCleanup = false
+		result.Reason = fmt.Sprintf("数据库为空但API有%d条数据，需要同步", apiCount)
+	} else if apiCount > 0 && int64(apiCount) == dbCount {
+		// 数据量一致，跳过同步
+		result.NeedSync = false
+		result.NeedCleanup = false
+		result.Reason = "API数据量与数据库记录数一致，跳过同步"
+	} else {
+		// 数据量不一致，需要先清理再同步
+		result.NeedSync = true
+		result.NeedCleanup = true
+		result.Reason = fmt.Sprintf("数据量不一致(API:%d vs DB:%d)，需要先清理再同步", apiCount, dbCount)
+	}
+
+	log.Printf("[阿里云数据预检查] %s %s - API:%d, 数据库:%d, 需要同步:%v, 需要清理:%v, 结果:%s",
+		granularity, period, apiCount, dbCount, result.NeedSync, result.NeedCleanup, result.Reason)
+
+	return result, nil
+}
+
+// PerformPreSyncCheck 执行同步前的数据预检查
+func (s *BillService) PerformPreSyncCheck(ctx context.Context, granularity, period string) (*PreSyncCheckResult, error) {
+	log.Printf("[阿里云同步预检查] 开始执行数据预检查: %s %s", granularity, period)
+
+	var results []*DataComparisonResult
+
+	switch strings.ToUpper(granularity) {
+	case "BOTH":
+		// 对于双粒度，需要分别检查昨天的天表数据和上月的月表数据
+		// 这里假设period格式为 "yesterday:2024-01-15,last_month:2024-01"
+		parts := strings.Split(period, ",")
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("invalid period format for BOTH granularity, expected 'yesterday:YYYY-MM-DD,last_month:YYYY-MM'")
+		}
+
+		// 解析昨天日期
+		yesterdayPart := strings.TrimPrefix(parts[0], "yesterday:")
+		dailyResult, err := s.PerformDataComparison(ctx, "DAILY", yesterdayPart)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check daily data: %w", err)
+		}
+		results = append(results, dailyResult)
+
+		// 解析上月账期
+		lastMonthPart := strings.TrimPrefix(parts[1], "last_month:")
+		monthlyResult, err := s.PerformDataComparison(ctx, "MONTHLY", lastMonthPart)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check monthly data: %w", err)
+		}
+		results = append(results, monthlyResult)
+
+	default:
+		// 单粒度检查
+		result, err := s.PerformDataComparison(ctx, granularity, period)
+		if err != nil {
+			return nil, fmt.Errorf("failed to perform data comparison: %w", err)
+		}
+		results = append(results, result)
+	}
+
+	// 判断是否应该跳过同步（所有检查都不需要同步时才跳过）
+	shouldSkip := true
+	for _, result := range results {
+		if result.NeedSync {
+			shouldSkip = false
+			break
+		}
+	}
+
+	// 生成检查摘要
+	summary := fmt.Sprintf("预检查完成: 共检查 %d 个时间段", len(results))
+	if shouldSkip {
+		summary += ", 所有数据已是最新，跳过同步"
+	} else {
+		summary += ", 检测到数据差异，需要执行同步"
+	}
+
+	checkResult := &PreSyncCheckResult{
+		ShouldSkip: shouldSkip,
+		Results:    results,
+		Summary:    summary,
+	}
+
+	log.Printf("[阿里云同步预检查] %s", summary)
+	return checkResult, nil
+}
+
+// CleanSpecificPeriodData 清理指定时间段的数据
+func (s *BillService) CleanSpecificPeriodData(ctx context.Context, granularity, period string) error {
+	tableName := s.GetTableName(granularity)
+
+	var condition string
+	switch strings.ToUpper(granularity) {
+	case "DAILY":
+		// 按天清理：清理特定日期的数据
+		condition = fmt.Sprintf("billing_date = '%s'", period)
+		log.Printf("[阿里云数据清理] 准备清理天表数据：%s, 日期:%s", tableName, period)
+	case "MONTHLY":
+		// 按月清理：清理特定账期的数据
+		condition = fmt.Sprintf("billing_cycle = '%s'", period)
+		log.Printf("[阿里云数据清理] 准备清理月表数据：%s, 账期:%s", tableName, period)
+	default:
+		return fmt.Errorf("unsupported granularity for period cleanup: %s", granularity)
+	}
+
+	// 构建清理选项
+	opts := &clickhouse.CleanupOptions{
+		Condition: condition,
+		DryRun:    false, // 实际删除
+	}
+
+	// 执行清理
+	result, err := s.chClient.EnhancedCleanTableData(ctx, tableName, opts)
+	if err != nil {
+		return fmt.Errorf("failed to clean %s data for period %s: %w", granularity, period, err)
+	}
+
+	log.Printf("[阿里云数据清理完成] 表:%s, 时间段:%s, 清理记录数:%d",
+		tableName, period, result.DeletedRows)
+
+	return nil
+}
+
+// ExecuteIntelligentCleanupAndSync 执行智能清理和同步
+func (s *BillService) ExecuteIntelligentCleanupAndSync(ctx context.Context, result *DataComparisonResult, syncOptions *SyncOptions) error {
+	if !result.NeedSync {
+		// 不需要同步，直接返回
+		return nil
+	}
+
+	if result.NeedCleanup {
+		// 需要先清理数据
+		log.Printf("[阿里云智能同步] 检测到数据不一致，先清理 %s %s 的数据",
+			result.Granularity, result.Period)
+
+		if err := s.CleanSpecificPeriodData(ctx, result.Granularity, result.Period); err != nil {
+			return fmt.Errorf("failed to clean data before sync: %w", err)
+		}
+
+		log.Printf("[阿里云智能同步] 数据清理完成，开始同步新数据")
+	}
+
+	// 执行同步
+	switch strings.ToUpper(result.Granularity) {
+	case "DAILY":
+		return s.SyncSpecificDayBillData(ctx, result.Period, syncOptions)
+	case "MONTHLY":
+		return s.SyncMonthlyBillData(ctx, result.Period, syncOptions)
+	default:
+		return fmt.Errorf("unsupported granularity for sync: %s", result.Granularity)
+	}
 }

@@ -1,0 +1,922 @@
+basePath: /api/v1
+definitions:
+  models.AppConfig:
+    properties:
+      log_file:
+        type: string
+      log_level:
+        example: info
+        type: string
+    type: object
+  models.ClickHouseConfig:
+    properties:
+      cluster:
+        example: my_cluster
+        type: string
+      database:
+        example: default
+        type: string
+      hosts:
+        example:
+        - localhost
+        items:
+          type: string
+        type: array
+      port:
+        example: 9000
+        type: integer
+      protocol:
+        example: native
+        type: string
+      username:
+        example: default
+        type: string
+    type: object
+  models.CloudProviderConfig:
+    properties:
+      alicloud:
+        $ref: '#/definitions/pkg_models.ProviderConfig'
+      aws:
+        $ref: '#/definitions/pkg_models.ProviderConfig'
+      azure:
+        $ref: '#/definitions/pkg_models.ProviderConfig'
+      gcp:
+        $ref: '#/definitions/pkg_models.ProviderConfig'
+      volcengine:
+        $ref: '#/definitions/pkg_models.ProviderConfig'
+    type: object
+  models.ConfigResponse:
+    properties:
+      app:
+        $ref: '#/definitions/models.AppConfig'
+      clickhouse:
+        $ref: '#/definitions/models.ClickHouseConfig'
+      cloud_providers:
+        $ref: '#/definitions/models.CloudProviderConfig'
+    type: object
+  models.ErrorResponse:
+    properties:
+      code:
+        example: 400
+        type: integer
+      details:
+        example: provider字段不能为空
+        type: string
+      error:
+        example: true
+        type: boolean
+      message:
+        example: 参数验证失败
+        type: string
+    type: object
+  models.HealthResponse:
+    properties:
+      service:
+        example: goscan
+        type: string
+      status:
+        example: healthy
+        type: string
+      timestamp:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      version:
+        example: 1.0.0
+        type: string
+    type: object
+  models.JobListResponse:
+    properties:
+      count:
+        example: 3
+        type: integer
+      jobs:
+        items:
+          $ref: '#/definitions/models.JobResponse'
+        type: array
+    type: object
+  models.JobRequest:
+    properties:
+      cron_expr:
+        example: 0 2 * * *
+        type: string
+      description:
+        example: 每日凌晨2点同步火山云账单
+        type: string
+      enabled:
+        example: true
+        type: boolean
+      name:
+        example: daily_volcengine_sync
+        type: string
+      parameters:
+        additionalProperties: true
+        type: object
+      provider:
+        example: volcengine
+        type: string
+      task_type:
+        example: sync
+        type: string
+    required:
+    - cron_expr
+    - name
+    - provider
+    - task_type
+    type: object
+  models.JobResponse:
+    properties:
+      created_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      cron_expr:
+        example: 0 2 * * *
+        type: string
+      description:
+        example: 每日凌晨2点同步火山云账单
+        type: string
+      enabled:
+        example: true
+        type: boolean
+      id:
+        example: job_123456
+        type: string
+      last_run:
+        example: "2025-09-11T02:00:00Z"
+        type: string
+      name:
+        example: daily_volcengine_sync
+        type: string
+      next_run:
+        example: "2025-09-12T02:00:00Z"
+        type: string
+      parameters:
+        additionalProperties: true
+        type: object
+      provider:
+        example: volcengine
+        type: string
+      task_type:
+        example: sync
+        type: string
+      updated_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+    type: object
+  models.MessageResponse:
+    properties:
+      message:
+        example: 操作成功
+        type: string
+      success:
+        example: true
+        type: boolean
+    type: object
+  models.SchedulerStatus:
+    properties:
+      entries:
+        example: 3
+        type: integer
+      job_count:
+        example: 3
+        type: integer
+      running:
+        example: true
+        type: boolean
+      timestamp:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+    type: object
+  models.SyncHistoryEntry:
+    properties:
+      bill_period:
+        example: 2025-09
+        type: string
+      completed_at:
+        example: "2025-09-11T08:15:29Z"
+        type: string
+      duration:
+        example: 125
+        type: integer
+      error_count:
+        example: 0
+        type: integer
+      id:
+        example: sync_123456
+        type: string
+      message:
+        example: 同步完成
+        type: string
+      provider:
+        example: volcengine
+        type: string
+      record_count:
+        example: 1500
+        type: integer
+      started_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      status:
+        example: completed
+        type: string
+    type: object
+  models.SyncHistoryResponse:
+    properties:
+      count:
+        example: 10
+        type: integer
+      history:
+        items:
+          $ref: '#/definitions/models.SyncHistoryEntry'
+        type: array
+    type: object
+  models.SyncStatusResponse:
+    properties:
+      completed_at:
+        type: string
+      error_count:
+        example: 0
+        type: integer
+      message:
+        example: 同步进行中...
+        type: string
+      progress:
+        example: 75.5
+        type: number
+      provider:
+        example: volcengine
+        type: string
+      record_count:
+        example: 1500
+        type: integer
+      started_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      status:
+        example: running
+        type: string
+    type: object
+  models.SyncTriggerRequest:
+    properties:
+      bill_period:
+        example: 2025-09
+        type: string
+      force:
+        example: false
+        type: boolean
+      parameters:
+        additionalProperties: true
+        type: object
+      provider:
+        example: volcengine
+        type: string
+    required:
+    - provider
+    type: object
+  models.SystemStatus:
+    properties:
+      scheduler:
+        $ref: '#/definitions/models.SchedulerStatus'
+      service:
+        example: goscan
+        type: string
+      status:
+        example: running
+        type: string
+      tasks:
+        $ref: '#/definitions/models.TasksStatus'
+      timestamp:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      uptime:
+        example: 3600
+        type: integer
+      version:
+        example: 1.0.0
+        type: string
+    type: object
+  models.TaskListResponse:
+    properties:
+      count:
+        example: 5
+        type: integer
+      tasks:
+        items:
+          $ref: '#/definitions/models.TaskResponse'
+        type: array
+    type: object
+  models.TaskRequest:
+    properties:
+      description:
+        example: 同步火山云账单数据
+        type: string
+      name:
+        example: volcengine_sync_task
+        type: string
+      parameters:
+        additionalProperties: true
+        type: object
+      provider:
+        example: volcengine
+        type: string
+      schedule:
+        example: 0 2 * * *
+        type: string
+      type:
+        example: sync
+        type: string
+    required:
+    - name
+    - provider
+    - type
+    type: object
+  models.TaskResponse:
+    properties:
+      completed_at:
+        example: "2025-09-11T08:13:30Z"
+        type: string
+      created_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      description:
+        example: 同步火山云账单数据
+        type: string
+      id:
+        example: task_123456
+        type: string
+      name:
+        example: volcengine_sync_task
+        type: string
+      parameters:
+        additionalProperties: true
+        type: object
+      provider:
+        example: volcengine
+        type: string
+      schedule:
+        example: 0 2 * * *
+        type: string
+      started_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      status:
+        example: running
+        type: string
+      type:
+        example: sync
+        type: string
+      updated_at:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+    type: object
+  models.TasksStatus:
+    properties:
+      running:
+        example: 2
+        type: integer
+      total:
+        example: 10
+        type: integer
+    type: object
+  models.WeChatNotificationHistoryEntry:
+    properties:
+      duration:
+        description: 执行耗时
+        example: 2m6s
+        type: string
+      end_time:
+        description: 结束时间
+        example: "2025-09-12T08:15:30Z"
+        type: string
+      error:
+        description: 错误信息
+        example: 连接超时
+        type: string
+      id:
+        description: 任务ID
+        example: task_123456
+        type: string
+      message:
+        description: 执行消息
+        example: 通知发送成功
+        type: string
+      records_processed:
+        description: 处理记录数
+        example: 1500
+        type: integer
+      start_time:
+        description: 开始时间
+        example: "2025-09-12T08:13:24Z"
+        type: string
+      status:
+        description: 执行状态
+        example: completed
+        type: string
+    type: object
+  models.WeChatNotificationRequest:
+    properties:
+      alert_threshold:
+        description: 告警阈值（百分比），默认使用配置值
+        example: 10
+        type: number
+      date:
+        description: 分析日期，格式：2006-01-02，默认当前日期
+        example: "2025-09-12"
+        type: string
+      force_notify:
+        description: 强制发送通知，即使未达到告警阈值
+        example: false
+        type: boolean
+      providers:
+        description: 云服务商列表，默认：["volcengine", "alicloud"]
+        example:
+        - volcengine
+        - alicloud
+        items:
+          type: string
+        type: array
+      test_mode:
+        description: 测试模式，仅测试连接不发送实际报告
+        example: false
+        type: boolean
+    type: object
+  models.WeChatNotificationStatusResponse:
+    properties:
+      alert_threshold:
+        description: 告警阈值
+        example: 10
+        type: number
+      enabled:
+        description: 微信通知功能是否启用
+        example: true
+        type: boolean
+      executor_enabled:
+        description: 执行器是否启用
+        example: true
+        type: boolean
+      executor_status:
+        description: 执行器状态
+        example: ready
+        type: string
+      history_count:
+        description: 历史记录数量
+        example: 5
+        type: integer
+      max_retries:
+        description: 最大重试次数
+        example: 3
+        type: integer
+      mention_users:
+        description: 提及用户列表
+        example:
+        - user1
+        - user2
+        items:
+          type: string
+        type: array
+      recent_history:
+        description: 最近通知历史
+        items:
+          $ref: '#/definitions/models.WeChatNotificationHistoryEntry'
+        type: array
+      retry_delay:
+        description: 重试延迟时间（秒）
+        example: 5
+        type: integer
+      send_time:
+        description: 发送时间
+        example: "09:00"
+        type: string
+      timestamp:
+        description: 状态查询时间戳
+        example: "2025-09-12T08:13:24Z"
+        type: string
+      webhook_configured:
+        description: Webhook是否已配置
+        example: true
+        type: boolean
+      webhook_url:
+        description: 脱敏后的Webhook URL
+        example: https://qyapi***webhook
+        type: string
+    type: object
+  pkg_models.ProviderConfig:
+    properties:
+      enabled:
+        example: true
+        type: boolean
+      endpoint:
+        example: ecs.cn-hangzhou.aliyuncs.com
+        type: string
+      has_credentials:
+        description: 'Note: AccessKey and SecretKey are masked for security'
+        example: true
+        type: boolean
+      host:
+        example: billing.volcengineapi.com
+        type: string
+      region:
+        example: cn-north-1
+        type: string
+      timeout:
+        example: 30
+        type: integer
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@goscan.com
+    name: API Support
+  description: |-
+    云账单数据同步服务API文档
+    支持火山云、阿里云等多云平台的账单数据自动同步到ClickHouse数据库
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  termsOfService: http://swagger.io/terms/
+  title: Goscan API
+  version: "1.0"
+paths:
+  /config:
+    get:
+      consumes:
+      - application/json
+      description: 返回系统配置信息，敏感数据已脱敏处理
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.ConfigResponse'
+      summary: 获取系统配置
+      tags:
+      - System
+    put:
+      consumes:
+      - application/json
+      description: 基于安全考虑，此接口暂不支持配置更新
+      produces:
+      - application/json
+      responses:
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 更新系统配置
+      tags:
+      - System
+  /health:
+    get:
+      consumes:
+      - application/json
+      description: 返回服务健康状态
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.HealthResponse'
+      summary: 健康检查
+      tags:
+      - System
+  /notifications/wechat/status:
+    get:
+      consumes:
+      - application/json
+      description: 返回企业微信通知功能的配置状态和最近的通知历史
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.WeChatNotificationStatusResponse'
+      summary: 获取企业微信通知状态
+      tags:
+      - Notifications
+  /notifications/wechat/test:
+    post:
+      consumes:
+      - application/json
+      description: 测试企业微信Webhook URL的连通性，不发送实际的费用报告
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 测试企业微信Webhook连接
+      tags:
+      - Notifications
+  /notifications/wechat/trigger:
+    post:
+      consumes:
+      - application/json
+      description: 手动触发企业微信费用报告通知，支持指定分析参数
+      parameters:
+      - description: 微信通知触发请求参数
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/models.WeChatNotificationRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 手动触发企业微信通知
+      tags:
+      - Notifications
+  /scheduler/jobs:
+    get:
+      consumes:
+      - application/json
+      description: 返回所有已配置的定时任务信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.JobListResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 获取定时任务列表
+      tags:
+      - Scheduler
+    post:
+      consumes:
+      - application/json
+      description: 创建一个新的定时同步任务
+      parameters:
+      - description: 定时任务请求参数
+        in: body
+        name: job
+        required: true
+        schema:
+          $ref: '#/definitions/models.JobRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 创建定时任务
+      tags:
+      - Scheduler
+  /scheduler/jobs/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 删除指定的定时任务
+      parameters:
+      - description: 任务ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 删除定时任务
+      tags:
+      - Scheduler
+  /scheduler/status:
+    get:
+      consumes:
+      - application/json
+      description: 返回任务调度器的运行状态信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SchedulerStatus'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 获取调度器状态
+      tags:
+      - Scheduler
+  /status:
+    get:
+      consumes:
+      - application/json
+      description: 返回服务运行状态、任务统计和调度器状态等系统信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SystemStatus'
+      summary: 获取系统状态
+      tags:
+      - System
+  /sync/history:
+    get:
+      consumes:
+      - application/json
+      description: 返回历史同步任务的执行记录
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SyncHistoryResponse'
+      summary: 获取同步历史
+      tags:
+      - Sync
+  /sync/status:
+    get:
+      consumes:
+      - application/json
+      description: 返回当前数据同步任务的状态信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SyncStatusResponse'
+      summary: 获取同步状态
+      tags:
+      - Sync
+  /sync/trigger:
+    post:
+      consumes:
+      - application/json
+      description: 手动触发指定云服务商的账单数据同步操作
+      parameters:
+      - description: 同步请求参数
+        in: body
+        name: sync
+        required: true
+        schema:
+          $ref: '#/definitions/models.SyncTriggerRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 手动触发数据同步
+      tags:
+      - Sync
+  /tasks:
+    get:
+      consumes:
+      - application/json
+      description: 返回所有任务的详细信息
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.TaskListResponse'
+      summary: 获取任务列表
+      tags:
+      - Tasks
+    post:
+      consumes:
+      - application/json
+      description: 创建并异步执行一个新的同步任务
+      parameters:
+      - description: 任务请求参数
+        in: body
+        name: task
+        required: true
+        schema:
+          $ref: '#/definitions/models.TaskRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 创建新任务
+      tags:
+      - Tasks
+  /tasks/{id}:
+    delete:
+      consumes:
+      - application/json
+      description: 取消或删除指定的任务
+      parameters:
+      - description: 任务ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 删除任务
+      tags:
+      - Tasks
+    get:
+      consumes:
+      - application/json
+      description: 根据任务ID返回任务的详细信息
+      parameters:
+      - description: 任务ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.TaskResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: 获取指定任务
+      tags:
+      - Tasks
+schemes:
+- http
+- https
+swagger: "2.0"

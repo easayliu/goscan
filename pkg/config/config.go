@@ -153,3 +153,67 @@ func parseIntOrDefault(s string, defaultValue int) int {
 	}
 	return result
 }
+
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if floatValue := parseFloatOrDefault(value, defaultValue); floatValue != defaultValue {
+			return floatValue
+		}
+	}
+	return defaultValue
+}
+
+func parseFloatOrDefault(s string, defaultValue float64) float64 {
+	if len(s) == 0 {
+		return defaultValue
+	}
+
+	// 简单的浮点数解析实现
+	result := 0.0
+	decimal := false
+	divisor := 1.0
+
+	for _, char := range s {
+		if char == '.' && !decimal {
+			decimal = true
+			continue
+		}
+		if char < '0' || char > '9' {
+			return defaultValue
+		}
+
+		if decimal {
+			divisor *= 10
+			result += float64(char-'0') / divisor
+		} else {
+			result = result*10 + float64(char-'0')
+		}
+	}
+	return result
+}
+
+func parseStringList(s string) []string {
+	if s == "" {
+		return []string{}
+	}
+
+	var result []string
+	current := ""
+
+	for _, char := range s {
+		if char == ',' {
+			if current != "" {
+				result = append(result, trimSpace(current))
+				current = ""
+			}
+		} else {
+			current += string(char)
+		}
+	}
+
+	if current != "" {
+		result = append(result, trimSpace(current))
+	}
+
+	return result
+}

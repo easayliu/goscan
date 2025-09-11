@@ -16,8 +16,9 @@ import (
 )
 
 type Client struct {
-	conn   driver.Conn
-	config *config.ClickHouseConfig
+	conn         driver.Conn
+	config       *config.ClickHouseConfig
+	nameResolver *TableNameResolver
 }
 
 // BatchInsertOptions 批量插入选项
@@ -95,8 +96,9 @@ func NewClient(cfg *config.ClickHouseConfig) (*Client, error) {
 	}
 
 	return &Client{
-		conn:   conn,
-		config: cfg,
+		conn:         conn,
+		config:       cfg,
+		nameResolver: NewTableNameResolver(cfg),
 	}, nil
 }
 
@@ -129,13 +131,16 @@ func (c *Client) InsertBatch(ctx context.Context, tableName string, data []map[s
 		return fmt.Errorf("no data to insert")
 	}
 
+	// 自动解析表名
+	resolvedTableName := c.nameResolver.ResolveInsertTarget(tableName)
+
 	columns := make([]string, 0, len(data[0]))
 	for column := range data[0] {
 		columns = append(columns, column)
 	}
 
 	query := fmt.Sprintf("INSERT INTO %s (%s)",
-		tableName,
+		resolvedTableName,
 		joinStrings(columns, ", "))
 
 	batch, err := c.conn.PrepareBatch(ctx, query)
@@ -158,6 +163,9 @@ func (c *Client) InsertBatch(ctx context.Context, tableName string, data []map[s
 }
 
 func (c *Client) Insert(ctx context.Context, tableName string, data map[string]interface{}) error {
+	// 自动解析表名
+	resolvedTableName := c.nameResolver.ResolveInsertTarget(tableName)
+
 	columns := make([]string, 0, len(data))
 	values := make([]interface{}, 0, len(data))
 
@@ -172,7 +180,7 @@ func (c *Client) Insert(ctx context.Context, tableName string, data map[string]i
 	}
 
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
-		tableName,
+		resolvedTableName,
 		joinStrings(columns, ", "),
 		joinStrings(placeholders, ", "))
 
@@ -196,12 +204,18 @@ func (c *Client) AsyncInsertBatch(ctx context.Context, tableName string, data []
 }
 
 func (c *Client) CreateTable(ctx context.Context, tableName string, schema string) error {
-	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", tableName, schema)
+	// 对于CreateTable，我们需要明确是创建分布式表还是本地表
+	// 默认情况下，如果配置了集群，创建分布式表
+	resolvedTableName := c.nameResolver.ResolveCreateTableTarget(tableName, true)
+	
+	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", resolvedTableName, schema)
 	return c.Exec(ctx, query)
 }
 
 func (c *Client) DropTable(ctx context.Context, tableName string) error {
-	query := fmt.Sprintf("DROP TABLE IF EXISTS %s", tableName)
+	// 自动解析表名用于删除操作
+	resolvedTableName := c.nameResolver.ResolveQueryTarget(tableName)
+	query := fmt.Sprintf("DROP TABLE IF EXISTS %s", resolvedTableName)
 	return c.Exec(ctx, query)
 }
 
@@ -390,14 +404,17 @@ func (c *Client) GetClusterInfo(ctx context.Context) ([]map[string]interface{}, 
 }
 
 func (c *Client) TableExists(ctx context.Context, tableName string) (bool, error) {
+	// 自动解析表名
+	resolvedTableName := c.nameResolver.ResolveQueryTarget(tableName)
+	
 	// 如果配置了集群，使用集群查询
 	if c.config.Cluster != "" {
-		return c.tableExistsInCluster(ctx, tableName)
+		return c.tableExistsInCluster(ctx, resolvedTableName)
 	}
 
 	// 单机查询
 	query := "SELECT 1 FROM system.tables WHERE database = ? AND name = ?"
-	row := c.QueryRow(ctx, query, c.config.Database, tableName)
+	row := c.QueryRow(ctx, query, c.config.Database, resolvedTableName)
 
 	var exists uint8
 	err := row.Scan(&exists)
@@ -502,6 +519,67 @@ func (c *Client) CleanTableData(ctx context.Context, tableName string, condition
 // GetClusterName 获取集群名称
 func (c *Client) GetClusterName() string {
 	return c.config.Cluster
+}
+
+// GetTableNameResolver 获取表名解析器
+func (c *Client) GetTableNameResolver() *TableNameResolver {
+	return c.nameResolver
+}
+
+// CreateTableWithResolver 使用解析器创建表，允许明确指定是否创建分布式表
+func (c *Client) CreateTableWithResolver(ctx context.Context, baseTableName string, schema string, useDistributed bool) error {
+	resolvedTableName := c.nameResolver.ResolveCreateTableTarget(baseTableName, useDistributed)
+	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", resolvedTableName, schema)
+	return c.Exec(ctx, query)
+}
+
+// CreateLocalTable 明确创建本地表
+func (c *Client) CreateLocalTable(ctx context.Context, baseTableName string, schema string) error {
+	localTableName := c.nameResolver.ResolveLocalTableName(baseTableName)
+	
+	if c.nameResolver.IsClusterEnabled() {
+		// 在集群上创建本地表
+		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s", 
+			localTableName, c.config.Cluster, schema)
+		return c.Exec(ctx, query)
+	} else {
+		// 单机模式
+		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", localTableName, schema)
+		return c.Exec(ctx, query)
+	}
+}
+
+// CreateDistributedTableWithResolver 创建完整的分布式表结构（本地表+分布式表）
+func (c *Client) CreateDistributedTableWithResolver(ctx context.Context, baseTableName string, localSchema string) error {
+	if !c.nameResolver.IsClusterEnabled() {
+		return fmt.Errorf("cluster not configured, cannot create distributed table")
+	}
+
+	distributedTableName, localTableName := c.nameResolver.GetTablePair(baseTableName)
+	
+	// 先创建本地表
+	if err := c.CreateLocalTable(ctx, baseTableName, localSchema); err != nil {
+		return fmt.Errorf("failed to create local table %s: %w", localTableName, err)
+	}
+
+	// 等待集群同步
+	time.Sleep(2 * time.Second)
+
+	// 创建分布式表
+	distributedSchema := fmt.Sprintf(`AS %s ENGINE = Distributed(%s, %s, %s, rand())`,
+		localTableName, c.config.Cluster, c.config.Database, localTableName)
+
+	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s",
+		distributedTableName, c.config.Cluster, distributedSchema)
+
+	if err := c.Exec(ctx, query); err != nil {
+		return fmt.Errorf("failed to create distributed table %s: %w", distributedTableName, err)
+	}
+
+	log.Printf("[自动表名解析] 成功创建分布式表结构：本地表=%s，分布式表=%s", 
+		localTableName, distributedTableName)
+
+	return nil
 }
 
 // CleanDistributedTableData 清理分布式表数据（通过清理对应的本地表）
