@@ -134,7 +134,7 @@ func (s *BillService) CreateMonthlyBillTable(ctx context.Context) error {
 		created_at DateTime64(3) DEFAULT now(),
 		updated_at DateTime64(3) DEFAULT now()
 	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id)
+	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
 	PARTITION BY toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))`
 
 	log.Printf("[阿里云按月表] 创建表: %s", s.monthlyTableName)
@@ -231,7 +231,7 @@ func (s *BillService) CreateDailyBillTable(ctx context.Context) error {
 		created_at DateTime64(3) DEFAULT now(),
 		updated_at DateTime64(3) DEFAULT now()
 	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_date, product_code, instance_id, bill_account_id)
+	ORDER BY (billing_date, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
 	PARTITION BY toYYYYMMDD(billing_date)`
 
 	log.Printf("[阿里云按天表] 创建表: %s", s.dailyTableName)
@@ -360,7 +360,7 @@ func (s *BillService) getMonthlyTableSchema() string {
 		created_at DateTime64(3) DEFAULT now(),
 		updated_at DateTime64(3) DEFAULT now()
 	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id)
+	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
 	PARTITION BY toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))`
 }
 
@@ -416,7 +416,7 @@ func (s *BillService) getDailyTableSchema() string {
 		created_at DateTime64(3) DEFAULT now(),
 		updated_at DateTime64(3) DEFAULT now()
 	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_date, product_code, instance_id, bill_account_id)
+	ORDER BY (billing_date, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
 	PARTITION BY toYYYYMMDD(billing_date)`
 }
 
@@ -885,6 +885,116 @@ func (s *BillService) CheckMonthlyDataExists(ctx context.Context, tableName, bil
 	}
 
 	return count > 0, int64(count), nil
+}
+
+// CheckDailyDataExistsWithOptimize 检查天表指定日期的数据是否存在（强制优化后再检查）
+func (s *BillService) CheckDailyDataExistsWithOptimize(ctx context.Context, tableName, billingDate string) (bool, int64, error) {
+	// 对于ReplacingMergeTree，先执行OPTIMIZE FINAL强制去重
+	if strings.Contains(tableName, "_distributed") {
+		// 分布式表优化本地表
+		localTableName := strings.Replace(tableName, "_distributed", "_local", 1)
+		optimizeQuery := fmt.Sprintf("OPTIMIZE TABLE %s ON CLUSTER %s FINAL", localTableName, s.chClient.GetClusterName())
+		log.Printf("[ReplacingMergeTree优化] 执行强制去重: %s", optimizeQuery)
+		if err := s.chClient.Exec(ctx, optimizeQuery); err != nil {
+			log.Printf("[ReplacingMergeTree优化] 执行失败，继续查询: %v", err)
+		}
+	} else {
+		// 普通表直接优化
+		optimizeQuery := fmt.Sprintf("OPTIMIZE TABLE %s FINAL", tableName)
+		log.Printf("[ReplacingMergeTree优化] 执行强制去重: %s", optimizeQuery)
+		if err := s.chClient.Exec(ctx, optimizeQuery); err != nil {
+			log.Printf("[ReplacingMergeTree优化] 执行失败，继续查询: %v", err)
+		}
+	}
+
+	// 优化后再查询数据量
+	return s.CheckDailyDataExists(ctx, tableName, billingDate)
+}
+
+// CheckMonthlyDataExistsWithOptimize 检查月表指定账期的数据是否存在（强制优化后再检查）
+func (s *BillService) CheckMonthlyDataExistsWithOptimize(ctx context.Context, tableName, billingCycle string) (bool, int64, error) {
+	// 对于ReplacingMergeTree，先执行OPTIMIZE FINAL强制去重
+	if strings.Contains(tableName, "_distributed") {
+		// 分布式表优化本地表
+		localTableName := strings.Replace(tableName, "_distributed", "_local", 1)
+		optimizeQuery := fmt.Sprintf("OPTIMIZE TABLE %s ON CLUSTER %s FINAL", localTableName, s.chClient.GetClusterName())
+		log.Printf("[ReplacingMergeTree优化] 执行强制去重: %s", optimizeQuery)
+		if err := s.chClient.Exec(ctx, optimizeQuery); err != nil {
+			log.Printf("[ReplacingMergeTree优化] 执行失败，继续查询: %v", err)
+		}
+	} else {
+		// 普通表直接优化
+		optimizeQuery := fmt.Sprintf("OPTIMIZE TABLE %s FINAL", tableName)
+		log.Printf("[ReplacingMergeTree优化] 执行强制去重: %s", optimizeQuery)
+		if err := s.chClient.Exec(ctx, optimizeQuery); err != nil {
+			log.Printf("[ReplacingMergeTree优化] 执行失败，继续查询: %v", err)
+		}
+	}
+
+	// 优化后再查询数据量
+	return s.CheckMonthlyDataExists(ctx, tableName, billingCycle)
+}
+
+// GetDailyAPIDataCount 获取指定日期的API数据总量
+func (s *BillService) GetDailyAPIDataCount(ctx context.Context, billingDate string) (int32, error) {
+	log.Printf("[阿里云API数据量检查] 开始获取日期 %s 的API数据总量", billingDate)
+
+	// 验证日期格式
+	date, err := time.Parse("2006-01-02", billingDate)
+	if err != nil {
+		return 0, fmt.Errorf("invalid billing date format (expected YYYY-MM-DD): %w", err)
+	}
+
+	// 获取账期（YYYY-MM格式）
+	billingCycle := date.Format("2006-01")
+
+	// 验证账期
+	if err := ValidateBillingCycle(billingCycle); err != nil {
+		return 0, fmt.Errorf("invalid billing cycle: %w", err)
+	}
+
+	// 创建分页器（指定日期的数据）
+	paginator := NewPaginator(s.aliClient, &DescribeInstanceBillRequest{
+		BillingCycle: billingCycle,
+		Granularity:  "DAILY",
+		BillingDate:  billingDate,
+		MaxResults:   int32(s.config.BatchSize),
+	})
+
+	// 估算总记录数
+	totalCount, err := paginator.EstimateTotal(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to estimate API data count: %w", err)
+	}
+
+	log.Printf("[阿里云API数据量检查] 日期 %s 的API数据总量: %d 条", billingDate, totalCount)
+	return totalCount, nil
+}
+
+// GetMonthlyAPIDataCount 获取指定月份的API数据总量
+func (s *BillService) GetMonthlyAPIDataCount(ctx context.Context, billingCycle string) (int32, error) {
+	log.Printf("[阿里云API数据量检查] 开始获取账期 %s 的API数据总量", billingCycle)
+
+	// 验证账期
+	if err := ValidateBillingCycle(billingCycle); err != nil {
+		return 0, fmt.Errorf("invalid billing cycle: %w", err)
+	}
+
+	// 创建分页器
+	paginator := NewPaginator(s.aliClient, &DescribeInstanceBillRequest{
+		BillingCycle: billingCycle,
+		Granularity:  "MONTHLY",
+		MaxResults:   int32(s.config.BatchSize),
+	})
+
+	// 估算总记录数
+	totalCount, err := paginator.EstimateTotal(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to estimate API data count: %w", err)
+	}
+
+	log.Printf("[阿里云API数据量检查] 账期 %s 的API数据总量: %d 条", billingCycle, totalCount)
+	return totalCount, nil
 }
 
 // CleanSpecificTableData 清理指定表的数据（用于分布式表的本地表清理）

@@ -499,6 +499,11 @@ func (c *Client) CleanTableData(ctx context.Context, tableName string, condition
 	return c.DeleteByCondition(ctx, tableName, condition, args...)
 }
 
+// GetClusterName 获取集群名称
+func (c *Client) GetClusterName() string {
+	return c.config.Cluster
+}
+
 // CleanDistributedTableData 清理分布式表数据（通过清理对应的本地表）
 func (c *Client) CleanDistributedTableData(ctx context.Context, distributedTableName, localTableName string, condition string, args ...interface{}) error {
 	if c.config.Cluster == "" {

@@ -1315,7 +1315,7 @@ func runOptimalSync(ctx context.Context, billService *alicloud.BillService, cfg 
 	} else if params.SkipExisting {
 		fmt.Println("⏭️ 使用跳过模式：智能检测已存在数据，避免重复同步")
 	} else {
-		fmt.Println("📝 使用默认模式：依赖ReplacingMergeTree引擎去重（推荐每月初执行）")
+		fmt.Println("📝 使用智能模式：ReplacingMergeTree自动去重 + 强制优化确保数据准确性")
 	}
 
 	// 自动检测集群环境，如果配置了集群但没有显式指定distributed，则自动使用分布式表
@@ -1340,8 +1340,62 @@ func runOptimalSync(ctx context.Context, billService *alicloud.BillService, cfg 
 		syncOptions.DistributedTableName = dailyTableName
 	}
 
-	// 检查昨天数据是否已存在
-	if params.SkipExisting {
+	// 智能数据量对比检查
+	fmt.Println("🔍 开始智能数据量检查...")
+
+	// 标记分布式表（需要在goto之前声明）
+	tableType := "普通表"
+	if useDistributed && cfg.ClickHouse.Cluster != "" {
+		tableType = "分布式表"
+	}
+
+	// 预声明变量（避免goto跳转问题）
+	var apiCount int32
+	var localExists bool
+	var localCount int64
+	var err error
+
+	// 获取API数据量
+	apiCount, err = billService.GetDailyAPIDataCount(ctx, yesterdayDate)
+	if err != nil {
+		log.Printf("获取昨天API数据量失败: %v", err)
+		goto skipDailyCheck
+	}
+
+	// 获取本地数据量（强制优化后再检查，确保ReplacingMergeTree去重生效）
+	localExists, localCount, err = billService.CheckDailyDataExistsWithOptimize(ctx, dailyTableName, yesterdayDate)
+	if err != nil {
+		log.Printf("检查本地昨天数据失败: %v", err)
+		goto skipDailyCheck
+	}
+
+	fmt.Printf("📊 [%s] 昨天(%s)数据量对比:\n", tableType, yesterdayDate)
+	fmt.Printf("   📡 API数据量: %d 条\n", apiCount)
+	fmt.Printf("   💾 本地数据量: %d 条\n", localCount)
+
+	// 数据量对比决策
+	if !localExists || localCount == 0 {
+		fmt.Printf("📝 本地无数据，需要同步\n")
+	} else if int64(apiCount) == localCount {
+		fmt.Printf("✅ 数据量一致，跳过同步\n")
+		goto syncMonthly
+	} else {
+		diff := int64(apiCount) - localCount
+		if diff > 0 {
+			fmt.Printf("⚠️ API数据较多(差异: +%d 条)，执行强制更新\n", diff)
+		} else {
+			fmt.Printf("⚠️ 本地数据较多(差异: %d 条)，执行强制更新\n", diff)
+		}
+		// 强制清理并重新同步
+		fmt.Printf("🧹 清理昨天(%s)的旧数据...\n", yesterdayDate)
+		if err := cleanSpecificDayData(ctx, billService, dailyTableName, yesterdayDate); err != nil {
+			log.Printf("清理昨天数据失败: %v", err)
+		}
+	}
+
+skipDailyCheck:
+	// 检查昨天数据是否已存在（兼容原有 SkipExisting 逻辑）
+	if params.SkipExisting && apiCount == 0 {
 		exists, count, err := checkDailyDataExists(ctx, billService, dailyTableName, yesterdayDate)
 		if err != nil {
 			log.Printf("检查昨天数据失败: %v", err)
@@ -1377,8 +1431,55 @@ syncMonthly:
 		syncOptions.DistributedTableName = monthlyTableName
 	}
 
-	// 检查上月数据是否已存在
-	if params.SkipExisting {
+	// 智能数据量对比检查（月表）
+	fmt.Println("🔍 开始月表数据量检查...")
+
+	// 预声明变量（避免goto跳转问题）
+	var monthlyAPICount int32
+	var monthlyLocalExists bool
+	var monthlyLocalCount int64
+
+	// 获取API数据量
+	monthlyAPICount, err = billService.GetMonthlyAPIDataCount(ctx, lastMonthPeriod)
+	if err != nil {
+		log.Printf("获取上月API数据量失败: %v", err)
+		goto skipMonthlyCheck
+	}
+
+	// 获取本地数据量（强制优化后再检查，确保ReplacingMergeTree去重生效）
+	monthlyLocalExists, monthlyLocalCount, err = billService.CheckMonthlyDataExistsWithOptimize(ctx, monthlyTableName, lastMonthPeriod)
+	if err != nil {
+		log.Printf("检查本地上月数据失败: %v", err)
+		goto skipMonthlyCheck
+	}
+
+	fmt.Printf("📊 [%s] 上月(%s)数据量对比:\n", tableType, lastMonthPeriod)
+	fmt.Printf("   📡 API数据量: %d 条\n", monthlyAPICount)
+	fmt.Printf("   💾 本地数据量: %d 条\n", monthlyLocalCount)
+
+	// 数据量对比决策
+	if !monthlyLocalExists || monthlyLocalCount == 0 {
+		fmt.Printf("📝 本地无数据，需要同步\n")
+	} else if int64(monthlyAPICount) == monthlyLocalCount {
+		fmt.Printf("✅ 数据量一致，跳过同步\n")
+		goto completed
+	} else {
+		monthlyDiff := int64(monthlyAPICount) - monthlyLocalCount
+		if monthlyDiff > 0 {
+			fmt.Printf("⚠️ API数据较多(差异: +%d 条)，执行强制更新\n", monthlyDiff)
+		} else {
+			fmt.Printf("⚠️ 本地数据较多(差异: %d 条)，执行强制更新\n", monthlyDiff)
+		}
+		// 强制清理并重新同步
+		fmt.Printf("🧹 清理上月(%s)的旧数据...\n", lastMonthPeriod)
+		if err := cleanSpecificMonthData(ctx, billService, monthlyTableName, lastMonthPeriod); err != nil {
+			log.Printf("清理上月数据失败: %v", err)
+		}
+	}
+
+skipMonthlyCheck:
+	// 检查上月数据是否已存在（兼容原有 SkipExisting 逻辑）
+	if params.SkipExisting && monthlyAPICount == 0 {
 		exists, count, err := checkMonthlyDataExists(ctx, billService, monthlyTableName, lastMonthPeriod)
 		if err != nil {
 			log.Printf("检查上月数据失败: %v", err)
@@ -1406,10 +1507,15 @@ completed:
 	fmt.Println("\n🎉 智能同步模式完成")
 
 	// 给出使用建议
+	fmt.Println("\n💡 sync-optimal 模式说明:")
+	fmt.Println("   🤖 智能数据量对比：自动检查API与本地数据是否一致")
+	fmt.Println("   ✅ 数据一致时：自动跳过同步，节省时间和API调用")
+	fmt.Println("   ⚠️ 数据不一致时：自动执行强制更新，确保数据完整")
+	fmt.Println("   🔄 分布式表：自动识别并使用正确的表结构和清理策略")
 	if !params.ForceUpdate && !params.SkipExisting {
-		fmt.Println("\n💡 使用建议:")
-		fmt.Println("   - 每日自动同步建议使用: --sync-optimal --skip-existing")
-		fmt.Println("   - 手动完整同步建议使用: --sync-optimal --force-update")
+		fmt.Println("\n📝 其他同步选项:")
+		fmt.Println("   - 传统跳过模式: --sync-optimal --skip-existing")
+		fmt.Println("   - 强制更新模式: --sync-optimal --force-update")
 		fmt.Println("   - ReplacingMergeTree 会在后台自动去重相同数据")
 	}
 }
