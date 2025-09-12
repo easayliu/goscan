@@ -1,7 +1,7 @@
-config.cluster.yaml
-config.example.yaml
-config.json
+# 配置文件（包含敏感信息）
 config.yaml
+config.json
+config.cluster.yaml
 
 # Node.js / MCP
 node_modules/
@@ -24,9 +24,27 @@ workflow-*.json
 .DS_Store
 Thumbs.db
 
-config.cluster.yaml
-config.json
-config.yaml
+# 构建产物
+bin/
+dist/
+goscan
+goscan.exe
+*.tar.gz
+*.zip
+
+# 数据库文件
+*.db
+*.sqlite
+data/
+
+# 日志文件
+*.log
+logs/
+
+# 测试覆盖率
+coverage.out
+
+# 其他
 .claude
 CLAUDE.md
-USAGE.md
+CLAUDE.md.backup

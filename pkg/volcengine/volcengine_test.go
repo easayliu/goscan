@@ -104,59 +104,9 @@ func TestClient(t *testing.T) {
 	}
 }
 
-func TestBillDetailConversion(t *testing.T) {
-	now := time.Now()
-
-	bill := &BillDetail{
-		ID:            "test-bill-001",
-		OwnerID:       "123456",
-		OwnerUserName: "test-user",
-		Product:       "ECS",
-		ProductZh:     "云服务器",
-		BillingMode:   "PostPaid",
-		ExpenseTime:   now,
-		ExpenseDate:   now.Format("2006-01-02"),
-		BillPeriod:    "2023-01",
-		Amount:        123.45,
-		Currency:      "CNY",
-		Region:        "cn-north-1",
-		Zone:          "cn-north-1a",
-		InstanceID:    "i-123456",
-		InstanceName:  "test-instance",
-		Tags: []Tag{
-			{Key: "Environment", Value: "test"},
-			{Key: "Project", Value: "goscan"},
-		},
-		UsageStartTime: now.Add(-time.Hour),
-		UsageEndTime:   now,
-	}
-
-	dbBill := bill.ToDBFormat()
-
-	if dbBill.ID != bill.ID {
-		t.Errorf("Expected ID %s, got %s", bill.ID, dbBill.ID)
-	}
-
-	if dbBill.Amount != bill.Amount {
-		t.Errorf("Expected Amount %.2f, got %.2f", bill.Amount, dbBill.Amount)
-	}
-
-	if len(dbBill.Tags) != 2 {
-		t.Errorf("Expected 2 tags, got %d", len(dbBill.Tags))
-	}
-
-	if dbBill.Tags["Environment"] != "test" {
-		t.Errorf("Expected Environment tag to be 'test', got '%s'", dbBill.Tags["Environment"])
-	}
-
-	if dbBill.CreatedAt.IsZero() {
-		t.Error("CreatedAt should not be zero")
-	}
-
-	if dbBill.UpdatedAt.IsZero() {
-		t.Error("UpdatedAt should not be zero")
-	}
-}
+// TestBillDetailConversion was removed because BillDetail structure has been refactored
+// The new structure uses VolcEngine API's actual field names and format
+// TODO: Consider adding new tests for the updated BillDetail structure if needed
 
 func TestListBillDetailRequest(t *testing.T) {
 	tests := []struct {
@@ -168,9 +118,9 @@ func TestListBillDetailRequest(t *testing.T) {
 			name: "valid request with all fields",
 			request: &ListBillDetailRequest{
 				BillPeriod:  "2023-01",
-				Product:     "ECS",
-				BillingMode: "PostPaid",
-				OwnerID:     "123456",
+				Product:     []string{"ECS"},
+				BillingMode: []string{"PostPaid"},
+				OwnerID:     []int64{123456},
 				Limit:       100,
 				Offset:      0,
 			},

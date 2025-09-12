@@ -1,0 +1,1324 @@
+{
+    "schemes": [
+        "http",
+        "https"
+    ],
+    "swagger": "2.0",
+    "info": {
+        "description": "云账单数据同步服务API文档\n支持火山云、阿里云等多云平台的账单数据自动同步到ClickHouse数据库",
+        "title": "Goscan API",
+        "termsOfService": "http://swagger.io/terms/",
+        "contact": {
+            "name": "API Support",
+            "email": "support@goscan.com"
+        },
+        "license": {
+            "name": "MIT",
+            "url": "https://opensource.org/licenses/MIT"
+        },
+        "version": "1.0"
+    },
+    "host": "localhost:8080",
+    "basePath": "/api/v1",
+    "paths": {
+        "/config": {
+            "get": {
+                "description": "返回系统配置信息，敏感数据已脱敏处理",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "获取系统配置",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.ConfigResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "基于安全考虑，此接口暂不支持配置更新",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "更新系统配置",
+                "responses": {
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "description": "返回服务健康状态",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "健康检查",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.HealthResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/wechat/status": {
+            "get": {
+                "description": "返回企业微信通知功能的配置状态和最近的通知历史",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notifications"
+                ],
+                "summary": "获取企业微信通知状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.WeChatNotificationStatusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/wechat/test": {
+            "post": {
+                "description": "测试企业微信Webhook URL的连通性，不发送实际的费用报告",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notifications"
+                ],
+                "summary": "测试企业微信Webhook连接",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/wechat/trigger": {
+            "post": {
+                "description": "手动触发企业微信费用报告通知，支持指定分析参数",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notifications"
+                ],
+                "summary": "手动触发企业微信通知",
+                "parameters": [
+                    {
+                        "description": "微信通知触发请求参数",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.WeChatNotificationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/scheduler/jobs": {
+            "get": {
+                "description": "返回所有已配置的定时任务信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scheduler"
+                ],
+                "summary": "获取定时任务列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.JobListResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "创建一个新的定时同步任务",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scheduler"
+                ],
+                "summary": "创建定时任务",
+                "parameters": [
+                    {
+                        "description": "定时任务请求参数",
+                        "name": "job",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.JobRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/scheduler/jobs/{id}": {
+            "delete": {
+                "description": "删除指定的定时任务",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scheduler"
+                ],
+                "summary": "删除定时任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "任务ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/scheduler/status": {
+            "get": {
+                "description": "返回任务调度器的运行状态信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Scheduler"
+                ],
+                "summary": "获取调度器状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SchedulerStatus"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/status": {
+            "get": {
+                "description": "返回服务运行状态、任务统计和调度器状态等系统信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System"
+                ],
+                "summary": "获取系统状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SystemStatus"
+                        }
+                    }
+                }
+            }
+        },
+        "/sync/history": {
+            "get": {
+                "description": "返回历史同步任务的执行记录",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sync"
+                ],
+                "summary": "获取同步历史",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SyncHistoryResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/sync/status": {
+            "get": {
+                "description": "返回当前数据同步任务的状态信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sync"
+                ],
+                "summary": "获取同步状态",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SyncStatusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/sync/trigger": {
+            "post": {
+                "description": "手动触发指定云服务商的账单数据同步操作",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Sync"
+                ],
+                "summary": "手动触发数据同步",
+                "parameters": [
+                    {
+                        "description": "同步请求参数",
+                        "name": "sync",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.SyncTriggerRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks": {
+            "get": {
+                "description": "返回所有任务的详细信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tasks"
+                ],
+                "summary": "获取任务列表",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.TaskListResponse"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "创建并异步执行一个新的同步任务",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tasks"
+                ],
+                "summary": "创建新任务",
+                "parameters": [
+                    {
+                        "description": "任务请求参数",
+                        "name": "task",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.TaskRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}": {
+            "get": {
+                "description": "根据任务ID返回任务的详细信息",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tasks"
+                ],
+                "summary": "获取指定任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "任务ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.TaskResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "取消或删除指定的任务",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Tasks"
+                ],
+                "summary": "删除任务",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "任务ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "definitions": {
+        "models.AppConfig": {
+            "type": "object",
+            "properties": {
+                "log_file": {
+                    "type": "string"
+                },
+                "log_level": {
+                    "type": "string",
+                    "example": "info"
+                }
+            }
+        },
+        "models.ClickHouseConfig": {
+            "type": "object",
+            "properties": {
+                "cluster": {
+                    "type": "string",
+                    "example": "my_cluster"
+                },
+                "database": {
+                    "type": "string",
+                    "example": "default"
+                },
+                "hosts": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "localhost"
+                    ]
+                },
+                "port": {
+                    "type": "integer",
+                    "example": 9000
+                },
+                "protocol": {
+                    "type": "string",
+                    "example": "native"
+                },
+                "username": {
+                    "type": "string",
+                    "example": "default"
+                }
+            }
+        },
+        "models.CloudProviderConfig": {
+            "type": "object",
+            "properties": {
+                "alicloud": {
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                },
+                "aws": {
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                },
+                "azure": {
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                },
+                "gcp": {
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                },
+                "volcengine": {
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                }
+            }
+        },
+        "models.ConfigResponse": {
+            "type": "object",
+            "properties": {
+                "app": {
+                    "$ref": "#/definitions/models.AppConfig"
+                },
+                "clickhouse": {
+                    "$ref": "#/definitions/models.ClickHouseConfig"
+                },
+                "cloud_providers": {
+                    "$ref": "#/definitions/models.CloudProviderConfig"
+                }
+            }
+        },
+        "models.ErrorResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "integer",
+                    "example": 400
+                },
+                "details": {
+                    "type": "string",
+                    "example": "provider字段不能为空"
+                },
+                "error": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "message": {
+                    "type": "string",
+                    "example": "参数验证失败"
+                }
+            }
+        },
+        "models.HealthResponse": {
+            "type": "object",
+            "properties": {
+                "service": {
+                    "type": "string",
+                    "example": "goscan"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "healthy"
+                },
+                "timestamp": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "version": {
+                    "type": "string",
+                    "example": "1.0.0"
+                }
+            }
+        },
+        "models.JobListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "example": 3
+                },
+                "jobs": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.JobResponse"
+                    }
+                }
+            }
+        },
+        "models.JobRequest": {
+            "type": "object",
+            "required": [
+                "cron_expr",
+                "name",
+                "provider",
+                "task_type"
+            ],
+            "properties": {
+                "cron_expr": {
+                    "type": "string",
+                    "example": "0 2 * * *"
+                },
+                "description": {
+                    "type": "string",
+                    "example": "每日凌晨2点同步火山云账单"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "name": {
+                    "type": "string",
+                    "example": "daily_volcengine_sync"
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                },
+                "task_type": {
+                    "type": "string",
+                    "example": "sync"
+                }
+            }
+        },
+        "models.JobResponse": {
+            "type": "object",
+            "properties": {
+                "created_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "cron_expr": {
+                    "type": "string",
+                    "example": "0 2 * * *"
+                },
+                "description": {
+                    "type": "string",
+                    "example": "每日凌晨2点同步火山云账单"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "id": {
+                    "type": "string",
+                    "example": "job_123456"
+                },
+                "last_run": {
+                    "type": "string",
+                    "example": "2025-09-11T02:00:00Z"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "daily_volcengine_sync"
+                },
+                "next_run": {
+                    "type": "string",
+                    "example": "2025-09-12T02:00:00Z"
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                },
+                "task_type": {
+                    "type": "string",
+                    "example": "sync"
+                },
+                "updated_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                }
+            }
+        },
+        "models.MessageResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "example": "操作成功"
+                },
+                "success": {
+                    "type": "boolean",
+                    "example": true
+                }
+            }
+        },
+        "models.SchedulerStatus": {
+            "type": "object",
+            "properties": {
+                "entries": {
+                    "type": "integer",
+                    "example": 3
+                },
+                "job_count": {
+                    "type": "integer",
+                    "example": 3
+                },
+                "running": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "timestamp": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                }
+            }
+        },
+        "models.SyncHistoryEntry": {
+            "type": "object",
+            "properties": {
+                "bill_period": {
+                    "type": "string",
+                    "example": "2025-09"
+                },
+                "completed_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:15:29Z"
+                },
+                "duration": {
+                    "type": "integer",
+                    "example": 125
+                },
+                "error_count": {
+                    "type": "integer",
+                    "example": 0
+                },
+                "id": {
+                    "type": "string",
+                    "example": "sync_123456"
+                },
+                "message": {
+                    "type": "string",
+                    "example": "同步完成"
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                },
+                "record_count": {
+                    "type": "integer",
+                    "example": 1500
+                },
+                "started_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "completed"
+                }
+            }
+        },
+        "models.SyncHistoryResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "example": 10
+                },
+                "history": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.SyncHistoryEntry"
+                    }
+                }
+            }
+        },
+        "models.SyncStatusResponse": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "error_count": {
+                    "type": "integer",
+                    "example": 0
+                },
+                "message": {
+                    "type": "string",
+                    "example": "同步进行中..."
+                },
+                "progress": {
+                    "type": "number",
+                    "example": 75.5
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                },
+                "record_count": {
+                    "type": "integer",
+                    "example": 1500
+                },
+                "started_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "running"
+                }
+            }
+        },
+        "models.SyncTriggerRequest": {
+            "type": "object",
+            "required": [
+                "provider"
+            ],
+            "properties": {
+                "bill_period": {
+                    "type": "string",
+                    "example": "2025-09"
+                },
+                "force": {
+                    "type": "boolean",
+                    "example": false
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                }
+            }
+        },
+        "models.SystemStatus": {
+            "type": "object",
+            "properties": {
+                "scheduler": {
+                    "$ref": "#/definitions/models.SchedulerStatus"
+                },
+                "service": {
+                    "type": "string",
+                    "example": "goscan"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "running"
+                },
+                "tasks": {
+                    "$ref": "#/definitions/models.TasksStatus"
+                },
+                "timestamp": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "uptime": {
+                    "type": "integer",
+                    "example": 3600
+                },
+                "version": {
+                    "type": "string",
+                    "example": "1.0.0"
+                }
+            }
+        },
+        "models.TaskListResponse": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "example": 5
+                },
+                "tasks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.TaskResponse"
+                    }
+                }
+            }
+        },
+        "models.TaskRequest": {
+            "type": "object",
+            "required": [
+                "name",
+                "provider",
+                "type"
+            ],
+            "properties": {
+                "description": {
+                    "type": "string",
+                    "example": "同步火山云账单数据"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "volcengine_sync_task"
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                },
+                "schedule": {
+                    "type": "string",
+                    "example": "0 2 * * *"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "sync"
+                }
+            }
+        },
+        "models.TaskResponse": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:30Z"
+                },
+                "created_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "description": {
+                    "type": "string",
+                    "example": "同步火山云账单数据"
+                },
+                "id": {
+                    "type": "string",
+                    "example": "task_123456"
+                },
+                "name": {
+                    "type": "string",
+                    "example": "volcengine_sync_task"
+                },
+                "parameters": {
+                    "type": "object",
+                    "additionalProperties": true
+                },
+                "provider": {
+                    "type": "string",
+                    "example": "volcengine"
+                },
+                "schedule": {
+                    "type": "string",
+                    "example": "0 2 * * *"
+                },
+                "started_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "running"
+                },
+                "type": {
+                    "type": "string",
+                    "example": "sync"
+                },
+                "updated_at": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                }
+            }
+        },
+        "models.TasksStatus": {
+            "type": "object",
+            "properties": {
+                "running": {
+                    "type": "integer",
+                    "example": 2
+                },
+                "total": {
+                    "type": "integer",
+                    "example": 10
+                }
+            }
+        },
+        "models.WeChatNotificationHistoryEntry": {
+            "type": "object",
+            "properties": {
+                "duration": {
+                    "description": "执行耗时",
+                    "type": "string",
+                    "example": "2m6s"
+                },
+                "end_time": {
+                    "description": "结束时间",
+                    "type": "string",
+                    "example": "2025-09-12T08:15:30Z"
+                },
+                "error": {
+                    "description": "错误信息",
+                    "type": "string",
+                    "example": "连接超时"
+                },
+                "id": {
+                    "description": "任务ID",
+                    "type": "string",
+                    "example": "task_123456"
+                },
+                "message": {
+                    "description": "执行消息",
+                    "type": "string",
+                    "example": "通知发送成功"
+                },
+                "records_processed": {
+                    "description": "处理记录数",
+                    "type": "integer",
+                    "example": 1500
+                },
+                "start_time": {
+                    "description": "开始时间",
+                    "type": "string",
+                    "example": "2025-09-12T08:13:24Z"
+                },
+                "status": {
+                    "description": "执行状态",
+                    "type": "string",
+                    "example": "completed"
+                }
+            }
+        },
+        "models.WeChatNotificationRequest": {
+            "type": "object",
+            "properties": {
+                "alert_threshold": {
+                    "description": "告警阈值（百分比），默认使用配置值",
+                    "type": "number",
+                    "example": 10
+                },
+                "date": {
+                    "description": "分析日期，格式：2006-01-02，默认当前日期",
+                    "type": "string",
+                    "example": "2025-09-12"
+                },
+                "force_notify": {
+                    "description": "强制发送通知，即使未达到告警阈值",
+                    "type": "boolean",
+                    "example": false
+                },
+                "providers": {
+                    "description": "云服务商列表，默认：[\"volcengine\", \"alicloud\"]",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "volcengine",
+                        "alicloud"
+                    ]
+                },
+                "test_mode": {
+                    "description": "测试模式，仅测试连接不发送实际报告",
+                    "type": "boolean",
+                    "example": false
+                }
+            }
+        },
+        "models.WeChatNotificationStatusResponse": {
+            "type": "object",
+            "properties": {
+                "alert_threshold": {
+                    "description": "告警阈值",
+                    "type": "number",
+                    "example": 10
+                },
+                "enabled": {
+                    "description": "微信通知功能是否启用",
+                    "type": "boolean",
+                    "example": true
+                },
+                "executor_enabled": {
+                    "description": "执行器是否启用",
+                    "type": "boolean",
+                    "example": true
+                },
+                "executor_status": {
+                    "description": "执行器状态",
+                    "type": "string",
+                    "example": "ready"
+                },
+                "history_count": {
+                    "description": "历史记录数量",
+                    "type": "integer",
+                    "example": 5
+                },
+                "max_retries": {
+                    "description": "最大重试次数",
+                    "type": "integer",
+                    "example": 3
+                },
+                "mention_users": {
+                    "description": "提及用户列表",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "example": [
+                        "user1",
+                        "user2"
+                    ]
+                },
+                "recent_history": {
+                    "description": "最近通知历史",
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/models.WeChatNotificationHistoryEntry"
+                    }
+                },
+                "retry_delay": {
+                    "description": "重试延迟时间（秒）",
+                    "type": "integer",
+                    "example": 5
+                },
+                "send_time": {
+                    "description": "发送时间",
+                    "type": "string",
+                    "example": "09:00"
+                },
+                "timestamp": {
+                    "description": "状态查询时间戳",
+                    "type": "string",
+                    "example": "2025-09-12T08:13:24Z"
+                },
+                "webhook_configured": {
+                    "description": "Webhook是否已配置",
+                    "type": "boolean",
+                    "example": true
+                },
+                "webhook_url": {
+                    "description": "脱敏后的Webhook URL",
+                    "type": "string",
+                    "example": "https://qyapi***webhook"
+                }
+            }
+        },
+        "pkg_models.ProviderConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "endpoint": {
+                    "type": "string",
+                    "example": "ecs.cn-hangzhou.aliyuncs.com"
+                },
+                "has_credentials": {
+                    "description": "Note: AccessKey and SecretKey are masked for security",
+                    "type": "boolean",
+                    "example": true
+                },
+                "host": {
+                    "type": "string",
+                    "example": "billing.volcengineapi.com"
+                },
+                "region": {
+                    "type": "string",
+                    "example": "cn-north-1"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "example": 30
+                }
+            }
+        }
+    }
+}

@@ -11,6 +11,10 @@ import (
 type Config struct {
 	ClickHouse     *ClickHouseConfig     `json:"clickhouse" yaml:"clickhouse"`
 	CloudProviders *CloudProvidersConfig `json:"cloud_providers" yaml:"cloud_providers"`
+	Server         *ServerConfig         `json:"server" yaml:"server"`
+	Scheduler      *SchedulerConfig      `json:"scheduler" yaml:"scheduler"`
+	Runtime        *RuntimeConfig        `json:"runtime" yaml:"runtime"`
+	WeChat         *WeChatConfig         `json:"wechat" yaml:"wechat"`
 	App            *AppConfig            `json:"app" yaml:"app"`
 }
 
@@ -20,6 +24,37 @@ type CloudProvidersConfig struct {
 	AWS        *AWSConfig        `json:"aws" yaml:"aws"`
 	Azure      *AzureConfig      `json:"azure" yaml:"azure"`
 	GCP        *GCPConfig        `json:"gcp" yaml:"gcp"`
+}
+
+type ServerConfig struct {
+	Port    int    `json:"port" yaml:"port"`
+	Address string `json:"address" yaml:"address"`
+}
+
+type SchedulerConfig struct {
+	Enabled bool           `json:"enabled" yaml:"enabled"`
+	Jobs    []ScheduledJob `json:"jobs" yaml:"jobs"`
+}
+
+type ScheduledJob struct {
+	Name     string    `json:"name" yaml:"name"`
+	Provider string    `json:"provider" yaml:"provider"`
+	Cron     string    `json:"cron" yaml:"cron"`
+	Config   JobConfig `json:"config" yaml:"config"`
+}
+
+type JobConfig struct {
+	SyncMode       string `json:"sync_mode" yaml:"sync_mode"`
+	UseDistributed bool   `json:"use_distributed" yaml:"use_distributed"`
+	CreateTable    bool   `json:"create_table" yaml:"create_table"`
+	ForceUpdate    bool   `json:"force_update" yaml:"force_update"`
+	Granularity    string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
+}
+
+type RuntimeConfig struct {
+	MaxConcurrentTasks      int `json:"max_concurrent_tasks" yaml:"max_concurrent_tasks"`
+	TaskTimeout             int `json:"task_timeout" yaml:"task_timeout"`                           // seconds
+	GracefulShutdownTimeout int `json:"graceful_shutdown_timeout" yaml:"graceful_shutdown_timeout"` // seconds
 }
 
 type AppConfig struct {
@@ -95,6 +130,16 @@ type GCPConfig struct {
 	Timeout           int    `json:"timeout" yaml:"timeout"` // seconds
 }
 
+type WeChatConfig struct {
+	WebhookURL         string   `json:"webhook_url" yaml:"webhook_url"`                 // 企业微信机器人webhook地址
+	Enabled            bool     `json:"enabled" yaml:"enabled"`                         // 是否启用微信通知
+	MentionUsers       []string `json:"mention_users" yaml:"mention_users"`             // @用户列表
+	AlertThreshold     float64  `json:"alert_threshold" yaml:"alert_threshold"`         // 告警阈值（百分比）
+	MaxRetries         int      `json:"max_retries" yaml:"max_retries"`                 // 最大重试次数
+	RetryDelay         int      `json:"retry_delay" yaml:"retry_delay"`                 // 重试延迟（秒）
+	NotificationFormat string   `json:"notification_format" yaml:"notification_format"` // 通知格式：markdown/template_card/auto
+}
+
 func NewVolcEngineConfig() *VolcEngineConfig {
 	return &VolcEngineConfig{
 		AccessKey:  getEnv("VOLCENGINE_ACCESS_KEY", ""),
@@ -143,6 +188,17 @@ func NewAliCloudConfig() *AliCloudConfig {
 		DefaultStartPeriod:  getEnv("ALICLOUD_DEFAULT_START_PERIOD", ""),
 		DefaultEndPeriod:    getEnv("ALICLOUD_DEFAULT_END_PERIOD", ""),
 		SkipEmptyPeriods:    getEnvBool("ALICLOUD_SKIP_EMPTY_PERIODS", true),
+	}
+}
+
+func NewWeChatConfig() *WeChatConfig {
+	return &WeChatConfig{
+		WebhookURL:     getEnv("WECHAT_WEBHOOK_URL", ""),
+		Enabled:        getEnvBool("WECHAT_ENABLED", false),
+		MentionUsers:   parseStringList(getEnv("WECHAT_MENTION_USERS", "")),
+		AlertThreshold: getEnvFloat("WECHAT_ALERT_THRESHOLD", 20.0),
+		MaxRetries:     getEnvInt("WECHAT_MAX_RETRIES", 3),
+		RetryDelay:     getEnvInt("WECHAT_RETRY_DELAY", 2),
 	}
 }
 
@@ -242,6 +298,20 @@ func getDefaultConfig() *Config {
 				Timeout:           getEnvInt("GCP_TIMEOUT", 30),
 			},
 		},
+		Server: &ServerConfig{
+			Port:    getEnvInt("SERVER_PORT", 8080),
+			Address: getEnv("SERVER_ADDRESS", "0.0.0.0"),
+		},
+		Scheduler: &SchedulerConfig{
+			Enabled: getEnvBool("SCHEDULER_ENABLED", true),
+			Jobs:    []ScheduledJob{},
+		},
+		Runtime: &RuntimeConfig{
+			MaxConcurrentTasks:      getEnvInt("RUNTIME_MAX_CONCURRENT_TASKS", 3),
+			TaskTimeout:             getEnvInt("RUNTIME_TASK_TIMEOUT", 3600),
+			GracefulShutdownTimeout: getEnvInt("RUNTIME_GRACEFUL_SHUTDOWN_TIMEOUT", 30),
+		},
+		WeChat: NewWeChatConfig(),
 		App: &AppConfig{
 			LogLevel: getEnv("LOG_LEVEL", "info"),
 			LogFile:  getEnv("LOG_FILE", ""),
@@ -488,6 +558,63 @@ func mergeEnvVars(config *Config) {
 		config.CloudProviders.GCP.Timeout = timeout
 	}
 
+	// Server configuration
+	if config.Server == nil {
+		config.Server = &ServerConfig{}
+	}
+	if port := getEnvInt("SERVER_PORT", 0); port != 0 {
+		config.Server.Port = port
+	}
+	if address := os.Getenv("SERVER_ADDRESS"); address != "" {
+		config.Server.Address = address
+	}
+
+	// Scheduler configuration
+	if config.Scheduler == nil {
+		config.Scheduler = &SchedulerConfig{}
+	}
+	if enabled := os.Getenv("SCHEDULER_ENABLED"); enabled != "" {
+		config.Scheduler.Enabled = enabled == "true" || enabled == "1"
+	}
+
+	// Runtime configuration
+	if config.Runtime == nil {
+		config.Runtime = &RuntimeConfig{}
+	}
+	if maxTasks := getEnvInt("RUNTIME_MAX_CONCURRENT_TASKS", 0); maxTasks != 0 {
+		config.Runtime.MaxConcurrentTasks = maxTasks
+	}
+	if timeout := getEnvInt("RUNTIME_TASK_TIMEOUT", 0); timeout != 0 {
+		config.Runtime.TaskTimeout = timeout
+	}
+	if shutdownTimeout := getEnvInt("RUNTIME_GRACEFUL_SHUTDOWN_TIMEOUT", 0); shutdownTimeout != 0 {
+		config.Runtime.GracefulShutdownTimeout = shutdownTimeout
+	}
+
+	// 微信配置
+	if config.WeChat == nil {
+		config.WeChat = NewWeChatConfig()
+	} else {
+		if webhookURL := os.Getenv("WECHAT_WEBHOOK_URL"); webhookURL != "" {
+			config.WeChat.WebhookURL = webhookURL
+		}
+		if enabled := os.Getenv("WECHAT_ENABLED"); enabled != "" {
+			config.WeChat.Enabled = enabled == "true" || enabled == "1"
+		}
+		if mentionUsers := os.Getenv("WECHAT_MENTION_USERS"); mentionUsers != "" {
+			config.WeChat.MentionUsers = parseStringList(mentionUsers)
+		}
+		if alertThreshold := getEnvFloat("WECHAT_ALERT_THRESHOLD", 0); alertThreshold != 0 {
+			config.WeChat.AlertThreshold = alertThreshold
+		}
+		if maxRetries := getEnvInt("WECHAT_MAX_RETRIES", 0); maxRetries != 0 {
+			config.WeChat.MaxRetries = maxRetries
+		}
+		if retryDelay := getEnvInt("WECHAT_RETRY_DELAY", 0); retryDelay != 0 {
+			config.WeChat.RetryDelay = retryDelay
+		}
+	}
+
 	if config.App == nil {
 		config.App = &AppConfig{}
 	}
@@ -553,4 +680,12 @@ func (c *Config) GetGCPConfig() *GCPConfig {
 		ServiceAccountKey: getEnv("GCP_SERVICE_ACCOUNT_KEY", ""),
 		Timeout:           getEnvInt("GCP_TIMEOUT", 30),
 	}
+}
+
+// GetWeChatConfig 获取微信配置
+func (c *Config) GetWeChatConfig() *WeChatConfig {
+	if c.WeChat != nil {
+		return c.WeChat
+	}
+	return NewWeChatConfig()
 }

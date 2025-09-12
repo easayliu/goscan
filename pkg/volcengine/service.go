@@ -25,7 +25,23 @@ func NewBillService(volcConfig *config.VolcEngineConfig, chClient *clickhouse.Cl
 	}, nil
 }
 
+// CreateBillTable 创建账单表（支持自动表名解析）
 func (s *BillService) CreateBillTable(ctx context.Context) error {
+	// 获取解析器，用于确定实际要检查和创建的表名
+	resolver := s.chClient.GetTableNameResolver()
+	actualTableName := resolver.ResolveQueryTarget(s.tableName)
+
+	// 检查表是否已存在
+	exists, err := s.chClient.TableExists(ctx, s.tableName)
+	if err != nil {
+		return fmt.Errorf("failed to check table existence: %w", err)
+	}
+
+	if exists {
+		log.Printf("[火山云账单表] 表 %s 已存在，跳过创建", actualTableName)
+		return nil
+	}
+
 	schema := `(
 		-- 核心标识字段
 		bill_detail_id String,
@@ -167,7 +183,16 @@ func (s *BillService) CreateBillTable(ctx context.Context) error {
 	ORDER BY (bill_period, expense_date, bill_detail_id)
 	PARTITION BY toYYYYMM(toDate(expense_date))`
 
-	return s.chClient.CreateTable(ctx, s.tableName, schema)
+	// 使用自动表名解析机制创建表
+	if resolver.IsClusterEnabled() {
+		// 集群模式：创建完整的分布式表结构（本地表+分布式表）
+		log.Printf("[火山云账单表] 在集群模式下创建分布式表结构，基础表名: %s", s.tableName)
+		return s.chClient.CreateDistributedTableWithResolver(ctx, s.tableName, schema)
+	} else {
+		// 单机模式：直接创建表
+		log.Printf("[火山云账单表] 在单机模式下创建表: %s", actualTableName)
+		return s.chClient.CreateTable(ctx, s.tableName, schema)
+	}
 }
 
 func (s *BillService) CreateDistributedBillTable(ctx context.Context, localTableName, distributedTableName string) error {
