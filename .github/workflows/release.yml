@@ -46,7 +46,7 @@ jobs:
     - name: Install cross-compilation dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools musl-dev
     
     - name: Install dependencies
       run: go mod download
@@ -62,9 +62,14 @@ jobs:
         CGO_ENABLED: 1
       run: |
         # 设置交叉编译工具链
-        if [ "$GOOS" = "linux" ] && [ "$GOARCH" = "arm64" ]; then
-          export CC=aarch64-linux-gnu-gcc
-          export CXX=aarch64-linux-gnu-g++
+        if [ "$GOOS" = "linux" ]; then
+          if [ "$GOARCH" = "amd64" ]; then
+            export CC=musl-gcc
+            export CXX=musl-g++
+          elif [ "$GOARCH" = "arm64" ]; then
+            export CC=aarch64-linux-gnu-gcc
+            export CXX=aarch64-linux-gnu-g++
+          fi
         elif [ "$GOOS" = "darwin" ]; then
           # macOS交叉编译需要禁用CGO
           export CGO_ENABLED=0
@@ -72,7 +77,12 @@ jobs:
         BINARY_NAME=goscan
         
         mkdir -p dist
-        go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" -o dist/${BINARY_NAME} cmd/server/main.go
+        # 为了兼容老旧系统，使用静态链接
+        if [ "$GOOS" = "linux" ]; then
+          go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }} -linkmode external -extldflags '-static'" -o dist/${BINARY_NAME} cmd/server/main.go
+        else
+          go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" -o dist/${BINARY_NAME} cmd/server/main.go
+        fi
         
         # 创建发布包
         RELEASE_NAME=goscan-${{ steps.version.outputs.VERSION }}-${GOOS}-${GOARCH}
