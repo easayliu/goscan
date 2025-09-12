@@ -30,7 +30,7 @@ func (s *BillService) CreateBillTable(ctx context.Context) error {
 	// 获取解析器，用于确定实际要检查和创建的表名
 	resolver := s.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(s.tableName)
-	
+
 	// 检查表是否已存在
 	exists, err := s.chClient.TableExists(ctx, s.tableName)
 	if err != nil {

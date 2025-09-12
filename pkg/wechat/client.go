@@ -82,8 +82,8 @@ func (c *Client) SendText(ctx context.Context, content string) error {
 // SendMarkdown 发送Markdown消息（markdown_v2支持表格）
 func (c *Client) SendMarkdown(ctx context.Context, content string) error {
 	msg := &WebhookMessage{
-		MsgType: MessageTypeMarkdown,  // markdown_v2
-		MarkdownV2: &MarkdownMsg{     // 使用MarkdownV2字段
+		MsgType: MessageTypeMarkdown, // markdown_v2
+		MarkdownV2: &MarkdownMsg{ // 使用MarkdownV2字段
 			Content: content,
 		},
 	}
@@ -111,12 +111,12 @@ func (c *Client) SendCostReportWithFormat(ctx context.Context, data *CostCompari
 		// 使用模板卡片格式
 		card := c.formatCostReportCard(data)
 		return c.SendTemplateCard(ctx, card)
-		
+
 	case FormatMarkdown:
 		// 使用Markdown表格格式
 		content := c.formatCostReport(data)
 		return c.SendMarkdown(ctx, content)
-		
+
 	case FormatAuto:
 		// 自动选择：优先尝试模板卡片，失败则降级到Markdown
 		card := c.formatCostReportCard(data)
@@ -127,7 +127,7 @@ func (c *Client) SendCostReportWithFormat(ctx context.Context, data *CostCompari
 			return c.SendMarkdown(ctx, content)
 		}
 		return nil
-		
+
 	default:
 		// 默认使用Markdown格式
 		content := c.formatCostReport(data)
@@ -223,7 +223,7 @@ func (c *Client) formatCostReport(data *CostComparisonData) string {
 
 	// 标题 - 使用emoji增强视觉效果
 	builder.WriteString("## 📊 云服务费用日报\n\n")
-	
+
 	// 日期信息
 	builder.WriteString(fmt.Sprintf("📅 **报告日期：%s**\n\n", data.Date))
 
@@ -256,21 +256,21 @@ func (c *Client) formatCostReport(data *CostComparisonData) string {
 		// 服务商总计 - 使用表格格式
 		if provider.TotalCost != nil {
 			total := provider.TotalCost
-			
+
 			changeDesc := ""
 			if total.ChangeAmount != 0 {
 				changeIcon := total.GetChangeIcon()
 				if total.ChangeAmount > 0 {
-					changeDesc = fmt.Sprintf("%s **+%.2f元 (%+.1f%%)**", 
+					changeDesc = fmt.Sprintf("%s **+%.2f元 (%+.1f%%)**",
 						changeIcon, total.ChangeAmount, total.ChangePercent)
 				} else {
-					changeDesc = fmt.Sprintf("%s %.2f元 (%.1f%%)", 
+					changeDesc = fmt.Sprintf("%s %.2f元 (%.1f%%)",
 						changeIcon, total.ChangeAmount, total.ChangePercent)
 				}
 			} else {
 				changeDesc = "➡️ 无变化"
 			}
-			
+
 			// 构建完整表格字符串
 			tableStr := fmt.Sprintf("| 时间 | 总费用 | 变化 |\n| :--- | ---: | ---: |\n| **前天 → 昨天** | **¥%.2f → ¥%.2f** | %s |",
 				total.YesterdayCost, total.TodayCost, changeDesc)
@@ -280,7 +280,7 @@ func (c *Client) formatCostReport(data *CostComparisonData) string {
 		// 产品费用列表 - 使用表格格式显示所有产品
 		if len(provider.Products) > 0 {
 			builder.WriteString("**📦 产品明细：**\n\n")
-			
+
 			// 构建完整表格字符串
 			var tableBuilder strings.Builder
 			tableBuilder.WriteString("| 产品名称 | 前天费用 | 昨天费用 | 变化趋势 | 变化幅度 |\n| :--- | ---: | ---: | :---: | ---: |")
@@ -294,7 +294,7 @@ func (c *Client) formatCostReport(data *CostComparisonData) string {
 				} else if product.ChangeAmount < 0 {
 					changeIcon = "📉"
 				}
-				
+
 				// 变化幅度
 				changeStr := ""
 				if product.ChangeAmount != 0 {
@@ -311,12 +311,12 @@ func (c *Client) formatCostReport(data *CostComparisonData) string {
 				} else {
 					changeStr = "无变化"
 				}
-				
+
 				// 添加产品行
 				tableBuilder.WriteString(fmt.Sprintf("\n| **%s** | ¥%.2f | ¥%.2f | %s | %s |",
 					product.Name, product.YesterdayCost, product.TodayCost, changeIcon, changeStr))
 			}
-			
+
 			builder.WriteString(tableBuilder.String())
 			builder.WriteString("\n\n")
 		}
@@ -325,23 +325,23 @@ func (c *Client) formatCostReport(data *CostComparisonData) string {
 	// 异常提醒
 	if len(data.Alerts) > 0 {
 		builder.WriteString("### ⚠️ 费用异常提醒\n")
-		
+
 		// 根据告警数量使用不同的提示
 		if len(data.Alerts) > 5 {
-			builder.WriteString(fmt.Sprintf("**发现 %d 个异常变化，请关注！**\n\n", 
+			builder.WriteString(fmt.Sprintf("**发现 %d 个异常变化，请关注！**\n\n",
 				len(data.Alerts)))
 		}
-		
+
 		// 显示前5个最重要的告警
 		maxAlerts := 5
 		if len(data.Alerts) < maxAlerts {
 			maxAlerts = len(data.Alerts)
 		}
-		
+
 		for i := 0; i < maxAlerts; i++ {
 			builder.WriteString(fmt.Sprintf("> %s\n", data.Alerts[i]))
 		}
-		
+
 		if len(data.Alerts) > maxAlerts {
 			builder.WriteString(fmt.Sprintf("> *...还有 %d 个告警*\n", len(data.Alerts)-maxAlerts))
 		}
@@ -404,21 +404,21 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 	if data.TotalCost != nil {
 		total := data.TotalCost
 		emphasisTitle := fmt.Sprintf("¥%.2f", total.TodayCost)
-		
+
 		var emphasisDesc string
 		if total.ChangeAmount != 0 {
 			changeIcon := total.GetChangeIcon()
 			if total.ChangeAmount > 0 {
-				emphasisDesc = fmt.Sprintf("%s 较前天增长 %.2f元 (%.1f%%)", 
+				emphasisDesc = fmt.Sprintf("%s 较前天增长 %.2f元 (%.1f%%)",
 					changeIcon, total.ChangeAmount, total.ChangePercent)
 			} else {
-				emphasisDesc = fmt.Sprintf("%s 较前天减少 %.2f元 (%.1f%%)", 
+				emphasisDesc = fmt.Sprintf("%s 较前天减少 %.2f元 (%.1f%%)",
 					changeIcon, -total.ChangeAmount, -total.ChangePercent)
 			}
 		} else {
 			emphasisDesc = "与前天持平"
 		}
-		
+
 		card.EmphasisContent = &CardEmphasisContent{
 			Title: emphasisTitle,
 			Desc:  emphasisDesc,
@@ -434,7 +434,7 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 		if provider.TotalCost == nil {
 			continue
 		}
-		
+
 		// 服务商图标
 		var icon string
 		switch strings.ToLower(provider.Provider) {
@@ -445,7 +445,7 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 		default:
 			icon = "☁️"
 		}
-		
+
 		// 费用变化描述
 		total := provider.TotalCost
 		var changeDesc string
@@ -458,20 +458,20 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 		} else {
 			changeDesc = "➡️ 无变化"
 		}
-		
+
 		horizontalList = append(horizontalList, CardHorizontalContent{
 			KeyName: fmt.Sprintf("%s %s", icon, provider.DisplayName),
-			Value:   fmt.Sprintf("¥%.2f → ¥%.2f %s", 
+			Value: fmt.Sprintf("¥%.2f → ¥%.2f %s",
 				total.YesterdayCost, total.TodayCost, changeDesc),
-			Type:    0,
+			Type: 0,
 		})
-		
+
 		// 添加主要产品明细（前3个）
 		maxProducts := 3
 		if len(provider.Products) < maxProducts {
 			maxProducts = len(provider.Products)
 		}
-		
+
 		for i := 0; i < maxProducts; i++ {
 			product := provider.Products[i]
 			productChange := ""
@@ -482,15 +482,15 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 			} else if product.ChangeAmount != 0 {
 				productChange = fmt.Sprintf("%+.1f%%", product.ChangePercent)
 			}
-			
+
 			horizontalList = append(horizontalList, CardHorizontalContent{
 				KeyName: fmt.Sprintf("  └ %s", product.Name),
-				Value:   fmt.Sprintf("¥%.0f → ¥%.0f %s", 
+				Value: fmt.Sprintf("¥%.0f → ¥%.0f %s",
 					product.YesterdayCost, product.TodayCost, productChange),
-				Type:    0,
+				Type: 0,
 			})
 		}
-		
+
 		if len(provider.Products) > maxProducts {
 			horizontalList = append(horizontalList, CardHorizontalContent{
 				KeyName: fmt.Sprintf("  └ 其他%d个产品", len(provider.Products)-maxProducts),
@@ -508,18 +508,18 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 		if len(data.Alerts) < maxAlerts {
 			maxAlerts = len(data.Alerts)
 		}
-		
+
 		for i := 0; i < maxAlerts; i++ {
 			if i > 0 {
 				alertText += "\n"
 			}
 			alertText += fmt.Sprintf("• %s", data.Alerts[i])
 		}
-		
+
 		if len(data.Alerts) > maxAlerts {
 			alertText += fmt.Sprintf("\n• ...还有%d个告警", len(data.Alerts)-maxAlerts)
 		}
-		
+
 		card.QuoteArea = &CardQuoteArea{
 			Type:      0,
 			Title:     fmt.Sprintf("⚠️ 发现 %d 个费用异常", len(data.Alerts)),
@@ -538,10 +538,10 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 		{
 			Type:  1,
 			Title: "查看详细报告",
-			URL:   "http://goscan.example.com/", 
+			URL:   "http://goscan.example.com/",
 		},
 	}
-	
+
 	// card_action是必需的，设置整体卡片跳转
 	card.CardAction = &CardAction{
 		Type: 1,

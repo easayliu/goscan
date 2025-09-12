@@ -115,7 +115,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 	if !params.Date.IsZero() {
 		dateStr = params.Date.Format("2006-01-02")
 	}
-	
+
 	slog.Info("执行费用报告通知任务，参数详情",
 		"date", dateStr,
 		"providers", params.Providers,
@@ -126,7 +126,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 	if !analysisReq.Date.IsZero() {
 		analysisDateStr = analysisReq.Date.Format("2006-01-02")
 	}
-	
+
 	slog.Info("调用CostAnalyzer.AnalyzeDailyCosts，分析请求参数",
 		"analysis_date", analysisDateStr,
 		"analysis_providers", analysisReq.Providers,

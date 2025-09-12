@@ -69,7 +69,7 @@ func TestTableNameResolver(t *testing.T) {
 			cfg := &config.ClickHouseConfig{
 				Cluster: tt.cluster,
 			}
-			
+
 			resolver := NewTableNameResolver(cfg)
 
 			// 测试查询目标表名
@@ -104,15 +104,15 @@ func TestTableNameResolver_GetTablePair(t *testing.T) {
 	cfg := &config.ClickHouseConfig{
 		Cluster: "test_cluster",
 	}
-	
+
 	resolver := NewTableNameResolver(cfg)
 
 	distributedTable, localTable := resolver.GetTablePair("test_table")
-	
+
 	if distributedTable != "test_table_distributed" {
 		t.Errorf("GetTablePair() distributedTable = %v, want %v", distributedTable, "test_table_distributed")
 	}
-	
+
 	if localTable != "test_table_local" {
 		t.Errorf("GetTablePair() localTable = %v, want %v", localTable, "test_table_local")
 	}
@@ -122,7 +122,7 @@ func TestTableNameResolver_ValidateTableName(t *testing.T) {
 	cfg := &config.ClickHouseConfig{
 		Cluster: "test_cluster",
 	}
-	
+
 	resolver := NewTableNameResolver(cfg)
 
 	tests := []struct {
@@ -153,7 +153,7 @@ func TestTableNameResolver_GetTableInfo(t *testing.T) {
 		Cluster:  "test_cluster",
 		Database: "test_db",
 	}
-	
+
 	resolver := NewTableNameResolver(cfg)
 	info := resolver.GetTableInfo("test_table")
 
@@ -178,7 +178,7 @@ func TestTableNameResolver_ResolveCreateTableTarget(t *testing.T) {
 	cfg := &config.ClickHouseConfig{
 		Cluster: "test_cluster",
 	}
-	
+
 	resolver := NewTableNameResolver(cfg)
 
 	// 测试创建分布式表
@@ -198,7 +198,7 @@ func TestTableNameResolver_ResolveCreateTableTarget(t *testing.T) {
 		Cluster: "",
 	}
 	singleNodeResolver := NewTableNameResolver(singleNodeCfg)
-	
+
 	singleNodeTarget := singleNodeResolver.ResolveCreateTableTarget("test_table", true)
 	if singleNodeTarget != "test_table" {
 		t.Errorf("ResolveCreateTableTarget(single_node) = %v, want %v", singleNodeTarget, "test_table")

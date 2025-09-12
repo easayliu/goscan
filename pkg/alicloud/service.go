@@ -49,7 +49,7 @@ func (s *BillService) CreateMonthlyBillTable(ctx context.Context) error {
 	// 获取解析器，用于确定实际要检查和创建的表名
 	resolver := s.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(s.monthlyTableName)
-	
+
 	// 检查表是否已存在
 	exists, err := s.chClient.TableExists(ctx, s.monthlyTableName)
 	if err != nil {
@@ -158,7 +158,7 @@ func (s *BillService) CreateDailyBillTable(ctx context.Context) error {
 	// 获取解析器，用于确定实际要检查和创建的表名
 	resolver := s.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(s.dailyTableName)
-	
+
 	// 检查表是否已存在
 	exists, err := s.chClient.TableExists(ctx, s.dailyTableName)
 	if err != nil {

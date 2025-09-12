@@ -472,7 +472,7 @@ func (h *HandlerService) sanitizeConfig(cfg *config.Config) map[string]interface
 // TriggerWeChatNotification 手动触发企业微信通知
 // @Summary 手动触发企业微信通知
 // @Description 手动触发企业微信费用报告通知，支持指定分析日期、云服务商列表和告警阈值。可用于定时任务外的临时通知需求。
-// @Description 
+// @Description
 // @Description **请求示例：**
 // @Description ```json
 // @Description {
@@ -483,7 +483,7 @@ func (h *HandlerService) sanitizeConfig(cfg *config.Config) map[string]interface
 // @Description   "test_mode": false
 // @Description }
 // @Description ```
-// @Description 
+// @Description
 // @Description **字段说明：**
 // @Description - `date`: 分析日期，格式YYYY-MM-DD，不填则使用当前日期
 // @Description - `providers`: 云服务商列表，支持volcengine/alicloud/aws/azure/gcp
@@ -494,7 +494,7 @@ func (h *HandlerService) sanitizeConfig(cfg *config.Config) map[string]interface
 // @Accept json
 // @Produce json
 // @Param request body models.WeChatNotificationRequest true "微信通知触发请求参数"
-// @Success 200 {object} models.MessageResponse "触发成功" 
+// @Success 200 {object} models.MessageResponse "触发成功"
 // @Failure 400 {object} models.ErrorResponse "请求参数错误或微信通知未启用"
 // @Failure 500 {object} models.ErrorResponse "服务内部错误"
 // @Router /notifications/wechat/trigger [post]
@@ -627,7 +627,7 @@ func (h *HandlerService) TriggerWeChatNotification(w http.ResponseWriter, r *htt
 		// 创建一个新的带超时的 context，避免任务无限执行
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
-		
+
 		result, err := notificationExecutor.ExecuteCostReportWithParams(ctx, params)
 		if err != nil {
 			slog.Error("手动触发的企业微信通知失败",
@@ -657,25 +657,25 @@ func (h *HandlerService) TriggerWeChatNotification(w http.ResponseWriter, r *htt
 }
 
 // GetWeChatNotificationStatus 获取企业微信通知状态
-// @Summary 获取企业微信通知状态  
+// @Summary 获取企业微信通知状态
 // @Description 返回企业微信通知功能的配置状态、连接状态、最近的通知历史等详细信息
 // @Description
 // @Description **查询参数（可选）：**
 // @Description - `history_limit`: 返回的历史记录数量，范围1-50，默认10条
 // @Description - `include_config`: 是否包含详细配置信息，默认true
-// @Description 
+// @Description
 // @Description **响应示例：**
 // @Description ```json
 // @Description {
 // @Description   "enabled": true,
-// @Description   "webhook_configured": true, 
+// @Description   "webhook_configured": true,
 // @Description   "webhook_url": "https://qyapi***webhook",
 // @Description   "alert_threshold": 10.0,
 // @Description   "executor_status": "ready",
 // @Description   "recent_history": [
 // @Description     {
 // @Description       "id": "task_123456",
-// @Description       "status": "completed", 
+// @Description       "status": "completed",
 // @Description       "start_time": "2025-09-12T01:00:00Z",
 // @Description       "duration": "2m30s",
 // @Description       "message": "费用报告发送成功"
@@ -733,16 +733,16 @@ func (h *HandlerService) GetWeChatNotificationStatus(w http.ResponseWriter, r *h
 // @Description   "timeout": 15
 // @Description }
 // @Description ```
-// @Description 
+// @Description
 // @Description **字段说明：**
 // @Description - `custom_message`: 自定义测试消息内容，最大500字符，不填则使用默认消息
 // @Description - `timeout`: 连接超时时间（秒），范围1-60，默认10秒
-// @Description 
+// @Description
 // @Description **成功响应示例：**
 // @Description ```json
 // @Description {
 // @Description   "message": "企业微信连接测试成功",
-// @Description   "webhook_url": "https://qyapi***webhook", 
+// @Description   "webhook_url": "https://qyapi***webhook",
 // @Description   "test_time": "2025-09-12T08:13:24Z",
 // @Description   "duration": "1.2s",
 // @Description   "status": "connected"
@@ -762,7 +762,7 @@ func (h *HandlerService) TestWeChatWebhook(w http.ResponseWriter, r *http.Reques
 		CustomMessage string `json:"custom_message,omitempty"`
 		Timeout       int    `json:"timeout,omitempty"`
 	}
-	
+
 	// 解析请求体（如果有的话）
 	if r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&testReq); err != nil {

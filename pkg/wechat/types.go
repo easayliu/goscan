@@ -7,7 +7,7 @@ type MessageType string
 
 const (
 	MessageTypeText         MessageType = "text"
-	MessageTypeMarkdown     MessageType = "markdown_v2"  // 只使用支持表格的v2版本
+	MessageTypeMarkdown     MessageType = "markdown_v2" // 只使用支持表格的v2版本
 	MessageTypeTemplateCard MessageType = "template_card"
 )
 
@@ -15,8 +15,8 @@ const (
 type WebhookMessage struct {
 	MsgType      MessageType   `json:"msgtype"`
 	Text         *TextMsg      `json:"text,omitempty"`
-	Markdown     *MarkdownMsg  `json:"markdown,omitempty"`     // 旧版markdown
-	MarkdownV2   *MarkdownMsg  `json:"markdown_v2,omitempty"`  // 新版markdown_v2
+	Markdown     *MarkdownMsg  `json:"markdown,omitempty"`    // 旧版markdown
+	MarkdownV2   *MarkdownMsg  `json:"markdown_v2,omitempty"` // 新版markdown_v2
 	TemplateCard *TemplateCard `json:"template_card,omitempty"`
 }
 
@@ -34,33 +34,33 @@ type MarkdownMsg struct {
 
 // TemplateCard 模板卡片消息
 type TemplateCard struct {
-	CardType              string                 `json:"card_type"`                          // 模板卡片类型，文本通知型为text_notice
-	Source                *CardSource            `json:"source,omitempty"`                   // 卡片来源
-	MainTitle             *CardMainTitle         `json:"main_title,omitempty"`               // 主标题
-	EmphasisContent       *CardEmphasisContent   `json:"emphasis_content,omitempty"`         // 关键数据
-	QuoteArea             *CardQuoteArea         `json:"quote_area,omitempty"`               // 引用文献
-	SubTitleText          string                 `json:"sub_title_text,omitempty"`           // 二级标题
-	HorizontalContentList []CardHorizontalContent `json:"horizontal_content_list,omitempty"`  // 二级标题+文本列表
-	JumpList              []CardJump             `json:"jump_list,omitempty"`                // 跳转指引
-	CardAction            *CardAction            `json:"card_action,omitempty"`              // 卡片跳转
+	CardType              string                  `json:"card_type"`                         // 模板卡片类型，文本通知型为text_notice
+	Source                *CardSource             `json:"source,omitempty"`                  // 卡片来源
+	MainTitle             *CardMainTitle          `json:"main_title,omitempty"`              // 主标题
+	EmphasisContent       *CardEmphasisContent    `json:"emphasis_content,omitempty"`        // 关键数据
+	QuoteArea             *CardQuoteArea          `json:"quote_area,omitempty"`              // 引用文献
+	SubTitleText          string                  `json:"sub_title_text,omitempty"`          // 二级标题
+	HorizontalContentList []CardHorizontalContent `json:"horizontal_content_list,omitempty"` // 二级标题+文本列表
+	JumpList              []CardJump              `json:"jump_list,omitempty"`               // 跳转指引
+	CardAction            *CardAction             `json:"card_action,omitempty"`             // 卡片跳转
 }
 
 // CardSource 卡片来源
 type CardSource struct {
 	IconURL   string `json:"icon_url,omitempty"`   // 来源图标url
-	Desc      string `json:"desc,omitempty"`        // 来源描述
+	Desc      string `json:"desc,omitempty"`       // 来源描述
 	DescColor int    `json:"desc_color,omitempty"` // 来源文字颜色 0:灰色(默认) 1:黑色 2:红色 3:绿色
 }
 
 // CardMainTitle 主标题
 type CardMainTitle struct {
-	Title string `json:"title"` // 标题内容
+	Title string `json:"title"`          // 标题内容
 	Desc  string `json:"desc,omitempty"` // 标题辅助信息
 }
 
 // CardEmphasisContent 关键数据
 type CardEmphasisContent struct {
-	Title string `json:"title"` // 关键数据名称
+	Title string `json:"title"`          // 关键数据名称
 	Desc  string `json:"desc,omitempty"` // 关键数据描述
 }
 
@@ -74,18 +74,18 @@ type CardQuoteArea struct {
 
 // CardHorizontalContent 二级标题+文本
 type CardHorizontalContent struct {
-	KeyName string `json:"keyname"`           // 二级标题
-	Value   string `json:"value,omitempty"`   // 二级文本，如果type是1，则不需要value字段
-	Type    int    `json:"type,omitempty"`    // 类型 0:默认 1:URL 2:文件附件 3:点击跳转
-	URL     string `json:"url,omitempty"`     // 跳转链接
+	KeyName string `json:"keyname"`            // 二级标题
+	Value   string `json:"value,omitempty"`    // 二级文本，如果type是1，则不需要value字段
+	Type    int    `json:"type,omitempty"`     // 类型 0:默认 1:URL 2:文件附件 3:点击跳转
+	URL     string `json:"url,omitempty"`      // 跳转链接
 	MediaID string `json:"media_id,omitempty"` // 附件media_id
 }
 
 // CardJump 跳转指引
 type CardJump struct {
-	Type  int    `json:"type,omitempty"`  // 跳转类型 0:默认 1:URL
-	Title string `json:"title"`           // 跳转标题
-	URL   string `json:"url,omitempty"`   // 跳转链接
+	Type  int    `json:"type,omitempty"` // 跳转类型 0:默认 1:URL
+	Title string `json:"title"`          // 跳转标题
+	URL   string `json:"url,omitempty"`  // 跳转链接
 }
 
 // CardAction 卡片跳转

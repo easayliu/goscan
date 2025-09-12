@@ -148,7 +148,7 @@ func (ts *TaskScheduler) AddJob(job *ScheduledJob) error {
 			break
 		}
 	}
-	
+
 	// 如果没找到entry或者NextRun是零值，尝试手动解析cron表达式计算下次执行时间
 	if !found || job.NextRun.IsZero() {
 		if schedule, err := cron.ParseStandard(job.Cron); err == nil {
@@ -245,7 +245,7 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 	// 首先加载配置文件中定义的任务
 	if ts.config.Config.Scheduler != nil && ts.config.Config.Scheduler.Enabled && len(ts.config.Config.Scheduler.Jobs) > 0 {
 		slog.Info("Loading jobs from configuration file", "count", len(ts.config.Config.Scheduler.Jobs))
-		
+
 		for _, configJob := range ts.config.Config.Scheduler.Jobs {
 			// 将配置文件中的 ScheduledJob 转换为调度器的 ScheduledJob
 			job := &ScheduledJob{
@@ -260,14 +260,14 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 					Granularity:    configJob.Config.Granularity,
 				},
 			}
-			
+
 			if err := ts.AddJob(job); err != nil {
 				slog.Warn("Failed to add configured job", "job", job.Name, "error", err)
 			} else {
 				slog.Info("Added configured job", "name", job.Name, "provider", job.Provider, "cron", job.Cron)
 			}
 		}
-		
+
 		return nil
 	}
 

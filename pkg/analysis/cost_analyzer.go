@@ -20,24 +20,24 @@ import (
 // CostAnalyzer 费用分析器
 type CostAnalyzer struct {
 	chClient         *clickhouse.Client
-	directConn       driver.Conn           // 直接的 ClickHouse 连接
+	directConn       driver.Conn // 直接的 ClickHouse 连接
 	config           *config.ClickHouseConfig
 	nameResolver     *clickhouse.TableNameResolver
 	queryCache       map[string]*QueryCacheEntry // 查询缓存
 	cacheMutex       sync.RWMutex                // 缓存互斥锁
-	alertThreshold   float64                // 默认告警阈值（百分比）
-	queryTimeout     time.Duration          // 查询超时时间
-	connectionPooled bool                   // 是否使用连接池
-	metrics          *QueryMetrics          // 查询性能指标
+	alertThreshold   float64                     // 默认告警阈值（百分比）
+	queryTimeout     time.Duration               // 查询超时时间
+	connectionPooled bool                        // 是否使用连接池
+	metrics          *QueryMetrics               // 查询性能指标
 }
 
 // QueryCacheEntry 查询缓存条目
 type QueryCacheEntry struct {
-	Query       string
-	LastUsed    time.Time
-	UseCount    int64
-	CachedAt    time.Time
-	TTL         time.Duration
+	Query    string
+	LastUsed time.Time
+	UseCount int64
+	CachedAt time.Time
+	TTL      time.Duration
 }
 
 // QueryMetrics 查询性能指标
@@ -109,22 +109,22 @@ func (ca *CostAnalyzer) initDirectConnection() error {
 		Debug:    ca.config.Debug,
 		Protocol: ca.config.GetProtocol(),
 		Settings: chSDK.Settings{
-			"max_execution_time":              60,
-			"max_memory_usage":                "4000000000", // 4GB
-			"max_result_rows":                 1000000,
-			"max_result_bytes":                "100000000", // 100MB
-			"result_overflow_mode":            "break",
-			"readonly":                        1,
-			"enable_http_compression":         1,
-			"log_queries":                     1,
-			"log_query_threads":               1,
+			"max_execution_time":               60,
+			"max_memory_usage":                 "4000000000", // 4GB
+			"max_result_rows":                  1000000,
+			"max_result_bytes":                 "100000000", // 100MB
+			"result_overflow_mode":             "break",
+			"readonly":                         1,
+			"enable_http_compression":          1,
+			"log_queries":                      1,
+			"log_query_threads":                1,
 			"connect_timeout_with_failover_ms": 5000,
-			"receive_timeout":                 30000,
-			"send_timeout":                    30000,
+			"receive_timeout":                  30000,
+			"send_timeout":                     30000,
 		},
 		DialTimeout:          10 * time.Second,
-		MaxOpenConns:         20,  // 增加连接池大小
-		MaxIdleConns:         10,  // 增加空闲连接数
+		MaxOpenConns:         20, // 增加连接池大小
+		MaxIdleConns:         10, // 增加空闲连接数
 		ConnMaxLifetime:      time.Hour,
 		ConnOpenStrategy:     chSDK.ConnOpenInOrder,
 		BlockBufferSize:      10,
@@ -265,7 +265,7 @@ func (ca *CostAnalyzer) getCostDataForDates(ctx context.Context, dates []time.Ti
 	// 根据指定的云服务商过滤表信息
 	for tableKey, info := range allTableInfo {
 		baseProvider := extractBaseProvider(tableKey)
-		
+
 		// 检查是否在指定的云服务商列表中
 		if !contains(providers, baseProvider) {
 			slog.Debug("跳过非指定云服务商的表", "table", info.TableName, "provider", baseProvider, "requested_providers", providers)
@@ -405,7 +405,7 @@ func (ca *CostAnalyzer) directQueryCostData(ctx context.Context, query string, a
 // cacheQuery 缓存查询语句信息
 func (ca *CostAnalyzer) cacheQuery(query string) string {
 	queryKey := fmt.Sprintf("cost_query_%s", sha256Hash(query))
-	
+
 	ca.cacheMutex.Lock()
 	defer ca.cacheMutex.Unlock()
 
@@ -429,7 +429,7 @@ func (ca *CostAnalyzer) cacheQuery(query string) string {
 
 	// 清理过期的缓存条目
 	ca.cleanExpiredCache()
-	
+
 	return queryKey
 }
 
@@ -458,13 +458,13 @@ func (ca *CostAnalyzer) queryCostDataFromTable(ctx context.Context, info Databas
 // queryCostDataFromTableDirect 使用直接连接查询费用数据
 func (ca *CostAnalyzer) queryCostDataFromTableDirect(ctx context.Context, info DatabaseTableInfo, dates []time.Time) ([]*RawCostData, error) {
 	startTime := time.Now()
-	
+
 	// 使用表名解析器解析目标查询表名
 	resolvedTableName := info.TableName
 	if ca.nameResolver != nil {
 		resolvedTableName = ca.nameResolver.ResolveQueryTarget(info.TableName)
 	}
-	
+
 	slog.Debug("直接查询表名解析", "original", info.TableName, "resolved", resolvedTableName)
 
 	// 构建参数化查询，避免SQL注入
@@ -507,9 +507,9 @@ func (ca *CostAnalyzer) queryCostDataFromTableDirect(ctx context.Context, info D
 	// 缓存查询信息
 	queryKey := ca.cacheQuery(query)
 
-	slog.Info("执行直接费用查询", 
+	slog.Info("执行直接费用查询",
 		"query_key", queryKey,
-		"provider", info.Provider, 
+		"provider", info.Provider,
 		"table", resolvedTableName,
 		"dates", len(dates))
 
@@ -520,8 +520,8 @@ func (ca *CostAnalyzer) queryCostDataFromTableDirect(ctx context.Context, info D
 	}
 
 	duration := time.Since(startTime)
-	slog.Info("直接查询表完成", 
-		"table", resolvedTableName, 
+	slog.Info("直接查询表完成",
+		"table", resolvedTableName,
 		"provider", info.Provider,
 		"records", len(data),
 		"duration", duration,
@@ -574,11 +574,11 @@ func (ca *CostAnalyzer) queryCostDataFromTableLegacy(ctx context.Context, info D
 		info.AmountColumn)
 
 	slog.Info("执行Legacy费用查询SQL", "query", query, "provider", info.Provider, "table", resolvedTableName)
-	
+
 	if ca.chClient == nil {
 		return nil, fmt.Errorf("ClickHouse客户端未初始化")
 	}
-	
+
 	rows, err := ca.chClient.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("Legacy查询失败: %w", err)
@@ -653,7 +653,7 @@ func (ca *CostAnalyzer) analyzeProviderCosts(provider string, data []*RawCostDat
 		// 获取昨天和今天的数据
 		yesterdayStr := yesterday.Format("2006-01-02")
 		todayStr := today.Format("2006-01-02")
-		
+
 		if yesterdayData, exists := dates[yesterdayStr]; exists {
 			metric.YesterdayCost = yesterdayData.TotalAmount
 			metric.Currency = yesterdayData.Currency
@@ -829,7 +829,7 @@ func (ca *CostAnalyzer) BatchQueryCostData(ctx context.Context, tables []Databas
 	// 使用工作池模式进行并发查询
 	const maxConcurrency = 5 // 限制并发数避免过载
 	semaphore := make(chan struct{}, maxConcurrency)
-	
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var allData []*RawCostData
@@ -839,16 +839,16 @@ func (ca *CostAnalyzer) BatchQueryCostData(ctx context.Context, tables []Databas
 		wg.Add(1)
 		go func(tableInfo DatabaseTableInfo) {
 			defer wg.Done()
-			
+
 			// 获取信号量
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
 			data, err := ca.queryCostDataFromTable(ctx, tableInfo, dates)
-			
+
 			mu.Lock()
 			defer mu.Unlock()
-			
+
 			if err != nil {
 				errors = append(errors, fmt.Errorf("查询表 %s 失败: %w", tableInfo.TableName, err))
 				slog.Warn("批量查询中表查询失败", "table", tableInfo.TableName, "error", err)
@@ -882,7 +882,7 @@ func (ca *CostAnalyzer) EnableDirectConnection(cfg *config.ClickHouseConfig) err
 
 	ca.config = cfg
 	ca.nameResolver = clickhouse.NewTableNameResolver(cfg)
-	
+
 	return ca.initDirectConnection()
 }
 
@@ -894,18 +894,18 @@ func (ca *CostAnalyzer) IsDirectConnectionEnabled() bool {
 // GetConnectionInfo 获取连接信息
 func (ca *CostAnalyzer) GetConnectionInfo() map[string]interface{} {
 	info := make(map[string]interface{})
-	
+
 	info["direct_connection"] = ca.directConn != nil
 	info["legacy_client"] = ca.chClient != nil
 	info["connection_pooled"] = ca.connectionPooled
 	info["query_timeout"] = ca.queryTimeout
-	
+
 	if ca.config != nil {
 		info["addresses"] = ca.config.GetAddresses()
 		info["database"] = ca.config.Database
 		info["protocol"] = ca.config.GetProtocol()
 	}
-	
+
 	// 获取查询指标
 	metrics := ca.GetQueryMetrics()
 	info["query_metrics"] = map[string]interface{}{
@@ -915,12 +915,12 @@ func (ca *CostAnalyzer) GetConnectionInfo() map[string]interface{} {
 		"slow_queries":     metrics.SlowQueries,
 		"error_count":      metrics.ErrorCount,
 	}
-	
+
 	// 查询缓存信息
 	ca.cacheMutex.RLock()
 	info["query_cache_size"] = len(ca.queryCache)
 	ca.cacheMutex.RUnlock()
-	
+
 	return info
 }
 
@@ -943,7 +943,7 @@ func (ca *CostAnalyzer) GetCacheStats() map[string]interface{} {
 	stats["cache_size"] = len(ca.queryCache)
 	stats["cache_hits"] = ca.metrics.CacheHits
 	stats["cache_misses"] = ca.metrics.CacheMisses
-	
+
 	hitRate := float64(0)
 	total := ca.metrics.CacheHits + ca.metrics.CacheMisses
 	if total > 0 {

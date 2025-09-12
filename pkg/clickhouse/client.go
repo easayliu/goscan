@@ -207,7 +207,7 @@ func (c *Client) CreateTable(ctx context.Context, tableName string, schema strin
 	// 对于CreateTable，我们需要明确是创建分布式表还是本地表
 	// 默认情况下，如果配置了集群，创建分布式表
 	resolvedTableName := c.nameResolver.ResolveCreateTableTarget(tableName, true)
-	
+
 	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", resolvedTableName, schema)
 	return c.Exec(ctx, query)
 }
@@ -406,7 +406,7 @@ func (c *Client) GetClusterInfo(ctx context.Context) ([]map[string]interface{}, 
 func (c *Client) TableExists(ctx context.Context, tableName string) (bool, error) {
 	// 自动解析表名
 	resolvedTableName := c.nameResolver.ResolveQueryTarget(tableName)
-	
+
 	// 如果配置了集群，使用集群查询
 	if c.config.Cluster != "" {
 		return c.tableExistsInCluster(ctx, resolvedTableName)
@@ -536,10 +536,10 @@ func (c *Client) CreateTableWithResolver(ctx context.Context, baseTableName stri
 // CreateLocalTable 明确创建本地表
 func (c *Client) CreateLocalTable(ctx context.Context, baseTableName string, schema string) error {
 	localTableName := c.nameResolver.ResolveLocalTableName(baseTableName)
-	
+
 	if c.nameResolver.IsClusterEnabled() {
 		// 在集群上创建本地表
-		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s", 
+		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s",
 			localTableName, c.config.Cluster, schema)
 		return c.Exec(ctx, query)
 	} else {
@@ -556,7 +556,7 @@ func (c *Client) CreateDistributedTableWithResolver(ctx context.Context, baseTab
 	}
 
 	distributedTableName, localTableName := c.nameResolver.GetTablePair(baseTableName)
-	
+
 	// 先创建本地表
 	if err := c.CreateLocalTable(ctx, baseTableName, localSchema); err != nil {
 		return fmt.Errorf("failed to create local table %s: %w", localTableName, err)
@@ -576,7 +576,7 @@ func (c *Client) CreateDistributedTableWithResolver(ctx context.Context, baseTab
 		return fmt.Errorf("failed to create distributed table %s: %w", distributedTableName, err)
 	}
 
-	log.Printf("[自动表名解析] 成功创建分布式表结构：本地表=%s，分布式表=%s", 
+	log.Printf("[自动表名解析] 成功创建分布式表结构：本地表=%s，分布式表=%s",
 		localTableName, distributedTableName)
 
 	return nil
