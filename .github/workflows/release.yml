@@ -15,10 +15,14 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
+          - goos: linux
+            goarch: arm64
           - goos: windows
             goarch: amd64
           - goos: darwin
             goarch: amd64
+          - goos: darwin
+            goarch: arm64
     
     steps:
     - uses: actions/checkout@v4
@@ -36,13 +40,13 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
     
+    - name: Install cross-compilation dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64
+    
     - name: Install dependencies
       run: go mod download
-    
-    - name: Generate Swagger docs
-      run: |
-        go install github.com/swaggo/swag/cmd/swag@latest
-        swag init -g cmd/server/main.go --output docs
     
     - name: Get version
       id: version
@@ -54,6 +58,17 @@ jobs:
         GOARCH: ${{ matrix.goarch }}
         CGO_ENABLED: 1
       run: |
+        # 设置交叉编译工具链
+        if [ "$GOOS" = "linux" ] && [ "$GOARCH" = "arm64" ]; then
+          export CC=aarch64-linux-gnu-gcc
+          export CXX=aarch64-linux-gnu-g++
+        elif [ "$GOOS" = "windows" ] && [ "$GOARCH" = "amd64" ]; then
+          export CC=x86_64-w64-mingw32-gcc
+          export CXX=x86_64-w64-mingw32-g++
+        elif [ "$GOOS" = "darwin" ]; then
+          # macOS交叉编译需要禁用CGO
+          export CGO_ENABLED=0
+        fi
         BINARY_NAME=goscan
         if [ "$GOOS" = "windows" ]; then
           BINARY_NAME=goscan.exe
@@ -70,7 +85,6 @@ jobs:
         cp dist/${BINARY_NAME} ${RELEASE_NAME}/
         cp README.md ${RELEASE_NAME}/ 2>/dev/null || echo "README.md not found"
         cp config.yaml ${RELEASE_NAME}/ 2>/dev/null || echo "config.yaml not found"
-        cp -r docs ${RELEASE_NAME}/ 2>/dev/null || echo "docs directory not found"
         
         # 创建安装脚本（仅 Unix 系统）
         if [ "$GOOS" != "windows" ]; then
@@ -157,8 +171,10 @@ jobs:
           echo "请根据你的操作系统选择对应的二进制文件："
           echo ""
           echo "- **Linux amd64**: goscan-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz"
+          echo "- **Linux arm64**: goscan-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz"
           echo "- **Windows amd64**: goscan-${{ steps.version.outputs.VERSION }}-windows-amd64.zip"
           echo "- **macOS amd64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz"
+          echo "- **macOS arm64 (M1/M2)**: goscan-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz"
           echo ""
           echo "### 安装说明"
           echo "1. 下载对应平台的压缩包"
@@ -210,7 +226,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        platforms: linux/amd64
+        platforms: linux/amd64,linux/arm64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
