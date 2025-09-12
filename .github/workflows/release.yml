@@ -15,14 +15,10 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
-          - goos: linux
-            goarch: arm64
           - goos: windows
             goarch: amd64
           - goos: darwin
             goarch: amd64
-          - goos: darwin
-            goarch: arm64
     
     steps:
     - uses: actions/checkout@v4
@@ -161,10 +157,8 @@ jobs:
           echo "请根据你的操作系统选择对应的二进制文件："
           echo ""
           echo "- **Linux amd64**: goscan-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz"
-          echo "- **Linux arm64**: goscan-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz"
           echo "- **Windows amd64**: goscan-${{ steps.version.outputs.VERSION }}-windows-amd64.zip"
           echo "- **macOS amd64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz"
-          echo "- **macOS arm64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz"
           echo ""
           echo "### 安装说明"
           echo "1. 下载对应平台的压缩包"
@@ -216,7 +210,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        platforms: linux/amd64,linux/arm64
+        platforms: linux/amd64
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
