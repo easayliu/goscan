@@ -191,11 +191,6 @@ func (nte *NotificationTaskExecutor) IsEnabled() bool {
 	return nte.config.Enabled && nte.wechatClient != nil
 }
 
-// GetSendTime 获取发送时间（cron格式）
-func (nte *NotificationTaskExecutor) GetSendTime() string {
-	return nte.config.SendTime
-}
-
 // calculateTotalRecords 计算处理的总记录数（用于统计）
 func (nte *NotificationTaskExecutor) calculateTotalRecords(result *analysis.CostAnalysisResult) int {
 	totalRecords := uint64(0)

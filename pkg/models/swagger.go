@@ -227,7 +227,6 @@ type WeChatNotificationStatusResponse struct {
 	WebhookConfigured  bool                      `json:"webhook_configured" example:"true"`                            // Webhook是否已配置
 	WebhookURL         string                    `json:"webhook_url" example:"https://qyapi***webhook"`                // 脱敏后的Webhook URL
 	AlertThreshold     float64                   `json:"alert_threshold" example:"10.0"`                               // 告警阈值
-	SendTime           string                    `json:"send_time" example:"09:00"`                                     // 发送时间
 	MentionUsers       []string                  `json:"mention_users" example:"user1,user2"`                          // 提及用户列表
 	MaxRetries         int                       `json:"max_retries" example:"3"`                                       // 最大重试次数
 	RetryDelay         int                       `json:"retry_delay" example:"5"`                                       // 重试延迟时间（秒）

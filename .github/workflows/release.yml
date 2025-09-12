@@ -1,0 +1,224 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+
+env:
+  GO_VERSION: '1.24.3'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Generate Swagger docs
+      run: |
+        go install github.com/swaggo/swag/cmd/swag@latest
+        swag init -g cmd/server/main.go --output docs
+    
+    - name: Get version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    
+    - name: Build binary
+      env:
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+        CGO_ENABLED: 1
+      run: |
+        BINARY_NAME=goscan
+        if [ "$GOOS" = "windows" ]; then
+          BINARY_NAME=goscan.exe
+        fi
+        
+        mkdir -p dist
+        go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" -o dist/${BINARY_NAME} cmd/server/main.go
+        
+        # 创建发布包
+        RELEASE_NAME=goscan-${{ steps.version.outputs.VERSION }}-${GOOS}-${GOARCH}
+        mkdir -p ${RELEASE_NAME}
+        
+        # 复制文件到发布包
+        cp dist/${BINARY_NAME} ${RELEASE_NAME}/
+        cp README.md ${RELEASE_NAME}/ 2>/dev/null || echo "README.md not found"
+        cp config.yaml ${RELEASE_NAME}/ 2>/dev/null || echo "config.yaml not found"
+        cp -r docs ${RELEASE_NAME}/ 2>/dev/null || echo "docs directory not found"
+        
+        # 创建安装脚本（仅 Unix 系统）
+        if [ "$GOOS" != "windows" ]; then
+          cat > ${RELEASE_NAME}/install.sh << 'EOF'
+        #!/bin/bash
+        set -e
+        
+        INSTALL_DIR=${INSTALL_DIR:-/usr/local/bin}
+        BINARY_NAME=goscan
+        
+        echo "Installing goscan to $INSTALL_DIR..."
+        
+        if [ "$EUID" -ne 0 ] && [ ! -w "$INSTALL_DIR" ]; then
+          echo "Permission denied. Please run with sudo or set INSTALL_DIR to a writable directory."
+          exit 1
+        fi
+        
+        cp ./$BINARY_NAME "$INSTALL_DIR/"
+        chmod +x "$INSTALL_DIR/$BINARY_NAME"
+        
+        echo "goscan installed successfully!"
+        echo "Run 'goscan --help' to get started."
+        EOF
+          chmod +x ${RELEASE_NAME}/install.sh
+        fi
+        
+        # 打包
+        if [ "$GOOS" = "windows" ]; then
+          zip -r ${RELEASE_NAME}.zip ${RELEASE_NAME}
+        else
+          tar -czf ${RELEASE_NAME}.tar.gz ${RELEASE_NAME}
+        fi
+    
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: goscan-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: |
+          goscan-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+          goscan-*-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 获取完整历史记录用于生成变更日志
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+    
+    - name: Prepare release assets
+      run: |
+        mkdir -p release
+        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release/ \;
+        ls -la release/
+    
+    - name: Get version
+      id: version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+    
+    - name: Generate changelog
+      id: changelog
+      run: |
+        {
+          echo "changelog<<EOF"
+          echo "## Release ${{ steps.version.outputs.VERSION }}"
+          echo ""
+          echo "### 变更内容"
+          # 获取上一个标签到当前标签的变更
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            git log --pretty=format:"* %s (%h)" ${PREV_TAG}..HEAD
+          else
+            echo "* 初始发布版本"
+          fi
+          echo ""
+          echo ""
+          echo "### 下载说明"
+          echo "请根据你的操作系统选择对应的二进制文件："
+          echo ""
+          echo "- **Linux amd64**: goscan-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz"
+          echo "- **Linux arm64**: goscan-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz"
+          echo "- **Windows amd64**: goscan-${{ steps.version.outputs.VERSION }}-windows-amd64.zip"
+          echo "- **macOS amd64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz"
+          echo "- **macOS arm64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz"
+          echo ""
+          echo "### 安装说明"
+          echo "1. 下载对应平台的压缩包"
+          echo "2. 解压到目标目录"
+          echo "3. Unix系统可以运行 \`./install.sh\` 自动安装到系统路径"
+          echo "EOF"
+        } >> $GITHUB_OUTPUT
+    
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Release ${{ steps.version.outputs.VERSION }}
+        body: ${{ steps.changelog.outputs.changelog }}
+        files: release/*
+        draft: false
+        prerelease: ${{ contains(steps.version.outputs.VERSION, 'beta') || contains(steps.version.outputs.VERSION, 'alpha') || contains(steps.version.outputs.VERSION, 'rc') }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  docker:
+    needs: build
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Login to GitHub Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ github.repository }}
+        tags: |
+          type=ref,event=tag
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max

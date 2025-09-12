@@ -24,6 +24,26 @@ workflow-*.json
 .DS_Store
 Thumbs.db
 
+# 构建产物
+bin/
+dist/
+goscan
+goscan.exe
+*.tar.gz
+*.zip
+
+# 数据库文件
+*.db
+*.sqlite
+data/
+
+# 日志文件
+*.log
+logs/
+
+# 测试覆盖率
+coverage.out
+
 # 其他
 .claude
 CLAUDE.md

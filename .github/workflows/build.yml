@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, dev ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  GO_VERSION: '1.24.3'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Format check
+      run: |
+        go fmt ./...
+        if [ -n "$(git diff --name-only)" ]; then
+          echo "Code is not formatted properly"
+          exit 1
+        fi
+    
+    - name: Lint
+      run: go vet ./...
+    
+    - name: Generate Swagger docs
+      run: |
+        go install github.com/swaggo/swag/cmd/swag@latest
+        swag init -g cmd/server/main.go --output docs
+    
+    - name: Run tests
+      run: |
+        go test -v ./internal/...
+        go test -v ./pkg/...
+
+  build-check:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+    
+    - name: Cache Go modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+    
+    - name: Install dependencies
+      run: go mod download
+    
+    - name: Generate Swagger docs
+      run: |
+        go install github.com/swaggo/swag/cmd/swag@latest
+        swag init -g cmd/server/main.go --output docs
+    
+    - name: Build binary (Linux amd64)
+      env:
+        GOOS: linux
+        GOARCH: amd64
+        CGO_ENABLED: 1
+      run: |
+        go build -ldflags "-s -w" -o goscan cmd/server/main.go
+        echo "✅ Build successful for linux/amd64"

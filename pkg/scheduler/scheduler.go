@@ -137,12 +137,24 @@ func (ts *TaskScheduler) AddJob(job *ScheduledJob) error {
 	job.EntryID = entryID
 	job.Status = "scheduled"
 
-	// Update next run time
+	// Update next run time - 需要等待一小段时间让cron计算下次执行时间
+	// 或者直接从 cron 包计算
 	entries := ts.cron.Entries()
+	found := false
 	for _, entry := range entries {
 		if entry.ID == entryID {
 			job.NextRun = entry.Next
+			found = true
 			break
+		}
+	}
+	
+	// 如果没找到entry或者NextRun是零值，尝试手动解析cron表达式计算下次执行时间
+	if !found || job.NextRun.IsZero() {
+		if schedule, err := cron.ParseStandard(job.Cron); err == nil {
+			job.NextRun = schedule.Next(time.Now())
+		} else {
+			slog.Warn("Failed to parse cron expression", "cron", job.Cron, "error", err)
 		}
 	}
 
@@ -230,15 +242,37 @@ func (ts *TaskScheduler) GetStatus() map[string]interface{} {
 
 // loadConfiguredJobs loads predefined jobs from configuration
 func (ts *TaskScheduler) loadConfiguredJobs() error {
-	// Load scheduler configuration from config file
-	// This would typically read from a configuration section like:
-	// scheduler:
-	//   jobs:
-	//     - name: "volcengine_daily_sync"
-	//       provider: "volcengine"
-	//       cron: "0 2 * * *"
+	// 首先加载配置文件中定义的任务
+	if ts.config.Config.Scheduler != nil && ts.config.Config.Scheduler.Enabled && len(ts.config.Config.Scheduler.Jobs) > 0 {
+		slog.Info("Loading jobs from configuration file", "count", len(ts.config.Config.Scheduler.Jobs))
+		
+		for _, configJob := range ts.config.Config.Scheduler.Jobs {
+			// 将配置文件中的 ScheduledJob 转换为调度器的 ScheduledJob
+			job := &ScheduledJob{
+				Name:     configJob.Name,
+				Provider: configJob.Provider,
+				Cron:     configJob.Cron,
+				Config: JobConfig{
+					SyncMode:       configJob.Config.SyncMode,
+					UseDistributed: configJob.Config.UseDistributed,
+					CreateTable:    configJob.Config.CreateTable,
+					ForceUpdate:    configJob.Config.ForceUpdate,
+					Granularity:    configJob.Config.Granularity,
+				},
+			}
+			
+			if err := ts.AddJob(job); err != nil {
+				slog.Warn("Failed to add configured job", "job", job.Name, "error", err)
+			} else {
+				slog.Info("Added configured job", "name", job.Name, "provider", job.Provider, "cron", job.Cron)
+			}
+		}
+		
+		return nil
+	}
 
-	// For now, add some default jobs based on available providers
+	// 如果配置文件中没有任务或调度器未启用，则使用默认任务
+	slog.Info("No jobs found in configuration, loading default jobs")
 	defaultJobs := ts.getDefaultJobs()
 
 	for _, job := range defaultJobs {
@@ -283,11 +317,11 @@ func (ts *TaskScheduler) getDefaultJobs() []*ScheduledJob {
 		})
 	}
 
-	// WeChat notification job
+	// WeChat notification job (仅在没有配置文件定义的情况下使用默认任务)
 	if weChatCfg := ts.config.Config.GetWeChatConfig(); weChatCfg.Enabled && weChatCfg.WebhookURL != "" {
 		jobs = append(jobs, &ScheduledJob{
 			Name:     "daily_cost_report_notification",
-			Cron:     weChatCfg.SendTime, // 使用配置的发送时间
+			Cron:     "0 9 * * *", // 默认每天上午9点
 			Provider: "notification",
 			Config: JobConfig{
 				SyncMode: "cost_report", // 特殊标识
@@ -348,11 +382,18 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 			return
 		}
 
-		slog.Info("Scheduled job completed successfully",
-			"job", job.Name,
-			"duration", result.Duration,
-			"records_processed", result.RecordsProcessed,
-		)
+		// Check if result is not nil before accessing its fields
+		if result != nil {
+			slog.Info("Scheduled job completed successfully",
+				"job", job.Name,
+				"duration", result.Duration,
+				"records_processed", result.RecordsProcessed,
+			)
+		} else {
+			slog.Info("Scheduled job completed successfully",
+				"job", job.Name,
+			)
+		}
 
 		// Update job status
 		ts.jobsMutex.Lock()

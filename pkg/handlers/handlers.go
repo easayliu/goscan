@@ -671,7 +671,6 @@ func (h *HandlerService) TriggerWeChatNotification(w http.ResponseWriter, r *htt
 // @Description   "webhook_configured": true, 
 // @Description   "webhook_url": "https://qyapi***webhook",
 // @Description   "alert_threshold": 10.0,
-// @Description   "send_time": "09:00",
 // @Description   "executor_status": "ready",
 // @Description   "recent_history": [
 // @Description     {
@@ -699,7 +698,6 @@ func (h *HandlerService) GetWeChatNotificationStatus(w http.ResponseWriter, r *h
 		"webhook_configured": wechatConfig.WebhookURL != "",
 		"webhook_url":        maskWebhookURL(wechatConfig.WebhookURL),
 		"alert_threshold":    wechatConfig.AlertThreshold,
-		"send_time":          wechatConfig.SendTime,
 		"mention_users":      wechatConfig.MentionUsers,
 		"max_retries":        wechatConfig.MaxRetries,
 		"retry_delay":        wechatConfig.RetryDelay,

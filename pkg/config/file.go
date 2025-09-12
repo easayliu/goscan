@@ -135,7 +135,6 @@ type WeChatConfig struct {
 	Enabled            bool     `json:"enabled" yaml:"enabled"`                         // 是否启用微信通知
 	MentionUsers       []string `json:"mention_users" yaml:"mention_users"`             // @用户列表
 	AlertThreshold     float64  `json:"alert_threshold" yaml:"alert_threshold"`         // 告警阈值（百分比）
-	SendTime           string   `json:"send_time" yaml:"send_time"`                     // 发送时间（cron格式）
 	MaxRetries         int      `json:"max_retries" yaml:"max_retries"`                 // 最大重试次数
 	RetryDelay         int      `json:"retry_delay" yaml:"retry_delay"`                 // 重试延迟（秒）
 	NotificationFormat string   `json:"notification_format" yaml:"notification_format"` // 通知格式：markdown/template_card/auto
@@ -198,7 +197,6 @@ func NewWeChatConfig() *WeChatConfig {
 		Enabled:        getEnvBool("WECHAT_ENABLED", false),
 		MentionUsers:   parseStringList(getEnv("WECHAT_MENTION_USERS", "")),
 		AlertThreshold: getEnvFloat("WECHAT_ALERT_THRESHOLD", 20.0),
-		SendTime:       getEnv("WECHAT_SEND_TIME", "0 9 * * *"), // 默认每天上午9点
 		MaxRetries:     getEnvInt("WECHAT_MAX_RETRIES", 3),
 		RetryDelay:     getEnvInt("WECHAT_RETRY_DELAY", 2),
 	}
@@ -608,9 +606,6 @@ func mergeEnvVars(config *Config) {
 		}
 		if alertThreshold := getEnvFloat("WECHAT_ALERT_THRESHOLD", 0); alertThreshold != 0 {
 			config.WeChat.AlertThreshold = alertThreshold
-		}
-		if sendTime := os.Getenv("WECHAT_SEND_TIME"); sendTime != "" {
-			config.WeChat.SendTime = sendTime
 		}
 		if maxRetries := getEnvInt("WECHAT_MAX_RETRIES", 0); maxRetries != 0 {
 			config.WeChat.MaxRetries = maxRetries
