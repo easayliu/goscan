@@ -36,6 +36,9 @@ vendor/
 .env
 .env.local
 .env.*.local
+config.yaml
+# 但保留示例文件
+!config.yaml.example
 
 # GitHub Actions
 .github/

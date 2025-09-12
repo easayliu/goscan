@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [ main ]
 
+# 设置工作流权限
+permissions:
+  contents: read
+  pull-requests: read
+
 env:
   GO_VERSION: '1.24.3'
 

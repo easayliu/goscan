@@ -4,6 +4,11 @@ on:
   push:
     tags: [ 'v*' ]
 
+# 设置工作流权限
+permissions:
+  contents: write  # 创建和更新 Release 需要
+  packages: write  # Docker 镜像推送需要
+
 env:
   GO_VERSION: '1.24.3'
 
@@ -17,8 +22,6 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
-          - goos: windows
-            goarch: amd64
           - goos: darwin
             goarch: amd64
           - goos: darwin
@@ -43,7 +46,7 @@ jobs:
     - name: Install cross-compilation dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64
+        sudo apt-get install -y gcc-aarch64-linux-gnu
     
     - name: Install dependencies
       run: go mod download
@@ -62,17 +65,11 @@ jobs:
         if [ "$GOOS" = "linux" ] && [ "$GOARCH" = "arm64" ]; then
           export CC=aarch64-linux-gnu-gcc
           export CXX=aarch64-linux-gnu-g++
-        elif [ "$GOOS" = "windows" ] && [ "$GOARCH" = "amd64" ]; then
-          export CC=x86_64-w64-mingw32-gcc
-          export CXX=x86_64-w64-mingw32-g++
         elif [ "$GOOS" = "darwin" ]; then
           # macOS交叉编译需要禁用CGO
           export CGO_ENABLED=0
         fi
         BINARY_NAME=goscan
-        if [ "$GOOS" = "windows" ]; then
-          BINARY_NAME=goscan.exe
-        fi
         
         mkdir -p dist
         go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" -o dist/${BINARY_NAME} cmd/server/main.go
@@ -94,6 +91,8 @@ jobs:
         
         INSTALL_DIR=${INSTALL_DIR:-/usr/local/bin}
         BINARY_NAME=goscan
+        SERVICE_USER=${SERVICE_USER:-goscan}
+        INSTALL_SERVICE=${INSTALL_SERVICE:-false}
         
         echo "Installing goscan to $INSTALL_DIR..."
         
@@ -105,26 +104,57 @@ jobs:
         cp ./$BINARY_NAME "$INSTALL_DIR/"
         chmod +x "$INSTALL_DIR/$BINARY_NAME"
         
+        # 创建systemd服务文件
+        if command -v systemctl >/dev/null 2>&1; then
+          cat > goscan.service << 'SYSTEMD_EOF'
+        [Unit]
+        Description=Goscan Cost Analysis Service
+        After=network.target
+        Wants=network.target
+        
+        [Service]
+        Type=simple
+        User=goscan
+        Group=goscan
+        WorkingDirectory=/opt/goscan
+        ExecStart=/usr/local/bin/goscan
+        Restart=always
+        RestartSec=5
+        StandardOutput=journal
+        StandardError=journal
+        
+        # 安全配置
+        NoNewPrivileges=true
+        PrivateTmp=true
+        ProtectSystem=strict
+        ProtectHome=true
+        ReadWritePaths=/opt/goscan
+        
+        [Install]
+        WantedBy=multi-user.target
+        SYSTEMD_EOF
+          echo "Created goscan.service file"
+          echo "To install as system service:"
+          echo "  sudo cp goscan.service /etc/systemd/system/"
+          echo "  sudo systemctl daemon-reload"
+          echo "  sudo systemctl enable goscan"
+          echo "  sudo systemctl start goscan"
+        fi
+        
         echo "goscan installed successfully!"
         echo "Run 'goscan --help' to get started."
         EOF
           chmod +x ${RELEASE_NAME}/install.sh
         fi
         
-        # 打包
-        if [ "$GOOS" = "windows" ]; then
-          zip -r ${RELEASE_NAME}.zip ${RELEASE_NAME}
-        else
-          tar -czf ${RELEASE_NAME}.tar.gz ${RELEASE_NAME}
-        fi
+        # 打包 (所有平台使用tar.gz)
+        tar -czf ${RELEASE_NAME}.tar.gz ${RELEASE_NAME}
     
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: goscan-${{ matrix.goos }}-${{ matrix.goarch }}
-        path: |
-          goscan-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
-          goscan-*-${{ matrix.goos }}-${{ matrix.goarch }}.zip
+        path: goscan-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
   release:
     needs: build
@@ -143,7 +173,7 @@ jobs:
     - name: Prepare release assets
       run: |
         mkdir -p release
-        find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release/ \;
+        find artifacts -type f -name "*.tar.gz" -exec cp {} release/ \;
         ls -la release/
     
     - name: Get version
@@ -172,7 +202,6 @@ jobs:
           echo ""
           echo "- **Linux amd64**: goscan-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz"
           echo "- **Linux arm64**: goscan-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz"
-          echo "- **Windows amd64**: goscan-${{ steps.version.outputs.VERSION }}-windows-amd64.zip"
           echo "- **macOS amd64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz"
           echo "- **macOS arm64 (M1/M2)**: goscan-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz"
           echo ""
@@ -180,6 +209,9 @@ jobs:
           echo "1. 下载对应平台的压缩包"
           echo "2. 解压到目标目录"
           echo "3. Unix系统可以运行 \`./install.sh\` 自动安装到系统路径"
+          echo "4. 系统服务安装："
+          echo "   - 手动配置 systemd 服务"
+          echo "   - 或使用包管理器安装（如果可用）"
           echo "EOF"
         } >> $GITHUB_OUTPUT
     

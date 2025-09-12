@@ -38,8 +38,6 @@ WORKDIR /app
 
 # 从构建阶段复制二进制文件
 COPY --from=builder /app/goscan .
-COPY --from=builder /app/config.yaml .
-COPY --from=builder /app/docs ./docs
 
 # 创建数据目录
 RUN mkdir -p /app/data && chown -R goscan:goscan /app
@@ -53,6 +51,9 @@ EXPOSE 8080
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:8080/health || exit 1
+
+# 创建配置文件挂载点
+VOLUME ["/app/config"]
 
 # 启动应用
 CMD ["./goscan"]
