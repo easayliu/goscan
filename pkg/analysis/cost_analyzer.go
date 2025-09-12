@@ -335,7 +335,16 @@ func (ca *CostAnalyzer) recordQueryMetrics(duration time.Duration, err error) {
 func (ca *CostAnalyzer) GetQueryMetrics() QueryMetrics {
 	ca.metrics.mu.Lock()
 	defer ca.metrics.mu.Unlock()
-	return *ca.metrics
+	return QueryMetrics{
+		TotalQueries:    ca.metrics.TotalQueries,
+		TotalDuration:   ca.metrics.TotalDuration,
+		AverageDuration: ca.metrics.AverageDuration,
+		SlowQueries:     ca.metrics.SlowQueries,
+		ErrorCount:      ca.metrics.ErrorCount,
+		CacheHits:       ca.metrics.CacheHits,
+		CacheMisses:     ca.metrics.CacheMisses,
+		// 注意：不复制mutex字段
+	}
 }
 
 // SetQueryTimeout 设置查询超时时间
