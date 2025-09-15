@@ -178,22 +178,25 @@ func (c *Client) ListBillDetail(ctx context.Context, req *ListBillDetailRequest)
 		req = &ListBillDetailRequest{}
 	}
 
-	// 设置默认值并验证请求参数
-	req.SetDefaults()
-	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid request parameters: %w", err)
-	}
-
-	// BillPeriod是必需参数，如果未提供则使用当前月
+	// BillPeriod智能处理：如果未提供，使用智能时间范围（上个月到昨天）
 	if req.BillPeriod == "" {
-		req.BillPeriod = time.Now().Format("2006-01")
-		log.Printf("[API请求] BillPeriod未设置，使用当前月: %s", req.BillPeriod)
+		smartPeriod, dateRange := c.calculateSmartBillPeriod()
+		req.BillPeriod = smartPeriod
+		log.Printf("🧠 [智能账期] BillPeriod未设置，智能选择: %s (覆盖%s)", smartPeriod, dateRange)
 	} else {
+		// 添加调试信息，显示接收到的BillPeriod
+		log.Printf("🔍 [智能账期] 接收到的BillPeriod: '%s' (长度: %d)", req.BillPeriod, len(req.BillPeriod))
 		// 验证提供的BillPeriod格式和有效性
 		if err := ValidateBillPeriod(req.BillPeriod); err != nil {
 			// 不再强制替换，直接返回错误
 			return nil, fmt.Errorf("无效的BillPeriod: %w", err)
 		}
+	}
+
+	// 设置默认值并验证请求参数
+	req.SetDefaults()
+	if err := req.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid request parameters: %w", err)
 	}
 
 	// 构造官方SDK的输入参数
@@ -481,7 +484,9 @@ func (c *Client) convertBillDetailSDKResponse(output *billing.ListBillDetailOutp
 	return response
 }
 
-// GetValidBillPeriods 获取有效的账期选项（当月和上月）
+// GetValidBillPeriods 获取推荐的账期选项（当月和上月）
+// 注意：这仅是推荐选项，API实际支持任何有效的历史月份
+// Deprecated: 建议直接使用具体的YYYY-MM格式，不受此列表限制
 func GetValidBillPeriods() []string {
 	now := time.Now()
 	currentMonth := now.Format("2006-01")
@@ -490,27 +495,36 @@ func GetValidBillPeriods() []string {
 	return []string{currentMonth, lastMonth}
 }
 
-// ValidateBillPeriod 验证BillPeriod格式和有效性
+// ValidateBillPeriod 验证BillPeriod格式和有效性（按照火山引擎API文档）
 func ValidateBillPeriod(billPeriod string) error {
 	if billPeriod == "" {
 		return fmt.Errorf("BillPeriod不能为空")
 	}
 
-	// 检查格式
-	_, err := time.Parse("2006-01", billPeriod)
+	// 检查格式（YYYY-MM）
+	parsedTime, err := time.Parse("2006-01", billPeriod)
 	if err != nil {
-		return fmt.Errorf("BillPeriod格式错误，应为YYYY-MM格式，如2025-08")
+		return fmt.Errorf("BillPeriod格式错误，应为YYYY-MM格式，如2024-08")
 	}
 
-	// 检查是否为有效月份（当月或上月）
-	validPeriods := GetValidBillPeriods()
-	for _, valid := range validPeriods {
-		if billPeriod == valid {
-			return nil
-		}
+	// 基本合理性检查：不能是未来月份（但允许当前月份）
+	now := time.Now()
+	// 获取下个月的第一天作为限制
+	nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
+	billMonth := time.Date(parsedTime.Year(), parsedTime.Month(), 1, 0, 0, 0, 0, parsedTime.Location())
+	
+	// 只有当账期在下个月或更晚时才报错（即允许当前月份）
+	if billMonth.After(nextMonth) || billMonth.Equal(nextMonth) {
+		return fmt.Errorf("BillPeriod不能是未来月份，当前最大可查询月份: %s", now.Format("2006-01"))
+	}
+	
+	// 历史数据合理性检查：不能太久远（如2000年之前）
+	earliestAllowed := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC) // 火山引擎大约2018年开始服务
+	if billMonth.Before(earliestAllowed) {
+		return fmt.Errorf("BillPeriod不能早于2018-01（火山引擎服务开始时间）")
 	}
 
-	return fmt.Errorf("BillPeriod只支持当月(%s)和上月(%s)", validPeriods[0], validPeriods[1])
+	return nil
 }
 
 func getStringValue(ptr *string) string {
@@ -743,4 +757,68 @@ func formatRequestContext(req *ListBillDetailRequest) string {
 
 	return fmt.Sprintf("BillPeriod=%s,Limit=%d,Offset=%d,Product=%s",
 		req.BillPeriod, req.Limit, req.Offset, req.Product)
+}
+
+// CalculateSmartBillPeriod 计算智能账期（上个月到昨天的最优账期选择）- 导出版本
+func (c *Client) CalculateSmartBillPeriod() (string, string) {
+	return c.calculateSmartBillPeriod()
+}
+
+// calculateSmartBillPeriod 计算智能账期（上个月到昨天的最优账期选择）
+func (c *Client) calculateSmartBillPeriod() (string, string) {
+	now := time.Now()
+	yesterday := now.AddDate(0, 0, -1)
+	
+	// 计算上个月第一天
+	firstDayOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+	firstDayOfLastMonth := firstDayOfThisMonth.AddDate(0, -1, 0)
+	
+	startDate := firstDayOfLastMonth  // 上个月第一天
+	endDate := yesterday              // 昨天
+	
+	// 分析时间跨度
+	lastMonthPeriod := startDate.Format("2006-01")
+	currentMonthPeriod := now.Format("2006-01")
+	
+	// 计算各账期覆盖的天数
+	lastMonthDays := 0
+	currentMonthDays := 0
+	
+	// 上个月的天数：从上个月第一天到上个月最后一天（或昨天，取较小者）
+	lastMonthEnd := firstDayOfThisMonth.AddDate(0, 0, -1) // 上个月最后一天
+	if endDate.Before(lastMonthEnd) {
+		lastMonthDays = int(endDate.Sub(startDate).Hours()/24) + 1
+	} else {
+		lastMonthDays = int(lastMonthEnd.Sub(startDate).Hours()/24) + 1
+	}
+	
+	// 当前月的天数：从当前月第一天到昨天
+	if endDate.After(firstDayOfThisMonth) || endDate.Equal(firstDayOfThisMonth) {
+		currentMonthDays = int(endDate.Sub(firstDayOfThisMonth).Hours()/24) + 1
+	}
+	
+	// 智能选择策略
+	var selectedPeriod string
+	var reason string
+	
+	if lastMonthDays > currentMonthDays {
+		// 上个月天数更多，选择上个月
+		selectedPeriod = lastMonthPeriod
+		reason = fmt.Sprintf("上个月占主导(%d天 vs %d天)", lastMonthDays, currentMonthDays)
+	} else if currentMonthDays > lastMonthDays {
+		// 当前月天数更多，选择当前月
+		selectedPeriod = currentMonthPeriod  
+		reason = fmt.Sprintf("当前月占主导(%d天 vs %d天)", currentMonthDays, lastMonthDays)
+	} else {
+		// 天数相等或其他情况，默认选择上个月（数据更稳定）
+		selectedPeriod = lastMonthPeriod
+		reason = "默认选择上个月（数据更稳定）"
+	}
+	
+	dateRange := fmt.Sprintf("%s至%s, %s", 
+		startDate.Format("2006-01-02"), 
+		endDate.Format("2006-01-02"),
+		reason)
+	
+	return selectedPeriod, dateRange
 }

@@ -485,13 +485,26 @@ func (ca *CostAnalyzer) queryCostDataFromTableDirect(ctx context.Context, info D
 	}
 	dateCondition := "(" + strings.Join(placeholders, ", ") + ")"
 
+	// 对于火山引擎，需要特殊处理字段类型转换
+	dateSelectExpr := info.DateColumn
+	amountSumExpr := fmt.Sprintf("SUM(%s)", info.AmountColumn)
+	amountWhereExpr := info.AmountColumn
+	
+	if info.Provider == "volcengine" {
+		// 日期字段：字符串转Date类型
+		dateSelectExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
+		// 金额字段：字符串转Float64类型
+		amountSumExpr = fmt.Sprintf("SUM(toFloat64OrZero(%s))", info.AmountColumn)
+		amountWhereExpr = fmt.Sprintf("toFloat64OrZero(%s)", info.AmountColumn)
+	}
+
 	// 构建优化的查询语句
 	query := fmt.Sprintf(`
 		SELECT 
 			'%s' as provider,
 			%s as product,
 			%s as expense_date,
-			SUM(%s) as total_amount,
+			%s as total_amount,
 			%s as currency,
 			COUNT(*) as record_count
 		FROM %s
@@ -503,13 +516,13 @@ func (ca *CostAnalyzer) queryCostDataFromTableDirect(ctx context.Context, info D
 		ORDER BY provider, product, expense_date`,
 		info.Provider,
 		info.ProductColumn,
-		info.DateColumn,
-		info.AmountColumn,
+		dateSelectExpr,
+		amountSumExpr,
 		info.CurrencyColumn,
 		resolvedTableName,
-		info.DateColumn,
+		info.DateColumn,  // WHERE子句中保持原始字段
 		dateCondition,
-		info.AmountColumn,
+		amountWhereExpr,
 		info.ProductColumn,
 		info.ProductColumn)
 
@@ -559,12 +572,25 @@ func (ca *CostAnalyzer) queryCostDataFromTableLegacy(ctx context.Context, info D
 	}
 	slog.Debug("Legacy表名解析", "original", info.TableName, "resolved", resolvedTableName)
 
+	// 对于火山引擎，需要特殊处理字段类型转换
+	dateSelectExpr := info.DateColumn
+	amountSumExpr := fmt.Sprintf("SUM(%s)", info.AmountColumn)
+	amountWhereExpr := info.AmountColumn
+	
+	if info.Provider == "volcengine" {
+		// 日期字段：字符串转Date类型
+		dateSelectExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
+		// 金额字段：字符串转Float64类型
+		amountSumExpr = fmt.Sprintf("SUM(toFloat64OrZero(%s))", info.AmountColumn)
+		amountWhereExpr = fmt.Sprintf("toFloat64OrZero(%s)", info.AmountColumn)
+	}
+	
 	query := fmt.Sprintf(`
 		SELECT 
 			'%s' as provider,
 			%s as product,
 			%s as expense_date,
-			SUM(%s) as total_amount,
+			%s as total_amount,
 			%s as currency,
 			COUNT(*) as record_count
 		FROM %s
@@ -574,13 +600,13 @@ func (ca *CostAnalyzer) queryCostDataFromTableLegacy(ctx context.Context, info D
 		ORDER BY provider, product, expense_date`,
 		info.Provider,
 		info.ProductColumn,
-		info.DateColumn,
-		info.AmountColumn,
+		dateSelectExpr,
+		amountSumExpr,
 		info.CurrencyColumn,
 		resolvedTableName, // 使用解析后的表名
-		info.DateColumn,
+		info.DateColumn,  // WHERE子句中保持原始字段
 		dateCondition,
-		info.AmountColumn)
+		amountWhereExpr)
 
 	slog.Info("执行Legacy费用查询SQL", "query", query, "provider", info.Provider, "table", resolvedTableName)
 

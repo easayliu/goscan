@@ -20,6 +20,7 @@ type ProcessorOptions struct {
 	ProgressLog         bool          // 是否显示进度日志
 	DryRunCleanup       bool          // 清理时是否仅预览
 	OptimizeAfterInsert bool          // 插入后是否优化表
+	EnableDeduplication bool          // 是否启用去重检查（借鉴阿里云）
 }
 
 // DefaultProcessorOptions 返回默认的处理器选项
@@ -40,6 +41,7 @@ func DefaultProcessorOptions() *ProcessorOptions {
 		ProgressLog:         true,
 		DryRunCleanup:       false,
 		OptimizeAfterInsert: false,
+		EnableDeduplication: true, // 默认启用去重检查
 	}
 }
 
@@ -199,15 +201,20 @@ func (p *ClickHouseProcessor) ProcessWithResult(ctx context.Context, data []Bill
 	}
 
 	// 转换数据格式（直接使用原始API数据）
+	log.Printf("📊 [处理器] 开始转换 %d 条账单数据", len(data))
 	records := make([]map[string]interface{}, 0, len(data))
-	for _, bill := range data {
+	for i, bill := range data {
+		if i > 0 && i%100 == 0 {
+			log.Printf("⏳ [处理器] 转换进度: %d/%d", i, len(data))
+		}
 		record := p.convertBillToRecordDirect(bill)
 		records = append(records, record)
 	}
+	log.Printf("✅ [处理器] 数据转换完成，准备批量插入 %d 条记录", len(records))
 
-	// 转换完成，直接使用记录
 
 	// 使用优化的批量插入
+	log.Printf("💾 [处理器] 准备批量插入到表: %s (分布式: %v)", p.tableName, p.isDistributed)
 	batchOpts := &clickhouse.BatchInsertOptions{
 		BatchSize:   p.options.BatchSize,
 		MaxRetries:  p.options.MaxRetries,
@@ -220,16 +227,22 @@ func (p *ClickHouseProcessor) ProcessWithResult(ctx context.Context, data []Bill
 	var err error
 
 	if p.isDistributed {
+		log.Printf("📤 [处理器] 开始分布式批量插入...")
 		batchResult, err = p.client.OptimizedBatchInsertToDistributed(ctx, p.tableName, records, batchOpts)
 	} else {
+		log.Printf("📤 [处理器] 开始本地批量插入...")
 		batchResult, err = p.client.OptimizedBatchInsert(ctx, p.tableName, records, batchOpts)
 	}
 
 	result.BatchResult = batchResult
 	if err != nil {
+		log.Printf("❌ [处理器] 批量插入失败: %v", err)
 		result.Errors = append(result.Errors, err)
 		return result, err
 	}
+	
+	log.Printf("✅ [处理器] 批量插入成功，插入 %d 条，失败 %d 条", 
+		batchResult.InsertedRecords, batchResult.FailedRecords)
 
 	result.InsertedRecords = batchResult.InsertedRecords
 	result.FailedRecords = batchResult.FailedRecords
@@ -367,7 +380,6 @@ func (p *ClickHouseProcessor) convertBillToRecord(bill BillDetail) map[string]in
 		"project":          dbBill.Project,
 		"round_amount":     dbBill.RoundAmount,
 		"expense_date":     dbBill.ExpenseDate,
-		"expense_time":     dbBill.ExpenseTime,
 		"usage_start_time": dbBill.UsageStartTime,
 		"usage_end_time":   dbBill.UsageEndTime,
 		"tags":             tagsMap,
@@ -376,142 +388,104 @@ func (p *ClickHouseProcessor) convertBillToRecord(bill BillDetail) map[string]in
 	}
 }
 
-// convertBillToRecordDirect 直接转换API原始数据到数据库记录（无数据转换）
+// convertBillToRecordDirect 直接转换API原始数据到数据库记录（使用Pascal case字段名与表结构一致）
 func (p *ClickHouseProcessor) convertBillToRecordDirect(bill BillDetail) map[string]interface{} {
 	return map[string]interface{}{
-		// 核心标识字段
-		"bill_detail_id": bill.BillDetailID,
-		"bill_id":        bill.BillID,
-		"instance_no":    bill.InstanceNo,
+		// 直接使用API字段名（Pascal case），与表结构保持一致
+		"BillDetailId": bill.BillDetailID,
+		"BillID":       bill.BillID,
+		"InstanceNo":   bill.InstanceNo,
 
-		// 账期和时间字段
-		"bill_period":        bill.BillPeriod,
-		"busi_period":        bill.BusiPeriod,
-		"expense_date":       bill.ExpenseDate,
-		"expense_begin_time": bill.ExpenseBeginTime,
-		"expense_end_time":   bill.ExpenseEndTime,
-		"trade_time":         bill.TradeTime,
+		// 时间字段
+		"BillPeriod":       bill.BillPeriod,
+		"BusiPeriod":       bill.BusiPeriod,
+		"ExpenseDate":      bill.ExpenseDate,
+		"ExpenseBeginTime": bill.ExpenseBeginTime,
+		"ExpenseEndTime":   bill.ExpenseEndTime,
+		"TradeTime":        bill.TradeTime,
 
-		// 产品和服务信息
-		"product":      bill.Product,
-		"product_zh":   bill.ProductZh,
-		"solution_zh":  bill.SolutionZh,
-		"element":      bill.Element,
-		"element_code": bill.ElementCode,
-		"factor":       bill.Factor,
-		"factor_code":  bill.FactorCode,
+		// 用户信息字段
+		"PayerID":           bill.PayerID,
+		"PayerUserName":     bill.PayerUserName,
+		"PayerCustomerName": bill.PayerCustomerName,
+		"SellerID":          bill.SellerID,
+		"SellerUserName":    bill.SellerUserName,
+		"SellerCustomerName": bill.SellerCustomerName,
+		"OwnerID":           bill.OwnerID,
+		"OwnerUserName":     bill.OwnerUserName,
+		"OwnerCustomerName": bill.OwnerCustomerName,
+		
+		// 产品信息字段
+		"Product":     bill.Product,
+		"ProductZh":   bill.ProductZh,
+		"SolutionZh":  bill.SolutionZh,
+		"Element":     bill.Element,
+		"ElementCode": bill.ElementCode,
+		"Factor":      bill.Factor,
+		"FactorCode":  bill.FactorCode,
 
-		// 配置信息
-		"config_name":        bill.ConfigName,
-		"configuration_code": bill.ConfigurationCode,
-		"instance_name":      bill.InstanceName,
+		// 配置信息字段
+		"ConfigName":        bill.ConfigName,
+		"ConfigurationCode": bill.ConfigurationCode,
+		"InstanceName":      bill.InstanceName,
 
-		// 地域信息
-		"region":         bill.Region,
-		"region_code":    bill.RegionCode,
-		"zone":           bill.Zone,
-		"zone_code":      bill.ZoneCode,
-		"country_region": bill.CountryRegion,
-
-		// 用量和计费信息
-		"count":                  bill.Count,
-		"unit":                   bill.Unit,
-		"use_duration":           bill.UseDuration,
-		"use_duration_unit":      bill.UseDurationUnit,
-		"deduction_count":        bill.DeductionCount,
-		"deduction_use_duration": bill.DeductionUseDuration,
-
-		// 价格信息
-		"price":            bill.Price,
-		"price_unit":       bill.PriceUnit,
-		"price_interval":   bill.PriceInterval,
-		"market_price":     bill.MarketPrice,
-		"formula":          bill.Formula,
-		"measure_interval": bill.MeasureInterval,
-
-		// 金额信息（核心）- 保持原始字符串格式
-		"original_bill_amount":     bill.OriginalBillAmount,
-		"preferential_bill_amount": bill.PreferentialBillAmount,
-		"discount_bill_amount":     bill.DiscountBillAmount,
-		"round_amount":             bill.RoundAmount,
-
-		// 实际价值和结算信息
-		"real_value":               bill.RealValue,
-		"pretax_real_value":        bill.PretaxRealValue,
-		"settle_real_value":        bill.SettleRealValue,
-		"settle_pretax_real_value": bill.SettlePretaxRealValue,
-
-		// 应付金额信息
-		"payable_amount":                bill.PayableAmount,
-		"pre_tax_payable_amount":        bill.PreTaxPayableAmount,
-		"settle_payable_amount":         bill.SettlePayableAmount,
-		"settle_pre_tax_payable_amount": bill.SettlePreTaxPayableAmount,
-
-		// 税费信息
-		"pretax_amount":         bill.PretaxAmount,
-		"posttax_amount":        bill.PosttaxAmount,
-		"settle_pretax_amount":  bill.SettlePretaxAmount,
-		"settle_posttax_amount": bill.SettlePosttaxAmount,
-		"tax":                   bill.Tax,
-		"settle_tax":            bill.SettleTax,
-		"tax_rate":              bill.TaxRate,
-
-		// 付款信息
-		"paid_amount":           bill.PaidAmount,
-		"unpaid_amount":         bill.UnpaidAmount,
-		"credit_carried_amount": bill.CreditCarriedAmount,
-
-		// 优惠和抵扣信息
-		"coupon_amount":                         bill.CouponAmount,
-		"discount_info":                         bill.DiscountInfo,
-		"saving_plan_deduction_discount_amount": bill.SavingPlanDeductionDiscountAmount,
-		"saving_plan_deduction_sp_id":           bill.SavingPlanDeductionSpID,
-		"saving_plan_original_amount":           bill.SavingPlanOriginalAmount,
-		"reservation_instance":                  bill.ReservationInstance,
-
-		// 货币信息
-		"currency":            bill.Currency,
-		"currency_settlement": bill.CurrencySettlement,
-		"exchange_rate":       bill.ExchangeRate,
+		// 地域信息字段
+		"Region":     bill.Region,
+		"RegionCode": bill.RegionCode,
+		"Zone":       bill.Zone,
+		"ZoneCode":   bill.ZoneCode,
 
 		// 计费模式信息
-		"billing_mode":        bill.BillingMode,
-		"billing_method_code": bill.BillingMethodCode,
-		"billing_function":    bill.BillingFunction,
-		"business_mode":       bill.BusinessMode,
-		"selling_mode":        bill.SellingMode,
-		"settlement_type":     bill.SettlementType,
+		"BillingMode":       bill.BillingMode,
+		"BusinessMode":      bill.BusinessMode,
+		"BillingFunction":   bill.BillingFunction,
+		"BillingMethodCode": bill.BillingMethodCode,
+		"SellingMode":       bill.SellingMode,
+		"SettlementType":    bill.SettlementType,
+		
+		// 用量信息字段
+		"Count":                bill.Count,
+		"Unit":                 bill.Unit,
+		"UseDuration":          bill.UseDuration,
+		"UseDurationUnit":      bill.UseDurationUnit,
+		"DeductionCount":       bill.DeductionCount,
+		"DeductionUseDuration": bill.DeductionUseDuration,
 
-		// 折扣相关业务信息
-		"discount_biz_billing_function":    bill.DiscountBizBillingFunction,
-		"discount_biz_measure_interval":    bill.DiscountBizMeasureInterval,
-		"discount_biz_unit_price":          bill.DiscountBizUnitPrice,
-		"discount_biz_unit_price_interval": bill.DiscountBizUnitPriceInterval,
+		// 价格信息字段
+		"Price":           bill.Price,
+		"PriceUnit":       bill.PriceUnit,
+		"PriceInterval":   bill.PriceInterval,
+		"MarketPrice":     bill.MarketPrice,
+		"MeasureInterval": bill.MeasureInterval,
 
-		// 用户和组织信息
-		"owner_id":             bill.OwnerID,
-		"owner_user_name":      bill.OwnerUserName,
-		"owner_customer_name":  bill.OwnerCustomerName,
-		"payer_id":             bill.PayerID,
-		"payer_user_name":      bill.PayerUserName,
-		"payer_customer_name":  bill.PayerCustomerName,
-		"seller_id":            bill.SellerID,
-		"seller_user_name":     bill.SellerUserName,
-		"seller_customer_name": bill.SellerCustomerName,
+		// 金额信息字段
+		"OriginalBillAmount":     bill.OriginalBillAmount,
+		"PreferentialBillAmount": bill.PreferentialBillAmount,
+		"DiscountBillAmount":     bill.DiscountBillAmount,
+		"RoundAmount":            bill.RoundAmount,
+		"PayableAmount":          bill.PayableAmount,
+		"PaidAmount":             bill.PaidAmount,
+		"UnpaidAmount":           bill.UnpaidAmount,
+		"CouponAmount":           bill.CouponAmount,
+		"CreditCarriedAmount":    bill.CreditCarriedAmount,
 
-		// 项目和分类信息
-		"project":              bill.Project,
-		"project_display_name": bill.ProjectDisplayName,
-		"bill_category":        bill.BillCategory,
-		"subject_name":         bill.SubjectName,
-		"tag":                  bill.Tag, // JSON字符串，保持原格式
-
-		// 其他业务信息
-		"main_contract_number": bill.MainContractNumber,
-		"original_order_no":    bill.OriginalOrderNo,
-		"effective_factor":     bill.EffectiveFactor,
-		"expand_field":         bill.ExpandField,
-
+		// 其他信息字段
+		"Currency":            bill.Currency,
+		"Project":             bill.Project,
+		"ProjectDisplayName":  bill.ProjectDisplayName,
+		"Tag":                 bill.Tag,
+		"BillCategory":        bill.BillCategory,
+		"SubjectName":         bill.SubjectName,
+		"ReservationInstance": bill.ReservationInstance,
+		"ExpandField":         bill.ExpandField,
+		"EffectiveFactor":     bill.EffectiveFactor,
+		
+		// 折扣相关字段
+		"DiscountBizBillingFunction":   bill.DiscountBizBillingFunction,
+		"DiscountBizUnitPrice":         bill.DiscountBizUnitPrice,
+		"DiscountBizUnitPriceInterval": bill.DiscountBizUnitPriceInterval,
+		"DiscountBizMeasureInterval":   bill.DiscountBizMeasureInterval,
+		
 		// 系统字段
 		"created_at": time.Now(),
 		"updated_at": time.Now(),
@@ -552,28 +526,3 @@ func (bp *BatchProcessor) Process(ctx context.Context, data []BillDetail) error 
 	return nil
 }
 
-// MockProcessor 模拟处理器，用于测试
-type MockProcessor struct {
-	processedCount int
-	delay          time.Duration
-}
-
-// NewMockProcessor 创建模拟处理器
-func NewMockProcessor(delay time.Duration) *MockProcessor {
-	return &MockProcessor{delay: delay}
-}
-
-// Process 模拟处理数据
-func (mp *MockProcessor) Process(ctx context.Context, data []BillDetail) error {
-	if mp.delay > 0 {
-		time.Sleep(mp.delay)
-	}
-	mp.processedCount += len(data)
-	log.Printf("[模拟处理器] 处理了 %d 条记录，累计: %d", len(data), mp.processedCount)
-	return nil
-}
-
-// GetProcessedCount 获取已处理数量
-func (mp *MockProcessor) GetProcessedCount() int {
-	return mp.processedCount
-}

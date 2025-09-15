@@ -67,10 +67,10 @@ func GetProviderTableInfo() map[string]DatabaseTableInfo {
 		"volcengine": {
 			Provider:       "volcengine",
 			TableName:      "volcengine_bill_details",
-			DateColumn:     "expense_date",
-			AmountColumn:   "round_amount",
-			ProductColumn:  "product",
-			CurrencyColumn: "currency",
+			DateColumn:     "ExpenseDate",
+			AmountColumn:   "PayableAmount",  // 使用应付金额
+			ProductColumn:  "ProductZh",      // 使用中文产品名称
+			CurrencyColumn: "Currency",
 		},
 		"alicloud_monthly": {
 			Provider:       "alicloud",

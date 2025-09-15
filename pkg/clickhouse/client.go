@@ -607,44 +607,31 @@ func (c *Client) CleanDistributedTableData(ctx context.Context, distributedTable
 		query := fmt.Sprintf("TRUNCATE TABLE %s ON CLUSTER %s", localTableName, c.config.Cluster)
 		err = c.Exec(ctx, query)
 	} else {
-		// 尝试使用DROP PARTITION进行高效清理
-		partitionDropped := false
+		// 只使用DROP PARTITION进行清理
 		partition, canUsePartition := c.extractPartitionFromCondition(condition)
-		if canUsePartition {
-			// 首先检查分区是否存在
-			partitionExists, checkErr := c.checkPartitionExists(ctx, localTableName, partition)
-			if checkErr != nil {
-				log.Printf("[警告] 无法检查分区存在性: %v，尝试直接执行DROP PARTITION", checkErr)
-				partitionExists = true // 假设存在，让DROP PARTITION自己处理
-			}
-
-			if partitionExists {
-				log.Printf("[分布式清理] 分区 %s 存在，使用DROP PARTITION清理", partition)
-				query := fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DROP PARTITION '%s'", localTableName, c.config.Cluster, partition)
-				log.Printf("[分布式清理] 执行DROP PARTITION语句: %s", query)
-				if err = c.Exec(ctx, query); err != nil {
-					log.Printf("[警告] DROP PARTITION失败: %v，回退到DELETE", err)
-				} else {
-					partitionDropped = true
-					log.Printf("[分布式清理] DROP PARTITION成功，分区 %s 已删除", partition)
-				}
-			} else {
-				log.Printf("[分布式清理] 分区 %s 不存在，使用DELETE处理", partition)
-			}
+		if !canUsePartition {
+			return fmt.Errorf("清理条件 '%s' 不支持分区删除，请使用基于分区的条件（如 billing_cycle='2024-01' 或 billing_date='2024-01-15'）", condition)
 		}
-
-		// 如果不能使用DROP PARTITION或失败，则使用DELETE
-		if !partitionDropped {
-			log.Printf("[分布式清理] 使用DELETE清理条件: %s", condition)
-			query := fmt.Sprintf("DELETE FROM %s ON CLUSTER %s WHERE %s", localTableName, c.config.Cluster, condition)
-			log.Printf("[分布式清理] 执行DELETE语句: %s", query)
-			err = c.Exec(ctx, query, args...)
-			if err != nil {
-				log.Printf("[错误] DELETE执行失败: %v", err)
-			} else {
-				log.Printf("[分布式清理] DELETE执行成功")
-			}
+		
+		// 检查分区是否存在
+		partitionExists, checkErr := c.checkPartitionExists(ctx, localTableName, partition)
+		if checkErr != nil {
+			log.Printf("[警告] 无法检查分区存在性: %v，尝试直接执行DROP PARTITION", checkErr)
+			partitionExists = true // 假设存在，让DROP PARTITION自己处理
 		}
+		
+		if !partitionExists {
+			log.Printf("[分布式清理] 分区 %s 不存在，无需清理", partition)
+			return nil
+		}
+		
+		log.Printf("[分布式清理] 分区 %s 存在，使用DROP PARTITION清理", partition)
+		query := fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DROP PARTITION '%s'", localTableName, c.config.Cluster, partition)
+		log.Printf("[分布式清理] 执行DROP PARTITION语句: %s", query)
+		if err = c.Exec(ctx, query); err != nil {
+			return fmt.Errorf("DROP PARTITION失败: %w", err)
+		}
+		log.Printf("[分布式清理] DROP PARTITION成功，分区 %s 已删除", partition)
 	}
 
 	if err != nil {
@@ -663,9 +650,7 @@ func (c *Client) CleanDistributedTableData(ctx context.Context, distributedTable
 		} else {
 			log.Printf("[分布式清理] 清理后符合条件的记录数: %d", afterCount)
 			if afterCount > 0 {
-				log.Printf("[警告] 分布式表清理不完全，仍有 %d 条记录未清理", afterCount)
-				// 可以选择重试清理操作
-				return c.retryDistributedClean(ctx, distributedTableName, localTableName, condition, args...)
+				log.Printf("[警告] 分区删除后仍有 %d 条记录，可能是其他分区的数据", afterCount)
 			}
 		}
 	}
@@ -676,6 +661,7 @@ func (c *Client) CleanDistributedTableData(ctx context.Context, distributedTable
 
 // extractPartitionFromCondition 从清理条件中提取分区信息
 // 支持阿里云账单表的分区模式：天表按日分区 toYYYYMMDD(billing_date)，月表按月分区 toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))
+// 支持火山引擎表的Pascal case字段名：BillPeriod（但实际按ExpenseDate分区）
 func (c *Client) extractPartitionFromCondition(condition string) (partition string, canUse bool) {
 	log.Printf("[分区检测] 分析清理条件: %s", condition)
 
@@ -693,11 +679,32 @@ func (c *Client) extractPartitionFromCondition(condition string) (partition stri
 	// 处理按月账单的账期条件：billing_cycle = '2024-09' -> 分区 202409
 	if matches := regexp.MustCompile(`billing_cycle\s*=\s*'(\d{4}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
 		cycle := matches[1]
-		log.Printf("[分区检测] 匹配到按月条件，账期: %s", cycle)
+		log.Printf("[分区检测] 匹配到按月条件（阿里云），账期: %s", cycle)
 		if len(cycle) == 7 { // YYYY-MM格式
 			yearMonth := strings.Replace(cycle, "-", "", 1) // 去掉-
 			log.Printf("[分区检测] 提取分区: %s", yearMonth)
 			return yearMonth, true
+		}
+	}
+	
+	// 处理火山引擎的ExpenseDate条件：ExpenseDate分区
+	// ExpenseDate LIKE '2024-09%' 或 toYYYYMM(toDate(ExpenseDate)) = 202409
+	if matches := regexp.MustCompile(`ExpenseDate\s+LIKE\s+'(\d{4}-\d{2})%'`).FindStringSubmatch(condition); len(matches) > 1 {
+		cycle := matches[1]
+		log.Printf("[分区检测] 匹配到ExpenseDate条件（火山引擎），月份: %s", cycle)
+		if len(cycle) == 7 { // YYYY-MM格式
+			yearMonth := strings.Replace(cycle, "-", "", 1) // 去掉-
+			log.Printf("[分区检测] 提取分区: %s", yearMonth)
+			return yearMonth, true
+		}
+	}
+	
+	// 处理火山引擎的toYYYYMM(toDate(ExpenseDate))条件
+	if matches := regexp.MustCompile(`toYYYYMM\(toDate\(ExpenseDate\)\)\s*=\s*(\d{6})`).FindStringSubmatch(condition); len(matches) > 1 {
+		partition := matches[1]
+		log.Printf("[分区检测] 匹配到ExpenseDate函数条件（火山引擎），分区: %s", partition)
+		if len(partition) == 6 { // YYYYMM格式
+			return partition, true
 		}
 	}
 
@@ -739,7 +746,9 @@ func (c *Client) checkPartitionExists(ctx context.Context, tableName, partition 
 	return count > 0, nil
 }
 
-// retryDistributedClean 重试分布式表清理
+// retryDistributedClean 重试分布式表清理 - 已废弃，不再使用DELETE方式
+// Deprecated: 此方法使用DELETE语句，已被移除。现在只使用DROP PARTITION方式清理数据
+/*
 func (c *Client) retryDistributedClean(ctx context.Context, distributedTableName, localTableName string, condition string, args ...interface{}) error {
 	log.Printf("[分布式清理] 开始重试清理操作")
 
@@ -775,6 +784,7 @@ func (c *Client) retryDistributedClean(ctx context.Context, distributedTableName
 	log.Printf("[分布式清理] 重试3次后仍未完全清理数据，建议检查集群状态")
 	return fmt.Errorf("分布式表清理重试失败，可能存在集群节点问题")
 }
+*/
 
 // IsDistributedTable 检查表是否为分布式表
 func (c *Client) IsDistributedTable(ctx context.Context, tableName string) (bool, error) {
@@ -952,83 +962,53 @@ func (c *Client) EnhancedCleanTableData(ctx context.Context, tableName string, o
 		beforeCount = 0
 	}
 
-	// 实际删除数据
-	if opts.BatchSize > 0 {
-		// 分批删除
-		if isDistributed {
-			result.DeletedRows = c.batchDeleteDistributed(ctx, tableName, localTableName, opts)
-		} else {
-			result.DeletedRows = c.batchDelete(ctx, tableName, opts)
+	// 实际删除数据 - 只使用DROP PARTITION方式
+	if isDistributed {
+		log.Printf("检测到分布式表，调用分布式清理方法: 表=%s, 本地表=%s, 条件=%s", tableName, localTableName, opts.Condition)
+		if err := c.CleanDistributedTableData(ctx, tableName, localTableName, opts.Condition, opts.Args); err != nil {
+			result.Error = err
+			return result, err
 		}
 	} else {
-		// 一次性删除
-		if isDistributed {
-			log.Printf("检测到分布式表，调用分布式清理方法: 表=%s, 本地表=%s, 条件=%s", tableName, localTableName, opts.Condition)
-			if err := c.CleanDistributedTableData(ctx, tableName, localTableName, opts.Condition, opts.Args); err != nil {
-				result.Error = err
-				return result, err
-			}
+		// 本地表：只使用DROP PARTITION方式
+		partition, canUsePartition := c.extractPartitionFromCondition(opts.Condition)
+		if !canUsePartition {
+			result.Error = fmt.Errorf("清理条件 '%s' 不支持分区删除，请使用基于分区的条件（如 billing_cycle='2024-01' 或 billing_date='2024-01-15'）", opts.Condition)
+			return result, result.Error
+		}
+		
+		// 检查分区是否存在
+		partitionExists, checkErr := c.checkPartitionExists(ctx, tableName, partition)
+		if checkErr != nil {
+			log.Printf("[警告] 无法检查分区存在性: %v，尝试直接删除", checkErr)
+			partitionExists = true // 假设存在，让DROP PARTITION自己处理
+		}
+		
+		if !partitionExists {
+			log.Printf("[本地表清理] 分区 %s 不存在，无需清理", partition)
+			result.DeletedRows = 0
+			return result, nil
+		}
+		
+		log.Printf("[本地表清理] 分区 %s 存在，使用DROP PARTITION清理", partition)
+		var dropQuery string
+		if c.config.Cluster != "" {
+			// 集群环境，使用 ON CLUSTER 语法
+			dropQuery = fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DROP PARTITION '%s'", tableName, c.config.Cluster, partition)
 		} else {
-			// 尝试对本地表也使用分区删除优化
-			partitionDropped := false
-			partition, canUsePartition := c.extractPartitionFromCondition(opts.Condition)
-			if canUsePartition {
-				// 检查分区是否存在
-				partitionExists, checkErr := c.checkPartitionExists(ctx, tableName, partition)
-				if checkErr != nil {
-					log.Printf("[警告] 无法检查分区存在性: %v，使用DELETE", checkErr)
-				} else if partitionExists {
-					log.Printf("[本地表清理] 分区 %s 存在，使用DROP PARTITION清理", partition)
-					var dropQuery string
-					if c.config.Cluster != "" {
-						// 集群环境，使用 ON CLUSTER 语法
-						dropQuery = fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DROP PARTITION '%s'", tableName, c.config.Cluster, partition)
-					} else {
-						// 单机环境
-						dropQuery = fmt.Sprintf("ALTER TABLE %s DROP PARTITION '%s'", tableName, partition)
-					}
-					log.Printf("[本地表清理] 执行DROP PARTITION语句: %s", dropQuery)
-					if err := c.Exec(ctx, dropQuery); err != nil {
-						log.Printf("[警告] DROP PARTITION失败: %v，回退到DELETE", err)
-					} else {
-						partitionDropped = true
-						log.Printf("[本地表清理] DROP PARTITION成功，分区 %s 已删除", partition)
-					}
-				} else {
-					log.Printf("[本地表清理] 分区 %s 不存在，使用DELETE处理", partition)
-				}
-			}
-
-			// 如果不能使用DROP PARTITION或失败，则使用DELETE
-			if !partitionDropped {
-				log.Printf("[本地表清理] 使用DELETE清理条件: %s", opts.Condition)
-				deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s", tableName, opts.Condition)
-				log.Printf("[本地表清理] 执行DELETE语句: %s", deleteQuery)
-				if err := c.Exec(ctx, deleteQuery, opts.Args...); err != nil {
-					result.Error = err
-					return result, err
-				}
-			}
+			// 单机环境
+			dropQuery = fmt.Sprintf("ALTER TABLE %s DROP PARTITION '%s'", tableName, partition)
 		}
-
-		// 设置删除行数（基于删除前统计）
-		result.DeletedRows = int64(beforeCount)
-
-		// 验证删除效果（可选，对于性能敏感的场景可以关闭）
-		if beforeCount > 0 {
-			time.Sleep(100 * time.Millisecond) // 短暂等待确保数据一致性
-			var afterCount uint64
-			afterRow := c.QueryRow(ctx, countQuery, opts.Args...)
-			if err := afterRow.Scan(&afterCount); err == nil {
-				if afterCount > 0 {
-					log.Printf("[警告] 清理不完全: 删除前 %d 行，删除后仍有 %d 行", beforeCount, afterCount)
-					result.DeletedRows = int64(beforeCount - afterCount)
-				} else {
-					log.Printf("[清理成功] 已删除 %d 行记录", beforeCount)
-				}
-			}
+		log.Printf("[本地表清理] 执行DROP PARTITION语句: %s", dropQuery)
+		if err := c.Exec(ctx, dropQuery); err != nil {
+			result.Error = fmt.Errorf("DROP PARTITION失败: %w", err)
+			return result, result.Error
 		}
+		log.Printf("[本地表清理] DROP PARTITION成功，分区 %s 已删除", partition)
 	}
+	
+	// 设置删除行数（基于删除前统计）
+	result.DeletedRows = int64(beforeCount)
 
 	if opts.ProgressLog {
 		log.Printf("表 %s 数据清理完成，删除条件: %s", tableName, opts.Condition)
@@ -1037,7 +1017,9 @@ func (c *Client) EnhancedCleanTableData(ctx context.Context, tableName string, o
 	return result, nil
 }
 
-// batchDelete 分批删除数据
+// batchDelete 分批删除数据 - 已废弃，不再使用DELETE方式
+// Deprecated: 此方法使用DELETE语句分批删除，已被移除。现在只使用DROP PARTITION方式清理数据
+/*
 func (c *Client) batchDelete(ctx context.Context, tableName string, opts *CleanupOptions) int64 {
 	var totalDeleted int64
 	batchNum := 1
@@ -1086,7 +1068,8 @@ func (c *Client) batchDelete(ctx context.Context, tableName string, opts *Cleanu
 	return totalDeleted
 }
 
-// batchDeleteDistributed 分布式表分批删除数据
+// batchDeleteDistributed 分布式表分批删除数据 - 已废弃，不再使用DELETE方式
+// Deprecated: 此方法使用DELETE语句分批删除，已被移除。现在只使用DROP PARTITION方式清理数据
 func (c *Client) batchDeleteDistributed(ctx context.Context, distributedTableName, localTableName string, opts *CleanupOptions) int64 {
 	var totalDeleted int64
 	batchNum := 1
@@ -1135,6 +1118,7 @@ func (c *Client) batchDeleteDistributed(ctx context.Context, distributedTableNam
 
 	return totalDeleted
 }
+*/
 
 // CleanTableByDateRange 按日期范围清理数据
 func (c *Client) CleanTableByDateRange(ctx context.Context, tableName string, dateColumn string, startDate, endDate time.Time, dryRun bool) (*CleanupResult, error) {
@@ -1152,8 +1136,17 @@ func (c *Client) CleanTableByDateRange(ctx context.Context, tableName string, da
 }
 
 // CleanTableByBillPeriod 按账期清理账单数据
+// 自动识别表类型：火山引擎使用BillPeriod，其他使用bill_period
 func (c *Client) CleanTableByBillPeriod(ctx context.Context, tableName string, billPeriod string, dryRun bool) (*CleanupResult, error) {
-	condition := "bill_period = ?"
+	// 根据表名判断是否为火山引擎表
+	var condition string
+	if strings.Contains(strings.ToLower(tableName), "volcengine") {
+		// 火山引擎表使用Pascal case
+		condition = "BillPeriod = ?"
+	} else {
+		// 其他表（如阿里云）使用snake_case
+		condition = "bill_period = ?"
+	}
 	args := []interface{}{billPeriod}
 
 	opts := &CleanupOptions{

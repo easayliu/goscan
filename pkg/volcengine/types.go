@@ -400,7 +400,6 @@ type BillDetailForDB struct {
 	Product            string                 `json:"product"`
 	ProductZh          string                 `json:"product_zh"`
 	BillingMode        string                 `json:"billing_mode"`
-	ExpenseTime        time.Time              `json:"expense_time"`
 	ExpenseDate        string                 `json:"expense_date"`
 	BillPeriod         string                 `json:"bill_period"`
 	Amount             float64                `json:"amount"`
@@ -447,15 +446,7 @@ func (bd *BillDetail) ToDBFormatWithTime(timestamp time.Time) *BillDetailForDB {
 		}
 	}
 
-	// 解析费用时间（从ExpenseDate字符串）
-	var expenseTime time.Time
-	if bd.ExpenseDate != "" {
-		if t, err := time.Parse("2006-01-02", bd.ExpenseDate); err == nil {
-			expenseTime = t
-		} else if t, err := time.Parse("2006-01", bd.ExpenseDate); err == nil {
-			expenseTime = t
-		}
-	}
+	// 移除ExpenseTime字段，直接使用API返回的字符串字段
 
 	return &BillDetailForDB{
 		ID:                 bd.GetID(), // 使用GetID()方法获取主ID
@@ -464,7 +455,6 @@ func (bd *BillDetail) ToDBFormatWithTime(timestamp time.Time) *BillDetailForDB {
 		Product:            bd.Product,
 		ProductZh:          bd.ProductZh,
 		BillingMode:        bd.BillingMode,
-		ExpenseTime:        expenseTime, // 解析后的时间
 		ExpenseDate:        bd.ExpenseDate,
 		BillPeriod:         bd.BillPeriod,
 		Amount:             bd.GetAmount(), // 使用GetAmount()获取主要金额
@@ -932,4 +922,53 @@ func (bt *BatchTransformer) GetOptions() *BatchTransformationOptions {
 	bt.mu.RLock()
 	defer bt.mu.RUnlock()
 	return bt.options
+}
+
+// InitialPullResult 首次拉取结果
+type InitialPullResult struct {
+	StartTime        time.Time             `json:"start_time"`
+	EndTime          time.Time             `json:"end_time"`
+	Duration         time.Duration         `json:"duration"`
+	PullPeriods      []string              `json:"pull_periods"`      // 拉取的账期列表
+	DateRange        string                `json:"date_range"`        // 时间范围描述
+	Results          map[string]*SyncResult `json:"results"`          // 各账期的拉取结果
+	TotalRecords     int                   `json:"total_records"`     // 总记录数
+	ValidationResult *ValidationResult     `json:"validation_result"` // 数据验证结果
+	Error            error                 `json:"error,omitempty"`   // 错误信息
+}
+
+// ValidationResult 数据验证结果
+type ValidationResult struct {
+	IsValid          bool              `json:"is_valid"`
+	Summary          string            `json:"summary"`
+	ExpectedRecords  int               `json:"expected_records"`  // 预期记录数
+	ActualRecords    int               `json:"actual_records"`    // 实际记录数
+	MissingPeriods   []string          `json:"missing_periods"`   // 缺失的账期
+	IncompleteData   []string          `json:"incomplete_data"`   // 数据不完整的账期
+	Details          map[string]string `json:"details"`           // 详细信息
+}
+
+// PullStrategy 拉取策略
+type PullStrategy struct {
+	EstimatedRecords  int           `json:"estimated_records"`   // 预估记录数
+	EstimatedDuration time.Duration `json:"estimated_duration"`  // 预估耗时
+	BatchSize         int           `json:"batch_size"`          // 批次大小
+	ConcurrencyLevel  int           `json:"concurrency_level"`   // 并发级别
+	RetryAttempts     int           `json:"retry_attempts"`      // 重试次数
+	PauseInterval     time.Duration `json:"pause_interval"`      // 暂停间隔
+	Description       string        `json:"description"`         // 策略描述
+}
+
+// SmartBillResponse 智能账单查询响应
+type SmartBillResponse struct {
+	CombinedResult *CombinedBillResult `json:"combined_result"` // 合并后的结果
+	QueryStrategy  string              `json:"query_strategy"`  // 查询策略
+	DateRange      string              `json:"date_range"`      // 时间范围描述
+}
+
+// CombinedBillResult 合并的账单查询结果
+type CombinedBillResult struct {
+	TotalRecords int          `json:"total_records"` // 总记录数
+	Bills        []BillDetail `json:"bills"`         // 账单列表
+	Periods      []string     `json:"periods"`       // 涉及的账期
 }

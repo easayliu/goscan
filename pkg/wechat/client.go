@@ -538,14 +538,14 @@ func (c *Client) formatCostReportCard(data *CostComparisonData) *TemplateCard {
 		{
 			Type:  1,
 			Title: "查看详细报告",
-			URL:   "http://goscan.example.com/",
+			URL:   "", // TODO: 配置实际的报告URL
 		},
 	}
 
 	// card_action是必需的，设置整体卡片跳转
 	card.CardAction = &CardAction{
 		Type: 1,
-		URL:  "http://goscan.example.com/",
+		URL:  "", // TODO: 配置实际的跳转URL
 	}
 
 	return card

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
+	"io"
+	"log"
 	_ "goscan/pkg/models" // imported for swagger documentation
 	"goscan/pkg/response"
 	"goscan/pkg/scheduler"
@@ -133,11 +135,41 @@ func (h *HandlerService) GetTasks(w http.ResponseWriter, r *http.Request) {
 // @Failure 400 {object} models.ErrorResponse
 // @Router /tasks [post]
 func (h *HandlerService) CreateTask(w http.ResponseWriter, r *http.Request) {
-	var taskReq tasks.TaskRequest
-	if err := json.NewDecoder(r.Body).Decode(&taskReq); err != nil {
-		response.WriteErrorResponse(w, http.StatusBadRequest, "Invalid request body", err)
+	// 读取完整的body内容
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		response.WriteErrorResponse(w, http.StatusBadRequest, "Failed to read request body", err)
 		return
 	}
+	r.Body.Close()
+	
+	// 先尝试解析为扁平格式（用户当前使用的格式）
+	var flatReq map[string]interface{}
+	if err := json.Unmarshal(bodyBytes, &flatReq); err != nil {
+		response.WriteErrorResponse(w, http.StatusBadRequest, "Invalid JSON format", err)
+		return
+	}
+	
+	log.Printf("🔍 [Handler] 接收到的原始请求: %+v", flatReq)
+	
+	// 检查是否是扁平格式（没有config字段但有provider字段）
+	var taskReq tasks.TaskRequest
+	if _, hasConfig := flatReq["config"]; !hasConfig && flatReq["provider"] != nil {
+		// 扁平格式，进行转换
+		taskReq = h.convertFlatToTaskRequest(flatReq)
+		log.Printf("🔄 [Handler] 已转换扁平格式到标准格式")
+	} else {
+		// 标准格式，直接解析
+		if err := json.Unmarshal(bodyBytes, &taskReq); err != nil {
+			response.WriteErrorResponse(w, http.StatusBadRequest, "Invalid TaskRequest format", err)
+			return
+		}
+		log.Printf("🔍 [Handler] 使用标准格式解析")
+	}
+	
+	// 添加调试信息
+	log.Printf("🔍 [Handler] 最终TaskRequest - Type: '%s', Provider: '%s', Config.BillPeriod: '%s' (长度: %d)", 
+		taskReq.Type, taskReq.Provider, taskReq.Config.BillPeriod, len(taskReq.Config.BillPeriod))
 
 	// Execute task asynchronously
 	go func() {
@@ -156,6 +188,65 @@ func (h *HandlerService) CreateTask(w http.ResponseWriter, r *http.Request) {
 		"status":  "started",
 		"message": "Task started successfully",
 	})
+}
+
+// convertFlatToTaskRequest 将扁平格式的JSON转换为标准的TaskRequest格式
+func (h *HandlerService) convertFlatToTaskRequest(flatReq map[string]interface{}) tasks.TaskRequest {
+	// 提取provider
+	provider := ""
+	if p, ok := flatReq["provider"].(string); ok {
+		provider = p
+	}
+	
+	// 设置默认type为sync
+	taskType := tasks.TaskTypeSync
+	if t, ok := flatReq["type"].(string); ok {
+		taskType = tasks.TaskType(t)
+	}
+	
+	// 创建config，排除特殊字段
+	config := tasks.TaskConfig{}
+	
+	// 手动映射已知字段
+	if billPeriod, ok := flatReq["bill_period"].(string); ok {
+		config.BillPeriod = billPeriod
+		log.Printf("🔍 [Handler转换] 设置BillPeriod: '%s'", billPeriod)
+	} else {
+		log.Printf("❌ [Handler转换] bill_period字段未找到或类型不匹配，flatReq中的值: %+v", flatReq["bill_period"])
+	}
+	if createTable, ok := flatReq["create_table"].(bool); ok {
+		config.CreateTable = createTable
+	}
+	if forceUpdate, ok := flatReq["force_update"].(bool); ok {
+		config.ForceUpdate = forceUpdate
+	}
+	if syncMode, ok := flatReq["sync_mode"].(string); ok {
+		config.SyncMode = syncMode
+	}
+	if useDistributed, ok := flatReq["use_distributed"].(bool); ok {
+		config.UseDistributed = useDistributed
+	}
+	if granularity, ok := flatReq["granularity"].(string); ok {
+		config.Granularity = granularity
+	}
+	if startPeriod, ok := flatReq["start_period"].(string); ok {
+		config.StartPeriod = startPeriod
+	}
+	if endPeriod, ok := flatReq["end_period"].(string); ok {
+		config.EndPeriod = endPeriod
+	}
+	if limit, ok := flatReq["limit"].(float64); ok { // JSON numbers are float64
+		config.Limit = int(limit)
+	}
+	
+	log.Printf("🔍 [Handler] 转换结果 - BillPeriod: '%s', Provider: '%s', Type: '%s'", 
+		config.BillPeriod, provider, taskType)
+	
+	return tasks.TaskRequest{
+		Type:     taskType,
+		Provider: provider,
+		Config:   config,
+	}
 }
 
 // GetTask returns a specific task
@@ -235,6 +326,10 @@ func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
 		CreateTable    bool   `json:"create_table"`
 		ForceUpdate    bool   `json:"force_update"`
 		Granularity    string `json:"granularity,omitempty"`
+		BillPeriod     string `json:"bill_period,omitempty"`     // 添加缺失的字段
+		StartPeriod    string `json:"start_period,omitempty"`    // 添加其他可能需要的字段
+		EndPeriod      string `json:"end_period,omitempty"`
+		Limit          int    `json:"limit,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&syncReq); err != nil {
@@ -248,6 +343,10 @@ func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 添加调试信息
+	log.Printf("🔍 [TriggerSync] 接收到的请求 - Provider: '%s', BillPeriod: '%s' (长度: %d)", 
+		syncReq.Provider, syncReq.BillPeriod, len(syncReq.BillPeriod))
+
 	// Create task request
 	taskReq := &tasks.TaskRequest{
 		Type:     tasks.TaskTypeSync,
@@ -258,6 +357,10 @@ func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
 			CreateTable:    syncReq.CreateTable,
 			ForceUpdate:    syncReq.ForceUpdate,
 			Granularity:    syncReq.Granularity,
+			BillPeriod:     syncReq.BillPeriod,     // 添加BillPeriod
+			StartPeriod:    syncReq.StartPeriod,    // 添加其他字段
+			EndPeriod:      syncReq.EndPeriod,
+			Limit:          syncReq.Limit,
 		},
 	}
 
