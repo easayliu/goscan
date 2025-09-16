@@ -17,10 +17,129 @@ import (
 )
 
 type Client struct {
-	config      *config.AliCloudConfig
-	bssClient   *bssopenapi.Client
-	rateLimiter *RateLimiter
+	config       *config.AliCloudConfig
+	bssClient    *bssopenapi.Client
+	rateLimiter  RateLimiterInterface
+	retryHandler *RetryHandler
+	errorHandler ErrorHandler
 }
+
+// RetryHandler 重试处理器
+type RetryHandler struct {
+	maxRetries    int
+	baseDelay     time.Duration
+	maxDelay      time.Duration
+	enableJitter  bool
+}
+
+// NewRetryHandler 创建重试处理器
+func NewRetryHandler(maxRetries int, baseDelay, maxDelay time.Duration) *RetryHandler {
+	return &RetryHandler{
+		maxRetries:   maxRetries,
+		baseDelay:    baseDelay,
+		maxDelay:     maxDelay,
+		enableJitter: true,
+	}
+}
+
+// ShouldRetry 判断是否应该重试
+func (rh *RetryHandler) ShouldRetry(err error, attempt int) bool {
+	if attempt >= rh.maxRetries {
+		return false
+	}
+	
+	return IsRetryableError(err)
+}
+
+// GetRetryDelay 获取重试延迟
+func (rh *RetryHandler) GetRetryDelay(attempt int) time.Duration {
+	// 指数退避
+	delay := time.Duration(float64(rh.baseDelay) * math.Pow(2, float64(attempt)))
+	
+	if delay > rh.maxDelay {
+		delay = rh.maxDelay
+	}
+	
+	// 添加随机抖动避免电群效应
+	if rh.enableJitter {
+		jitter := rand.Float64()*0.3 + 0.85 // 0.85-1.15倍的抖动
+		delay = time.Duration(float64(delay) * jitter)
+	}
+	
+	return delay
+}
+
+// OnRetry 重试时的回调
+func (rh *RetryHandler) OnRetry(attempt int, err error) {
+	log.Printf("[阿里云重试] 第 %d 次重试，错误: %v", attempt, err)
+}
+
+// aliCloudErrorHandler 阿里云错误处理器
+type aliCloudErrorHandler struct{}
+
+// HandleError 处理错误
+func (h *aliCloudErrorHandler) HandleError(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	
+	// 将SDK错误转换为我们的错误类型
+	if apiErr := h.convertToAPIError(err); apiErr != nil {
+		return apiErr
+	}
+	
+	return WrapError(err, "api call failed")
+}
+
+// ShouldRetry 判断是否应该重试
+func (h *aliCloudErrorHandler) ShouldRetry(err error) bool {
+	return IsRetryableError(err)
+}
+
+// GetRetryDelay 获取重试延迟
+func (h *aliCloudErrorHandler) GetRetryDelay(attempt int) time.Duration {
+	baseDelay := time.Second
+	maxDelay := 30 * time.Second
+	
+	delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt)))
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	
+	return delay
+}
+
+// OnRetry 重试时的回调
+func (h *aliCloudErrorHandler) OnRetry(attempt int, err error) {
+	log.Printf("[阿里云错误处理] 第 %d 次重试，错误: %v", attempt, err)
+}
+
+// convertToAPIError 将SDK错误转换为 API 错误
+func (h *aliCloudErrorHandler) convertToAPIError(err error) *APIError {
+	errStr := err.Error()
+	
+	// 尝试从错误信息中提取错误代码
+	if strings.Contains(errStr, "Throttling") {
+		return NewAPIError("Throttling", "API rate limit exceeded", errStr, 429)
+	}
+	if strings.Contains(errStr, "InvalidAccessKeyId") {
+		return NewAPIError("InvalidAccessKeyId", "Invalid access key", errStr, 403)
+	}
+	if strings.Contains(errStr, "SignatureDoesNotMatch") {
+		return NewAPIError("SignatureDoesNotMatch", "Invalid signature", errStr, 403)
+	}
+	if strings.Contains(errStr, "Forbidden") {
+		return NewAPIError("Forbidden", "Access denied", errStr, 403)
+	}
+	if strings.Contains(errStr, "InternalError") {
+		return NewAPIError("InternalError", "Internal server error", errStr, 500)
+	}
+	
+	return nil
+}
+
+// 实现 BillProvider 接口
+var _ BillProvider = (*Client)(nil)
 
 // RateLimiter 阿里云API限流器
 // 阿里云单用户限流：10次/秒
@@ -116,10 +235,26 @@ func (rl *RateLimiter) OnRateLimit() {
 	log.Printf("[阿里云限流] 触发限流，增加延迟至 %v (连续失败: %d次)", rl.adaptiveDelay, rl.consecutiveFails)
 }
 
+// GetCurrentDelay 获取当前延迟
+func (rl *RateLimiter) GetCurrentDelay() time.Duration {
+	return rl.adaptiveDelay
+}
+
+// SetQPS 设置QPS限制
+func (rl *RateLimiter) SetQPS(qps int) {
+	if qps > 0 {
+		rl.maxQPS = qps
+		log.Printf("[阿里云限流] 设置QPS限制为: %d", qps)
+	}
+}
+
+// 实现 RateLimiterInterface 接口
+var _ RateLimiterInterface = (*RateLimiter)(nil)
+
 // OnError 记录其他错误
 func (rl *RateLimiter) OnError(err error) {
 	// 如果是限流错误，调用OnRateLimit
-	if isRateLimitError(err) {
+	if IsRateLimitError(err) {
 		rl.OnRateLimit()
 	} else {
 		// 其他错误也适当增加延迟，但不如限流那么激进
@@ -134,33 +269,7 @@ func (rl *RateLimiter) OnError(err error) {
 	}
 }
 
-// isRateLimitError 检查是否为限流错误
-func isRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := strings.ToLower(err.Error())
-	rateLimitIndicators := []string{
-		"qpslimitexceeded",
-		"flowlimitexceeded",
-		"throttling",
-		"rate limit",
-		"rate exceeded",
-		"too many requests",
-		"flow control",
-		"频率限制",
-		"请求过于频繁",
-	}
-
-	for _, indicator := range rateLimitIndicators {
-		if strings.Contains(errStr, indicator) {
-			return true
-		}
-	}
-
-	return false
-}
+// 注意：isRateLimitError 函数已移动到 errors.go 中作为 IsRateLimitError
 
 // NewClient 创建阿里云客户端
 func NewClient(cfg *config.AliCloudConfig) (*Client, error) {
@@ -452,9 +561,10 @@ func (c *Client) wrapAPIError(err error) error {
 
 	// 创建通用API错误
 	apiErr := &APIError{
-		RequestId: "unknown",
-		Code:      "UnknownError",
-		Message:   errStr,
+		Code:     "UnknownError",
+		Message:  errStr,
+		Details:  "",
+		HTTPCode: 0,
 	}
 
 	// 尝试从错误信息中提取更多细节
@@ -480,9 +590,10 @@ func (c *Client) validateResponse(response *DescribeInstanceBillResponse) error 
 
 	if !response.Success {
 		return &APIError{
-			RequestId: response.RequestId,
-			Code:      response.Code,
-			Message:   response.Message,
+			Code:     response.Code,
+			Message:  response.Message,
+			Details:  response.RequestId,
+			HTTPCode: 400,
 		}
 	}
 
@@ -565,7 +676,7 @@ func (c *Client) TestConnection(ctx context.Context) error {
 	_, err := c.DescribeInstanceBill(ctx, req)
 	if err != nil {
 		// 如果是认证错误，直接返回
-		if apiErr, ok := err.(*APIError); ok && apiErr.IsAuthError() {
+		if apiErr, ok := err.(*APIError); ok && isAuthError(apiErr) {
 			return fmt.Errorf("authentication failed: %w", err)
 		}
 		// 其他错误可能是暂时性的，记录但不阻断
@@ -574,6 +685,24 @@ func (c *Client) TestConnection(ctx context.Context) error {
 
 	log.Printf("[阿里云连接测试] 连接成功")
 	return nil
+}
+
+// isAuthError 检查是否为认证错误
+func isAuthError(apiErr *APIError) bool {
+	authErrorCodes := []string{
+		"InvalidAccessKeyId",
+		"SignatureDoesNotMatch", 
+		"Forbidden",
+		"Unauthorized",
+		"AccessDenied",
+	}
+	
+	for _, code := range authErrorCodes {
+		if apiErr.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // Close 关闭客户端（预留接口）

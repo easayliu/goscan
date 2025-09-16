@@ -21,6 +21,9 @@ type Processor struct {
 	startTime        time.Time
 }
 
+// 实现 DataProcessor 接口
+var _ DataProcessor = (*Processor)(nil)
+
 // ProcessorOptions 处理器选项
 type ProcessorOptions struct {
 	BatchSize           int                    // 批次大小
@@ -96,68 +99,79 @@ func (p *Processor) ProcessBatch(ctx context.Context, tableName string, bills []
 	return p.ProcessBatchWithBillingCycle(ctx, tableName, bills, "")
 }
 
+// SetBatchSize 设置批处理大小
+func (p *Processor) SetBatchSize(size int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.options != nil {
+		p.options.BatchSize = size
+	}
+}
+
+// GetProcessedCount 获取已处理记录数
+func (p *Processor) GetProcessedCount() int64 {
+	return p.GetProcessedRecords()
+}
+
+// GetTotalCount 获取总记录数
+func (p *Processor) GetTotalCount() int64 {
+	return p.GetTotalRecords()
+}
+
 // ProcessBatchWithBillingCycle 处理一批账单数据，传入账期信息
 func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName string, bills []BillDetail, billingCycle string) error {
 	if len(bills) == 0 {
 		return nil
 	}
 
-	log.Printf("[阿里云数据处理] 开始处理批次数据: %d 条记录", len(bills))
-	if billingCycle != "" {
-		log.Printf("[阿里云数据处理] 使用账期: %s", billingCycle)
+	p.logBatchStart(len(bills), billingCycle)
+
+	// 预处理数据
+	filteredBills, err := p.preprocessBills(bills)
+	if err != nil {
+		return fmt.Errorf("failed to preprocess bills: %w", err)
 	}
 
-	// 应用过滤器
-	filteredBills := p.applyFilters(bills)
 	if len(filteredBills) == 0 {
 		log.Printf("[阿里云数据处理] 过滤后没有数据需要处理")
 		return nil
 	}
 
-	// 批量转换数据
-	var result *BatchTransformationResult
-	var err error
-	if billingCycle != "" {
-		result, err = p.transformer.TransformWithBillingCycle(filteredBills, billingCycle)
-	} else {
-		result, err = p.transformer.Transform(filteredBills)
-	}
+	// 转换数据
+	transformedRecords, err := p.transformBills(filteredBills, billingCycle)
 	if err != nil {
-		return fmt.Errorf("failed to transform bill data: %w", err)
+		return fmt.Errorf("failed to transform bills: %w", err)
 	}
 
-	if !result.IsSuccess() && len(result.Errors) > 0 {
-		log.Printf("[阿里云数据处理] 转换过程中发生错误: %d 个", len(result.Errors))
-		for i, err := range result.Errors {
-			if i < 5 { // 只显示前5个错误
-				log.Printf("[阿里云数据处理] 错误 %d: %v", i+1, err)
-			}
-		}
-		if len(result.Errors) > 5 {
-			log.Printf("[阿里云数据处理] ...还有 %d 个错误未显示", len(result.Errors)-5)
-		}
-	}
-
-	if len(result.TransformedRecords) == 0 {
+	if len(transformedRecords) == 0 {
 		log.Printf("[阿里云数据处理] 转换后没有有效数据")
 		return nil
 	}
 
 	// 写入数据库
-	if err := p.writeToDB(ctx, tableName, result.TransformedRecords); err != nil {
-		if p.options.EnableRetry {
-			return p.retryWriteToDB(ctx, tableName, result.TransformedRecords)
-		}
+	if err := p.writeToDBWithRetry(ctx, tableName, transformedRecords); err != nil {
 		return fmt.Errorf("failed to write to database: %w", err)
 	}
 
 	// 更新统计信息
 	p.updateProgress(int64(len(filteredBills)))
 
-	log.Printf("[阿里云数据处理] 批次处理完成: 输入 %d 条，过滤 %d 条，转换 %d 条，入库 %d 条",
-		len(bills), len(bills)-len(filteredBills), len(result.TransformedRecords), len(result.TransformedRecords))
+	p.logBatchComplete(len(bills), len(filteredBills), len(transformedRecords))
 
 	return nil
+}
+
+// preprocessBills 预处理账单数据（过滤和验证）
+func (p *Processor) preprocessBills(bills []BillDetail) ([]BillDetail, error) {
+	// 应用过滤器
+	filteredBills := p.applyFilters(bills)
+	
+	// 如果启用了验证，进行数据验证
+	if p.options.EnableValidation {
+		return p.validateBills(filteredBills)
+	}
+	
+	return filteredBills, nil
 }
 
 // applyFilters 应用数据过滤器
@@ -169,20 +183,84 @@ func (p *Processor) applyFilters(bills []BillDetail) []BillDetail {
 	filtered := make([]BillDetail, 0, len(bills))
 
 	for _, bill := range bills {
-		// 检查零金额过滤
-		if p.options.SkipZeroAmount && bill.IsZeroAmount() {
+		if p.shouldFilterBill(&bill) {
 			continue
 		}
-
-		// 检查自定义过滤器
-		if p.options.RecordFilter != nil && !p.options.RecordFilter(&bill) {
-			continue
-		}
-
 		filtered = append(filtered, bill)
 	}
 
 	return filtered
+}
+
+// shouldFilterBill 判断是否应该过滤该记录
+func (p *Processor) shouldFilterBill(bill *BillDetail) bool {
+	// 检查零金额过滤
+	if p.options.SkipZeroAmount && bill.IsZeroAmount() {
+		return true
+	}
+
+	// 检查自定义过滤器
+	if p.options.RecordFilter != nil && !p.options.RecordFilter(bill) {
+		return true
+	}
+
+	return false
+}
+
+// validateBills 验证账单数据
+func (p *Processor) validateBills(bills []BillDetail) ([]BillDetail, error) {
+	validBills := make([]BillDetail, 0, len(bills))
+	validator := NewValidator()
+	
+	for _, bill := range bills {
+		if err := validator.ValidateBillDetail(&bill); err != nil {
+			if p.options.SkipErrorRecords {
+				log.Printf("[阿里云数据验证] 跳过错误记录: %v", err)
+				continue
+			}
+			return nil, fmt.Errorf("bill validation failed: %w", err)
+		}
+		validBills = append(validBills, bill)
+	}
+	
+	return validBills, nil
+}
+
+// transformBills 转换账单数据
+func (p *Processor) transformBills(bills []BillDetail, billingCycle string) ([]*BillDetailForDB, error) {
+	var result *BatchTransformationResult
+	var err error
+	
+	if billingCycle != "" {
+		result, err = p.transformer.TransformWithBillingCycle(bills, billingCycle)
+	} else {
+		result, err = p.transformer.Transform(bills)
+	}
+	
+	if err != nil {
+		return nil, err
+	}
+	
+	// 处理转换错误
+	if !result.IsSuccess() && len(result.Errors) > 0 {
+		p.logTransformationErrors(result.Errors)
+		if !p.options.SkipErrorRecords {
+			return nil, fmt.Errorf("transformation failed with %d errors", len(result.Errors))
+		}
+	}
+	
+	return result.TransformedRecords, nil
+}
+
+// writeToDBWithRetry 带重试的数据库写入
+func (p *Processor) writeToDBWithRetry(ctx context.Context, tableName string, records []*BillDetailForDB) error {
+	if err := p.writeToDB(ctx, tableName, records); err != nil {
+		if p.options.EnableRetry {
+			return p.retryWriteToDB(ctx, tableName, records)
+		}
+		return err
+	}
+	return nil
 }
 
 // writeToDB 写入数据库
@@ -191,26 +269,31 @@ func (p *Processor) writeToDB(ctx context.Context, tableName string, records []*
 		return nil
 	}
 
-	// 准备批量数据
+	batch := p.prepareBatchData(tableName, records)
+	return p.chClient.InsertBatch(ctx, tableName, batch)
+}
+
+// prepareBatchData 准备批量数据
+func (p *Processor) prepareBatchData(tableName string, records []*BillDetailForDB) []map[string]interface{} {
 	batch := make([]map[string]interface{}, 0, len(records))
-	isDailyTable := strings.Contains(tableName, "daily")
+	isDailyTable := p.isDailyTable(tableName)
 
 	for _, record := range records {
 		row := p.recordToMapWithGranularity(record, isDailyTable)
 		batch = append(batch, row)
 	}
 
-	// 执行批量插入
-	return p.chClient.InsertBatch(ctx, tableName, batch)
+	return batch
+}
+
+// isDailyTable 判断是否为按天表
+func (p *Processor) isDailyTable(tableName string) bool {
+	return strings.Contains(strings.ToLower(tableName), "daily")
 }
 
 // retryWriteToDB 重试写入数据库
 func (p *Processor) retryWriteToDB(ctx context.Context, tableName string, records []*BillDetailForDB) error {
-	maxRetries := p.options.MaxRetries
-	if maxRetries <= 0 {
-		maxRetries = 3
-	}
-
+	maxRetries := p.getMaxRetries()
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -219,16 +302,10 @@ func (p *Processor) retryWriteToDB(ctx context.Context, tableName string, record
 		if err := p.writeToDB(ctx, tableName, records); err != nil {
 			lastErr = err
 			if attempt < maxRetries {
-				// 指数退避
-				delay := time.Duration(attempt) * time.Second
-				log.Printf("[阿里云数据处理] 写入失败，%v 后重试: %v", delay, err)
-
-				select {
-				case <-time.After(delay):
-					continue
-				case <-ctx.Done():
-					return ctx.Err()
+				if err := p.waitForRetry(ctx, attempt, err); err != nil {
+					return err
 				}
+				continue
 			}
 		} else {
 			log.Printf("[阿里云数据处理] 第 %d 次尝试成功", attempt)
@@ -239,68 +316,31 @@ func (p *Processor) retryWriteToDB(ctx context.Context, tableName string, record
 	return fmt.Errorf("failed to write to database after %d retries: %w", maxRetries, lastErr)
 }
 
-// buildInsertSQL 构建插入SQL语句
-func (p *Processor) buildInsertSQL(tableName string) string {
-	return fmt.Sprintf(`INSERT INTO %s (
-		instance_id, instance_name, bill_account_id, bill_account_name,
-		billing_date, billing_cycle,
-		product_code, product_name, product_type, product_detail,
-		subscription_type, pricing_unit, currency, billing_type,
-		usage, usage_unit,
-		pretax_gross_amount, invoice_discount, deducted_by_coupons,
-		pretax_amount, currency_amount, payment_amount, outstanding_amount,
-		region, zone, instance_spec, internet_ip, intranet_ip,
-		resource_group, tags, cost_unit,
-		service_period, service_period_unit, list_price, list_price_unit, owner_id,
-		split_item_id, split_item_name, split_account_id, split_account_name,
-		nick_name, product_detail_code,
-		biz_type, adjust_type, adjust_amount,
-		granularity, created_at, updated_at
-	) VALUES (
-		?, ?, ?, ?,
-		?, ?, ?, ?,
-		?, ?, ?, ?,
-		?, ?, ?, ?,
-		?, ?,
-		?, ?, ?,
-		?, ?, ?, ?,
-		?, ?, ?, ?, ?,
-		?, ?, ?,
-		?, ?, ?, ?, ?,
-		?, ?, ?, ?,
-		?, ?,
-		?, ?, ?,
-		?, ?, ?
-	)`, tableName)
+// getMaxRetries 获取最大重试次数
+func (p *Processor) getMaxRetries() int {
+	if p.options.MaxRetries <= 0 {
+		return 3
+	}
+	return p.options.MaxRetries
 }
 
-// recordToRow 将记录转换为数据库行
-func (p *Processor) recordToRow(record *BillDetailForDB) []interface{} {
-	// 处理可选的 billing_date 字段
-	var billingDate interface{}
-	if record.BillingDate != nil {
-		billingDate = *record.BillingDate
-	} else {
-		billingDate = nil
-	}
+// waitForRetry 等待重试
+func (p *Processor) waitForRetry(ctx context.Context, attempt int, err error) error {
+	// 指数退避
+	delay := time.Duration(attempt) * time.Second
+	log.Printf("[阿里云数据处理] 写入失败，%v 后重试: %v", delay, err)
 
-	return []interface{}{
-		record.InstanceID, record.InstanceName, record.BillAccountID, record.BillAccountName,
-		billingDate, record.BillingCycle,
-		record.ProductCode, record.ProductName, record.ProductType, record.ProductDetail,
-		record.SubscriptionType, record.PricingUnit, record.Currency, record.BillingType,
-		record.Usage, record.UsageUnit,
-		record.PretaxGrossAmount, record.InvoiceDiscount, record.DeductedByCoupons,
-		record.PretaxAmount, record.CurrencyAmount, record.PaymentAmount, record.OutstandingAmount,
-		record.Region, record.Zone, record.InstanceSpec, record.InternetIP, record.IntranetIP,
-		record.ResourceGroup, record.Tags, record.CostUnit,
-		record.ServicePeriod, record.ServicePeriodUnit, record.ListPrice, record.ListPriceUnit, record.OwnerID,
-		record.SplitItemID, record.SplitItemName, record.SplitAccountID, record.SplitAccountName,
-		record.NickName, record.ProductDetailCode,
-		record.BizType, record.AdjustType, record.AdjustAmount,
-		record.Granularity, record.CreatedAt, record.UpdatedAt,
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
+
+// 注意：buildInsertSQL 方法已移除，因为现在使用 InsertBatch 方法
+
+// 注意：recordToRow 方法已移除，因为现在使用 map 格式
 
 // recordToMapWithGranularity 根据粒度将记录转换为map格式
 func (p *Processor) recordToMapWithGranularity(record *BillDetailForDB, isDailyTable bool) map[string]interface{} {
@@ -383,16 +423,25 @@ func (p *Processor) updateProgress(processed int64) {
 		p.options.ProgressCallback(current, total)
 	}
 
-	// 计算处理速度和预计剩余时间
+	// 计算和显示进度信息
+	p.logProgressInfo(current, total)
+}
+
+// logProgressInfo 记录进度信息
+func (p *Processor) logProgressInfo(current, total int64) {
 	elapsed := time.Since(p.startTime)
-	if elapsed > 0 && current > 0 {
-		speed := float64(current) / elapsed.Seconds()
-		if total > 0 && current < total {
-			remaining := total - current
-			eta := time.Duration(float64(remaining)/speed) * time.Second
-			log.Printf("[阿里云数据处理] 进度: %d/%d (%.1f%%), 速度: %.1f records/s, 预计剩余: %v",
-				current, total, float64(current)/float64(total)*100, speed, eta)
-		}
+	if elapsed <= 0 || current <= 0 {
+		return
+	}
+
+	speed := float64(current) / elapsed.Seconds()
+	if total > 0 && current < total {
+		remaining := total - current
+		eta := time.Duration(float64(remaining)/speed) * time.Second
+		progress := float64(current) / float64(total) * 100
+		
+		log.Printf("[阿里云数据处理] 进度: %d/%d (%.1f%%), 速度: %.1f records/s, 预计剩余: %v",
+			current, total, progress, speed, eta)
 	}
 }
 
@@ -500,24 +549,60 @@ func (p *Processor) ProcessMultipleBatches(ctx context.Context, tableName string
 
 	log.Printf("[阿里云数据处理] 开始并发处理 %d 个批次", len(batches))
 
-	// 计算总记录数
+	// 初始化并发处理
+	totalRecords := p.calculateTotalRecords(batches)
+	p.SetTotalRecords(totalRecords)
+
+	// 执行并发处理
+	errors := p.processBatchesConcurrently(ctx, tableName, batches)
+
+	if len(errors) > 0 {
+		return fmt.Errorf("batch processing failed: %s", strings.Join(errors, "; "))
+	}
+
+	log.Printf("[阿里云数据处理] 所有批次处理完成")
+	return nil
+}
+
+// calculateTotalRecords 计算总记录数
+func (p *Processor) calculateTotalRecords(batches [][]BillDetail) int64 {
 	totalRecords := int64(0)
 	for _, batch := range batches {
 		totalRecords += int64(len(batch))
 	}
-	p.SetTotalRecords(totalRecords)
+	return totalRecords
+}
 
-	// 创建工作池
-	workerCount := p.options.WorkerCount
-	if workerCount <= 0 {
-		workerCount = 4
-	}
-
+// processBatchesConcurrently 并发处理批次
+func (p *Processor) processBatchesConcurrently(ctx context.Context, tableName string, batches [][]BillDetail) []string {
+	workerCount := p.getWorkerCount()
 	batchChan := make(chan []BillDetail, workerCount)
 	errChan := make(chan error, len(batches))
 
 	// 启动工作协程
 	var wg sync.WaitGroup
+	p.startWorkers(ctx, &wg, workerCount, tableName, batchChan, errChan)
+
+	// 发送批次数据
+	p.sendBatches(ctx, batchChan, batches)
+
+	// 等待完成并收集错误
+	wg.Wait()
+	close(errChan)
+
+	return p.collectErrors(errChan)
+}
+
+// getWorkerCount 获取工作协程数
+func (p *Processor) getWorkerCount() int {
+	if p.options.WorkerCount <= 0 {
+		return 4
+	}
+	return p.options.WorkerCount
+}
+
+// startWorkers 启动工作协程
+func (p *Processor) startWorkers(ctx context.Context, wg *sync.WaitGroup, workerCount int, tableName string, batchChan <-chan []BillDetail, errChan chan<- error) {
 	for i := 0; i < workerCount; i++ {
 		wg.Add(1)
 		go func() {
@@ -530,8 +615,10 @@ func (p *Processor) ProcessMultipleBatches(ctx context.Context, tableName string
 			}
 		}()
 	}
+}
 
-	// 发送批次数据
+// sendBatches 发送批次数据
+func (p *Processor) sendBatches(ctx context.Context, batchChan chan<- []BillDetail, batches [][]BillDetail) {
 	go func() {
 		defer close(batchChan)
 		for _, batch := range batches {
@@ -542,23 +629,15 @@ func (p *Processor) ProcessMultipleBatches(ctx context.Context, tableName string
 			}
 		}
 	}()
+}
 
-	// 等待所有工作协程完成
-	wg.Wait()
-	close(errChan)
-
-	// 收集错误
+// collectErrors 收集错误
+func (p *Processor) collectErrors(errChan <-chan error) []string {
 	var errors []string
 	for err := range errChan {
 		errors = append(errors, err.Error())
 	}
-
-	if len(errors) > 0 {
-		return fmt.Errorf("batch processing failed: %s", strings.Join(errors, "; "))
-	}
-
-	log.Printf("[阿里云数据处理] 所有批次处理完成")
-	return nil
+	return errors
 }
 
 // ValidateData 验证数据完整性
@@ -607,7 +686,19 @@ func (p *Processor) GetTableStats(ctx context.Context, tableName string) (map[st
 	}
 
 	// 获取基本统计信息
-	statsSQL := fmt.Sprintf(`
+	statsSQL := p.buildStatsSQL(tableName)
+	log.Printf("[阿里云表统计] SQL: %s", statsSQL)
+
+	// 这里需要根据实际的 clickhouse.Client 实现来执行查询
+	// 暂时返回空统计信息
+	stats["query_sql"] = statsSQL
+
+	return stats, nil
+}
+
+// buildStatsSQL 构建统计SQL
+func (p *Processor) buildStatsSQL(tableName string) string {
+	return fmt.Sprintf(`
 		SELECT 
 			COUNT(*) as total_records,
 			MIN(created_at) as earliest_record,
@@ -617,12 +708,31 @@ func (p *Processor) GetTableStats(ctx context.Context, tableName string) (map[st
 			SUM(payment_amount) as total_payment_amount
 		FROM %s
 	`, tableName)
+}
 
-	log.Printf("[阿里云表统计] SQL: %s", statsSQL)
+// logBatchStart 记录批次开始
+func (p *Processor) logBatchStart(billCount int, billingCycle string) {
+	log.Printf("[阿里云数据处理] 开始处理批次数据: %d 条记录", billCount)
+	if billingCycle != "" {
+		log.Printf("[阿里云数据处理] 使用账期: %s", billingCycle)
+	}
+}
 
-	// 这里需要根据实际的 clickhouse.Client 实现来执行查询
-	// 暂时返回空统计信息
-	stats["query_sql"] = statsSQL
+// logBatchComplete 记录批次完成
+func (p *Processor) logBatchComplete(inputCount, filteredCount, transformedCount int) {
+	log.Printf("[阿里云数据处理] 批次处理完成: 输入 %d 条，过滤 %d 条，转换 %d 条，入库 %d 条",
+		inputCount, inputCount-filteredCount, transformedCount, transformedCount)
+}
 
-	return stats, nil
+// logTransformationErrors 记录转换错误
+func (p *Processor) logTransformationErrors(errors []error) {
+	log.Printf("[阿里云数据处理] 转换过程中发生错误: %d 个", len(errors))
+	for i, err := range errors {
+		if i < 5 { // 只显示前5个错误
+			log.Printf("[阿里云数据处理] 错误 %d: %v", i+1, err)
+		}
+	}
+	if len(errors) > 5 {
+		log.Printf("[阿里云数据处理] ...还有 %d 个错误未显示", len(errors)-5)
+	}
 }

@@ -13,6 +13,19 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// Job statuses
+const (
+	JobStatusScheduled = "scheduled"
+	JobStatusRunning   = "running"
+	JobStatusCompleted = "completed"
+	JobStatusFailed    = "failed"
+)
+
+// Error variables
+var (
+	ErrJobNotFound = fmt.Errorf("job not found")
+)
+
 // Config holds scheduler configuration
 type Config struct {
 	Config *config.Config
@@ -25,7 +38,7 @@ type TaskScheduler struct {
 	ctx       context.Context
 	jobs      map[string]*ScheduledJob
 	jobsMutex sync.RWMutex
-	taskMgr   *tasks.TaskManager
+	taskMgr   tasks.TaskManager
 }
 
 // ScheduledJob represents a scheduled job
@@ -135,27 +148,11 @@ func (ts *TaskScheduler) AddJob(job *ScheduledJob) error {
 	}
 
 	job.EntryID = entryID
-	job.Status = "scheduled"
+	job.Status = JobStatusScheduled
 
-	// Update next run time - 需要等待一小段时间让cron计算下次执行时间
-	// 或者直接从 cron 包计算
-	entries := ts.cron.Entries()
-	found := false
-	for _, entry := range entries {
-		if entry.ID == entryID {
-			job.NextRun = entry.Next
-			found = true
-			break
-		}
-	}
-
-	// 如果没找到entry或者NextRun是零值，尝试手动解析cron表达式计算下次执行时间
-	if !found || job.NextRun.IsZero() {
-		if schedule, err := cron.ParseStandard(job.Cron); err == nil {
-			job.NextRun = schedule.Next(time.Now())
-		} else {
-			slog.Warn("Failed to parse cron expression", "cron", job.Cron, "error", err)
-		}
+	// Update next run time
+	if err := ts.updateJobNextRunTime(job); err != nil {
+		slog.Warn("Failed to update next run time", "job", job.Name, "error", err)
 	}
 
 	ts.jobs[job.ID] = job
@@ -178,7 +175,7 @@ func (ts *TaskScheduler) RemoveJob(jobID string) error {
 
 	job, exists := ts.jobs[jobID]
 	if !exists {
-		return fmt.Errorf("job with ID %s not found", jobID)
+		return fmt.Errorf("%w: %s", ErrJobNotFound, jobID)
 	}
 
 	// Remove from cron scheduler
@@ -199,13 +196,7 @@ func (ts *TaskScheduler) GetJobs() []*ScheduledJob {
 	jobs := make([]*ScheduledJob, 0, len(ts.jobs))
 	for _, job := range ts.jobs {
 		// Update next run time
-		entries := ts.cron.Entries()
-		for _, entry := range entries {
-			if entry.ID == job.EntryID {
-				job.NextRun = entry.Next
-				break
-			}
-		}
+		ts.updateJobNextRunTime(job)
 		jobs = append(jobs, job)
 	}
 
@@ -219,7 +210,7 @@ func (ts *TaskScheduler) GetJob(jobID string) (*ScheduledJob, error) {
 
 	job, exists := ts.jobs[jobID]
 	if !exists {
-		return nil, fmt.Errorf("job with ID %s not found", jobID)
+		return nil, fmt.Errorf("%w: %s", ErrJobNotFound, jobID)
 	}
 
 	return job, nil
@@ -339,10 +330,8 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 		slog.Info("Executing scheduled job", "id", job.ID, "name", job.Name, "provider", job.Provider)
 
 		// Update job status
-		ts.jobsMutex.Lock()
-		job.Status = "running"
-		job.LastRun = time.Now()
-		ts.jobsMutex.Unlock()
+		ts.updateJobStatus(job, JobStatusRunning)
+		ts.updateJobLastRun(job, time.Now())
 
 		// Create task request based on provider type
 		var taskReq *tasks.TaskRequest
@@ -376,9 +365,7 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 		result, err := ts.taskMgr.ExecuteTask(ts.ctx, taskReq)
 		if err != nil {
 			slog.Error("Scheduled job failed", "job", job.Name, "error", err)
-			ts.jobsMutex.Lock()
-			job.Status = "failed"
-			ts.jobsMutex.Unlock()
+			ts.updateJobStatus(job, JobStatusFailed)
 			return
 		}
 
@@ -396,9 +383,7 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 		}
 
 		// Update job status
-		ts.jobsMutex.Lock()
-		job.Status = "completed"
-		ts.jobsMutex.Unlock()
+		ts.updateJobStatus(job, JobStatusCompleted)
 	}
 }
 
@@ -422,4 +407,37 @@ func (ts *TaskScheduler) logScheduledJobs() {
 			"status", job.Status,
 		)
 	}
+}
+
+// updateJobNextRunTime updates the next run time for a job
+func (ts *TaskScheduler) updateJobNextRunTime(job *ScheduledJob) error {
+	entries := ts.cron.Entries()
+	for _, entry := range entries {
+		if entry.ID == job.EntryID {
+			job.NextRun = entry.Next
+			return nil
+		}
+	}
+
+	// If not found in entries, try to parse cron expression manually
+	if schedule, err := cron.ParseStandard(job.Cron); err == nil {
+		job.NextRun = schedule.Next(time.Now())
+		return nil
+	} else {
+		return fmt.Errorf("failed to parse cron expression %s: %w", job.Cron, err)
+	}
+}
+
+// updateJobStatus updates the status of a job
+func (ts *TaskScheduler) updateJobStatus(job *ScheduledJob, status string) {
+	ts.jobsMutex.Lock()
+	defer ts.jobsMutex.Unlock()
+	job.Status = status
+}
+
+// updateJobLastRun updates the last run time of a job
+func (ts *TaskScheduler) updateJobLastRun(job *ScheduledJob, lastRun time.Time) {
+	ts.jobsMutex.Lock()
+	defer ts.jobsMutex.Unlock()
+	job.LastRun = lastRun
 }

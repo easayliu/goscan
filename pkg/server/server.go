@@ -15,6 +15,15 @@ import (
 	_ "goscan/docs" // swagger docs
 )
 
+// Server constants
+const (
+	DefaultReadTimeout  = 30 * time.Second
+	DefaultWriteTimeout = 30 * time.Second
+	DefaultIdleTimeout  = 120 * time.Second
+	DefaultVersion      = "1.0.0"
+	ServiceName         = "goscan"
+)
+
 // Config holds HTTP server configuration
 type Config struct {
 	Address string
@@ -58,9 +67,9 @@ func NewHTTPServer(ctx context.Context, config *Config) (*HTTPServer, error) {
 	server.server = &http.Server{
 		Addr:         addr,
 		Handler:      server.router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		ReadTimeout:  DefaultReadTimeout,
+		WriteTimeout: DefaultWriteTimeout,
+		IdleTimeout:  DefaultIdleTimeout,
 	}
 
 	slog.Info("HTTP server initialized", "listen_addr", addr)
@@ -75,45 +84,17 @@ func (s *HTTPServer) SetScheduler(scheduler interface{}) {
 
 // setupRoutes configures all HTTP routes
 func (s *HTTPServer) setupRoutes() {
+	// Add middleware
+	s.addMiddleware()
+
 	// Health check endpoint
 	s.router.HandleFunc("/health", s.handleHealth).Methods("GET")
 
 	// Swagger documentation
 	s.router.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
 
-	// API v1 routes
-	api := s.router.PathPrefix("/api/v1").Subrouter()
-
-	// System endpoints
-	api.HandleFunc("/status", s.handlerSvc.GetStatus).Methods("GET")
-	api.HandleFunc("/config", s.handlerSvc.GetConfig).Methods("GET")
-	api.HandleFunc("/config", s.handlerSvc.UpdateConfig).Methods("PUT")
-
-	// Task management endpoints
-	api.HandleFunc("/tasks", s.handlerSvc.GetTasks).Methods("GET")
-	api.HandleFunc("/tasks", s.handlerSvc.CreateTask).Methods("POST")
-	api.HandleFunc("/tasks/{id}", s.handlerSvc.GetTask).Methods("GET")
-	api.HandleFunc("/tasks/{id}", s.handlerSvc.DeleteTask).Methods("DELETE")
-
-	// Sync operation endpoints
-	api.HandleFunc("/sync/trigger", s.handlerSvc.TriggerSync).Methods("POST")
-	api.HandleFunc("/sync/status", s.handlerSvc.GetSyncStatus).Methods("GET")
-	api.HandleFunc("/sync/history", s.handlerSvc.GetSyncHistory).Methods("GET")
-
-	// Scheduler endpoints
-	api.HandleFunc("/scheduler/status", s.handlerSvc.GetSchedulerStatus).Methods("GET")
-	api.HandleFunc("/scheduler/jobs", s.handlerSvc.GetScheduledJobs).Methods("GET")
-	api.HandleFunc("/scheduler/jobs", s.handlerSvc.CreateScheduledJob).Methods("POST")
-	api.HandleFunc("/scheduler/jobs/{id}", s.handlerSvc.DeleteScheduledJob).Methods("DELETE")
-
-	// WeChat notification endpoints
-	api.HandleFunc("/notifications/wechat/trigger", s.handlerSvc.TriggerWeChatNotification).Methods("POST")
-	api.HandleFunc("/notifications/wechat/status", s.handlerSvc.GetWeChatNotificationStatus).Methods("GET")
-	api.HandleFunc("/notifications/wechat/test", s.handlerSvc.TestWeChatWebhook).Methods("POST")
-
-	// Add middleware
-	s.router.Use(s.loggingMiddleware)
-	s.router.Use(s.corsMiddleware)
+	// Setup API routes
+	s.setupAPIRoutes()
 
 	slog.Info("HTTP routes configured")
 }
@@ -152,8 +133,8 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	health := map[string]interface{}{
 		"status":    "healthy",
 		"timestamp": time.Now().UTC(),
-		"service":   "goscan",
-		"version":   "1.0.0",
+		"service":   ServiceName,
+		"version":   DefaultVersion,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -206,4 +187,59 @@ type responseWriter struct {
 func (w *responseWriter) WriteHeader(code int) {
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// addMiddleware adds all middleware to the router
+func (s *HTTPServer) addMiddleware() {
+	s.router.Use(s.loggingMiddleware)
+	s.router.Use(s.corsMiddleware)
+}
+
+// setupAPIRoutes configures API v1 routes
+func (s *HTTPServer) setupAPIRoutes() {
+	api := s.router.PathPrefix("/api/v1").Subrouter()
+
+	// Setup route groups
+	s.setupSystemRoutes(api)
+	s.setupTaskRoutes(api)
+	s.setupSyncRoutes(api)
+	s.setupSchedulerRoutes(api)
+	s.setupNotificationRoutes(api)
+}
+
+// setupSystemRoutes configures system endpoints
+func (s *HTTPServer) setupSystemRoutes(api *mux.Router) {
+	api.HandleFunc("/status", s.handlerSvc.GetStatus).Methods("GET")
+	api.HandleFunc("/config", s.handlerSvc.GetAppConfig).Methods("GET")
+	api.HandleFunc("/config", s.handlerSvc.UpdateConfig).Methods("PUT")
+}
+
+// setupTaskRoutes configures task management endpoints
+func (s *HTTPServer) setupTaskRoutes(api *mux.Router) {
+	api.HandleFunc("/tasks", s.handlerSvc.GetTasks).Methods("GET")
+	api.HandleFunc("/tasks", s.handlerSvc.CreateTask).Methods("POST")
+	api.HandleFunc("/tasks/{id}", s.handlerSvc.GetTask).Methods("GET")
+	api.HandleFunc("/tasks/{id}", s.handlerSvc.DeleteTask).Methods("DELETE")
+}
+
+// setupSyncRoutes configures sync operation endpoints
+func (s *HTTPServer) setupSyncRoutes(api *mux.Router) {
+	api.HandleFunc("/sync/trigger", s.handlerSvc.TriggerSync).Methods("POST")
+	api.HandleFunc("/sync/status", s.handlerSvc.GetSyncStatus).Methods("GET")
+	api.HandleFunc("/sync/history", s.handlerSvc.GetSyncHistory).Methods("GET")
+}
+
+// setupSchedulerRoutes configures scheduler endpoints
+func (s *HTTPServer) setupSchedulerRoutes(api *mux.Router) {
+	api.HandleFunc("/scheduler/status", s.handlerSvc.GetSchedulerStatus).Methods("GET")
+	api.HandleFunc("/scheduler/jobs", s.handlerSvc.GetScheduledJobs).Methods("GET")
+	api.HandleFunc("/scheduler/jobs", s.handlerSvc.CreateScheduledJob).Methods("POST")
+	api.HandleFunc("/scheduler/jobs/{id}", s.handlerSvc.DeleteScheduledJob).Methods("DELETE")
+}
+
+// setupNotificationRoutes configures WeChat notification endpoints
+func (s *HTTPServer) setupNotificationRoutes(api *mux.Router) {
+	api.HandleFunc("/notifications/wechat/trigger", s.handlerSvc.TriggerWeChatNotification).Methods("POST")
+	api.HandleFunc("/notifications/wechat/status", s.handlerSvc.GetWeChatNotificationStatus).Methods("GET")
+	api.HandleFunc("/notifications/wechat/test", s.handlerSvc.TestWeChatWebhook).Methods("POST")
 }

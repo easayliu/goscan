@@ -445,240 +445,55 @@ func (s *BillService) getDailyTableSchema() string {
 }
 
 // SyncMonthlyBillData 同步按月账单数据
+// 保持向后兼容，委托给新的同步管理器
 func (s *BillService) SyncMonthlyBillData(ctx context.Context, billingCycle string, options *SyncOptions) error {
-	log.Printf("[阿里云按月同步] 开始同步账期: %s", billingCycle)
-
-	// 验证账期
-	if err := ValidateBillingCycle(billingCycle); err != nil {
-		return fmt.Errorf("invalid billing cycle: %w", err)
+	sm := NewSyncManager(s)
+	req := &SyncRequest{
+		Granularity: "MONTHLY",
+		Period:      billingCycle,
+		Options:     options,
 	}
-
-	// 创建分页器
-	paginator := NewPaginator(s.aliClient, &DescribeInstanceBillRequest{
-		BillingCycle: billingCycle,
-		Granularity:  "MONTHLY",
-		MaxResults:   int32(s.config.BatchSize),
-	})
-
-	// 创建数据处理器
-	processor := NewProcessor(s.chClient, options)
-
-	// 获取目标表名
-	tableName := s.monthlyTableName
-	if options != nil && options.UseDistributed && options.DistributedTableName != "" {
-		tableName = options.DistributedTableName
-	}
-
-	// 开始同步
-	totalRecords := 0
-	for {
-		// 获取下一批数据
-		response, err := paginator.Next(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to fetch data: %w", err)
-		}
-
-		if len(response.Data.Items) == 0 {
-			break // 没有更多数据
-		}
-
-		// 批量处理数据
-		if err := processor.ProcessBatchWithBillingCycle(ctx, tableName, response.Data.Items, response.Data.BillingCycle); err != nil {
-			return fmt.Errorf("failed to process batch: %w", err)
-		}
-
-		totalRecords += len(response.Data.Items)
-		log.Printf("[阿里云按月同步] 已同步 %d 条记录", totalRecords)
-
-		// 检查是否还有更多数据
-		if response.Data.NextToken == "" {
-			break
-		}
-	}
-
-	log.Printf("[阿里云按月同步] 账期 %s 同步完成，共同步 %d 条记录", billingCycle, totalRecords)
-	return nil
+	_, err := sm.SyncData(ctx, req)
+	return err
 }
 
 // SyncDailyBillData 同步按天账单数据
+// 保持向后兼容，委托给新的同步管理器
 func (s *BillService) SyncDailyBillData(ctx context.Context, billingCycle string, options *SyncOptions) error {
-	log.Printf("[阿里云按天同步] 开始同步账期: %s", billingCycle)
-
-	// 验证账期
-	if err := ValidateBillingCycle(billingCycle); err != nil {
-		return fmt.Errorf("invalid billing cycle: %w", err)
+	sm := NewSyncManager(s)
+	req := &SyncRequest{
+		Granularity: "DAILY",
+		Period:      billingCycle,
+		Options:     options,
 	}
-
-	// 生成该月份的所有日期
-	dates, err := GenerateDatesInMonth(billingCycle)
-	if err != nil {
-		return fmt.Errorf("failed to generate dates for cycle %s: %w", billingCycle, err)
-	}
-
-	log.Printf("[阿里云按天同步] 账期 %s 包含 %d 天", billingCycle, len(dates))
-
-	// 创建数据处理器
-	processor := NewProcessor(s.chClient, options)
-
-	// 获取目标表名
-	tableName := s.dailyTableName
-	if options != nil && options.UseDistributed && options.DistributedTableName != "" {
-		tableName = options.DistributedTableName
-	}
-
-	totalRecords := 0
-
-	// 按天循环获取数据
-	for i, date := range dates {
-		log.Printf("[阿里云按天同步] 同步日期 %s (%d/%d)", date, i+1, len(dates))
-
-		// 创建分页器（每天的数据）
-		paginator := NewPaginator(s.aliClient, &DescribeInstanceBillRequest{
-			BillingCycle: billingCycle,
-			Granularity:  "DAILY",
-			BillingDate:  date,
-			MaxResults:   int32(s.config.BatchSize),
-		})
-
-		dayRecords := 0
-
-		// 分页获取该天的所有数据
-		for {
-			response, err := paginator.Next(ctx)
-			if err != nil {
-				log.Printf("[阿里云按天同步] 日期 %s 同步失败: %v", date, err)
-				break // 跳过这一天，继续下一天
-			}
-
-			if len(response.Data.Items) == 0 {
-				break // 这一天没有数据
-			}
-
-			// 批量处理数据
-			if err := processor.ProcessBatchWithBillingCycle(ctx, tableName, response.Data.Items, response.Data.BillingCycle); err != nil {
-				log.Printf("[阿里云按天同步] 日期 %s 数据处理失败: %v", date, err)
-				break // 跳过这一天的剩余数据
-			}
-
-			dayRecords += len(response.Data.Items)
-
-			// 检查是否还有更多数据
-			if response.Data.NextToken == "" {
-				break
-			}
-		}
-
-		totalRecords += dayRecords
-		if dayRecords > 0 {
-			log.Printf("[阿里云按天同步] 日期 %s 同步完成，%d 条记录", date, dayRecords)
-		}
-
-		// 简单的延迟，避免API调用过于频繁
-		if i < len(dates)-1 {
-			select {
-			case <-time.After(100 * time.Millisecond):
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	}
-
-	log.Printf("[阿里云按天同步] 账期 %s 同步完成，共同步 %d 条记录", billingCycle, totalRecords)
-	return nil
+	_, err := sm.SyncData(ctx, req)
+	return err
 }
 
 // SyncSpecificDayBillData 同步指定日期的天表数据
+// 保持向后兼容，委托给新的同步管理器  
 func (s *BillService) SyncSpecificDayBillData(ctx context.Context, billingDate string, options *SyncOptions) error {
-	log.Printf("[阿里云指定日期同步] 开始同步日期: %s", billingDate)
-
-	// 验证日期格式
-	date, err := time.Parse("2006-01-02", billingDate)
-	if err != nil {
-		return fmt.Errorf("invalid billing date format (expected YYYY-MM-DD): %w", err)
+	sm := NewSyncManager(s)
+	req := &SyncRequest{
+		Granularity: "DAILY",
+		Period:      billingDate,
+		Options:     options,
 	}
-
-	// 获取账期（YYYY-MM格式）
-	billingCycle := date.Format("2006-01")
-
-	// 验证账期
-	if err := ValidateBillingCycle(billingCycle); err != nil {
-		return fmt.Errorf("invalid billing cycle: %w", err)
-	}
-
-	// 创建分页器（指定日期的数据）
-	paginator := NewPaginator(s.aliClient, &DescribeInstanceBillRequest{
-		BillingCycle: billingCycle,
-		Granularity:  "DAILY",
-		BillingDate:  billingDate,
-		MaxResults:   int32(s.config.BatchSize),
-	})
-
-	// 创建数据处理器
-	processor := NewProcessor(s.chClient, options)
-
-	// 获取目标表名
-	tableName := s.dailyTableName
-	if options != nil && options.UseDistributed && options.DistributedTableName != "" {
-		tableName = options.DistributedTableName
-	}
-
-	totalRecords := 0
-
-	// 分页获取指定日期的所有数据
-	for {
-		response, err := paginator.Next(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to fetch data for date %s: %w", billingDate, err)
-		}
-
-		if len(response.Data.Items) == 0 {
-			break // 这个日期没有数据
-		}
-
-		// 批量处理数据
-		if err := processor.ProcessBatchWithBillingCycle(ctx, tableName, response.Data.Items, response.Data.BillingCycle); err != nil {
-			return fmt.Errorf("failed to process batch for date %s: %w", billingDate, err)
-		}
-
-		totalRecords += len(response.Data.Items)
-		log.Printf("[阿里云指定日期同步] 已同步 %d 条记录", totalRecords)
-
-		// 检查是否还有更多数据
-		if response.Data.NextToken == "" {
-			break
-		}
-	}
-
-	log.Printf("[阿里云指定日期同步] 日期 %s 同步完成，共同步 %d 条记录", billingDate, totalRecords)
-	return nil
+	_, err := sm.SyncData(ctx, req)
+	return err
 }
 
 // SyncBothGranularityData 同步两种粒度的数据
+// 保持向后兼容，委托给新的同步管理器
 func (s *BillService) SyncBothGranularityData(ctx context.Context, billingCycle string, options *SyncOptions) error {
-	log.Printf("[阿里云双粒度同步] 开始同步账期: %s", billingCycle)
-
-	// 先同步按月数据
-	monthlyOptions := *options
-	if options.UseDistributed {
-		monthlyOptions.DistributedTableName = strings.Replace(options.DistributedTableName, "daily", "monthly", 1)
+	sm := NewSyncManager(s)
+	req := &SyncRequest{
+		Granularity: "BOTH",
+		Period:      billingCycle,
+		Options:     options,
 	}
-
-	if err := s.SyncMonthlyBillData(ctx, billingCycle, &monthlyOptions); err != nil {
-		return fmt.Errorf("failed to sync monthly data: %w", err)
-	}
-
-	// 再同步按天数据
-	dailyOptions := *options
-	if options.UseDistributed {
-		dailyOptions.DistributedTableName = strings.Replace(options.DistributedTableName, "monthly", "daily", 1)
-	}
-
-	if err := s.SyncDailyBillData(ctx, billingCycle, &dailyOptions); err != nil {
-		return fmt.Errorf("failed to sync daily data: %w", err)
-	}
-
-	log.Printf("[阿里云双粒度同步] 账期 %s 双粒度同步完成", billingCycle)
-	return nil
+	_, err := sm.SyncData(ctx, req)
+	return err
 }
 
 // CleanBillData 清理账单数据
@@ -769,27 +584,6 @@ func (s *BillService) Close() error {
 	return nil
 }
 
-// SyncOptions 同步选项
-type SyncOptions struct {
-	BatchSize            int                        // 批次大小
-	UseDistributed       bool                       // 是否使用分布式表
-	DistributedTableName string                     // 分布式表名
-	SkipZeroAmount       bool                       // 是否跳过零金额记录
-	EnableValidation     bool                       // 是否启用数据验证
-	MaxWorkers           int                        // 最大工作协程数
-	ProgressCallback     func(processed, total int) // 进度回调
-}
-
-// DefaultSyncOptions 默认同步选项
-func DefaultSyncOptions() *SyncOptions {
-	return &SyncOptions{
-		BatchSize:        1000,
-		UseDistributed:   false,
-		SkipZeroAmount:   false,
-		EnableValidation: true,
-		MaxWorkers:       4,
-	}
-}
 
 // GetTableName 根据粒度获取表名
 func (s *BillService) GetTableName(granularity string) string {
@@ -1047,23 +841,6 @@ func (s *BillService) CleanSpecificTableData(ctx context.Context, tableName, con
 	return nil
 }
 
-// DataComparisonResult 数据比较结果
-type DataComparisonResult struct {
-	APICount      int32  // API返回的数据总数
-	DatabaseCount int64  // 数据库中的记录总数
-	NeedSync      bool   // 是否需要同步
-	NeedCleanup   bool   // 是否需要先清理数据
-	Reason        string // 决策原因
-	Period        string // 时间段
-	Granularity   string // 粒度（daily/monthly）
-}
-
-// PreSyncCheckResult 同步前检查结果
-type PreSyncCheckResult struct {
-	ShouldSkip bool                    // 是否跳过同步
-	Results    []*DataComparisonResult // 比较结果列表（支持多个时间段）
-	Summary    string                  // 检查摘要
-}
 
 // GetBillDataCount 获取账单数据总数（通用方法）
 func (s *BillService) GetBillDataCount(ctx context.Context, granularity, period string) (int32, error) {
@@ -1226,17 +1003,20 @@ func (s *BillService) CleanSpecificPeriodData(ctx context.Context, granularity, 
 	var condition string
 	switch strings.ToUpper(granularity) {
 	case "DAILY":
-		// 按天清理：清理特定日期的数据
 		condition = fmt.Sprintf("billing_date = '%s'", period)
 		log.Printf("[阿里云数据清理] 准备清理天表数据：%s, 日期:%s", tableName, period)
 	case "MONTHLY":
-		// 按月清理：清理特定账期的数据
 		condition = fmt.Sprintf("billing_cycle = '%s'", period)
 		log.Printf("[阿里云数据清理] 准备清理月表数据：%s, 账期:%s", tableName, period)
 	default:
 		return fmt.Errorf("unsupported granularity for period cleanup: %s", granularity)
 	}
 
+	return s.cleanTableDataWithCondition(ctx, tableName, condition)
+}
+
+// cleanTableDataWithCondition 按条件清理表数据的辅助方法
+func (s *BillService) cleanTableDataWithCondition(ctx context.Context, tableName, condition string) error {
 	// 构建清理选项
 	opts := &clickhouse.CleanupOptions{
 		Condition: condition,
@@ -1246,41 +1026,26 @@ func (s *BillService) CleanSpecificPeriodData(ctx context.Context, granularity, 
 	// 执行清理
 	result, err := s.chClient.EnhancedCleanTableData(ctx, tableName, opts)
 	if err != nil {
-		return fmt.Errorf("failed to clean %s data for period %s: %w", granularity, period, err)
+		return fmt.Errorf("failed to clean table data: %w", err)
 	}
 
-	log.Printf("[阿里云数据清理完成] 表:%s, 时间段:%s, 清理记录数:%d",
-		tableName, period, result.DeletedRows)
+	log.Printf("[阿里云数据清理完成] 表:%s, 条件:%s, 清理记录数:%d",
+		tableName, condition, result.DeletedRows)
 
 	return nil
 }
 
 // ExecuteIntelligentCleanupAndSync 执行智能清理和同步
+// 保持向后兼容，委托给新的同步管理器
 func (s *BillService) ExecuteIntelligentCleanupAndSync(ctx context.Context, result *DataComparisonResult, syncOptions *SyncOptions) error {
-	if !result.NeedSync {
-		// 不需要同步，直接返回
-		return nil
+	sm := NewSyncManager(s)
+	params := &IntelligentSyncParams{
+		Granularity:         result.Granularity,
+		Period:              result.Period,
+		EnablePreCheck:      false, // 已经做过检查
+		EnableAutoCleanup:   result.NeedCleanup,
+		SyncOptions:         syncOptions,
 	}
-
-	if result.NeedCleanup {
-		// 需要先清理数据
-		log.Printf("[阿里云智能同步] 检测到数据不一致，先清理 %s %s 的数据",
-			result.Granularity, result.Period)
-
-		if err := s.CleanSpecificPeriodData(ctx, result.Granularity, result.Period); err != nil {
-			return fmt.Errorf("failed to clean data before sync: %w", err)
-		}
-
-		log.Printf("[阿里云智能同步] 数据清理完成，开始同步新数据")
-	}
-
-	// 执行同步
-	switch strings.ToUpper(result.Granularity) {
-	case "DAILY":
-		return s.SyncSpecificDayBillData(ctx, result.Period, syncOptions)
-	case "MONTHLY":
-		return s.SyncMonthlyBillData(ctx, result.Period, syncOptions)
-	default:
-		return fmt.Errorf("unsupported granularity for sync: %s", result.Granularity)
-	}
+	_, err := sm.IntelligentSync(ctx, params)
+	return err
 }

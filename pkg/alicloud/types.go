@@ -9,116 +9,20 @@ import (
 	"time"
 )
 
-// DescribeInstanceBillRequest 查询实例账单请求
-// 严格按照阿里云 BSS OpenAPI DescribeInstanceBill 接口定义
-type DescribeInstanceBillRequest struct {
-	// === 必需参数 ===
-	BillingCycle string `json:"BillingCycle" validate:"required"` // 账期，格式：YYYY-MM（必需参数）
+// 注意：请求和响应相关类型已迁移到 request.go 和 response.go 文件
+// 这里保留对外的类型别名以保持向后兼容性
 
-	// === 粒度控制 ===
-	Granularity string `json:"Granularity,omitempty"` // MONTHLY(默认) 或 DAILY
-	BillingDate string `json:"BillingDate,omitempty"` // 当 Granularity=DAILY 时必需，格式 YYYY-MM-DD
-
-	// === 分页参数 ===
-	MaxResults int32  `json:"MaxResults,omitempty"` // 每页条数，范围1-300，默认20
-	NextToken  string `json:"NextToken,omitempty"`  // 分页标记
-
-	// === 过滤参数 ===
-	ProductCode            string   `json:"ProductCode,omitempty"`            // 产品代码
-	ProductType            string   `json:"ProductType,omitempty"`            // 产品类型
-	SubscriptionType       string   `json:"SubscriptionType,omitempty"`       // 付费方式
-	InstanceIDs            []string `json:"InstanceIDs,omitempty"`            // 实例ID列表
-	BillOwnerId            int64    `json:"BillOwnerId,omitempty"`            // 账单归属用户ID
-	IsHideZeroCharge       bool     `json:"IsHideZeroCharge,omitempty"`       // 是否隐藏0元账单
-	IsDisplayLocalCurrency bool     `json:"IsDisplayLocalCurrency,omitempty"` // 是否显示本币
-}
-
-// Validate 验证请求参数
-func (req *DescribeInstanceBillRequest) Validate() error {
-	// BillingCycle是必需参数
-	if req.BillingCycle == "" {
-		return fmt.Errorf("BillingCycle is required")
-	}
-
-	// 验证BillingCycle格式（YYYY-MM）
-	if _, err := time.Parse("2006-01", req.BillingCycle); err != nil {
-		return fmt.Errorf("BillingCycle must be in YYYY-MM format, got: %s", req.BillingCycle)
-	}
-
-	// 验证粒度参数
-	if req.Granularity != "" && req.Granularity != "MONTHLY" && req.Granularity != "DAILY" {
-		return fmt.Errorf("Granularity must be MONTHLY or DAILY, got: %s", req.Granularity)
-	}
-
-	// 当粒度为DAILY时，BillingDate是必需的
-	if req.Granularity == "DAILY" && req.BillingDate == "" {
-		return fmt.Errorf("BillingDate is required when Granularity is DAILY")
-	}
-
-	// 验证BillingDate格式和一致性
-	if req.BillingDate != "" {
-		billingDate, err := time.Parse("2006-01-02", req.BillingDate)
-		if err != nil {
-			return fmt.Errorf("BillingDate must be in YYYY-MM-DD format, got: %s", req.BillingDate)
-		}
-
-		// 验证BillingDate与BillingCycle的月份一致性
-		expectedMonth := billingDate.Format("2006-01")
-		if expectedMonth != req.BillingCycle {
-			return fmt.Errorf("BillingDate (%s) must be in the same month as BillingCycle (%s)", req.BillingDate, req.BillingCycle)
-		}
-	}
-
-	// MaxResults范围验证
-	if req.MaxResults != 0 && (req.MaxResults < 1 || req.MaxResults > 300) {
-		return fmt.Errorf("MaxResults must be between 1 and 300, got: %d", req.MaxResults)
-	}
-
-	return nil
-}
-
-// SetDefaults 设置默认值
-func (req *DescribeInstanceBillRequest) SetDefaults() {
-	// 设置默认粒度
-	if req.Granularity == "" {
-		req.Granularity = "MONTHLY"
-	}
-
-	// 设置默认分页大小
-	if req.MaxResults == 0 {
-		req.MaxResults = 100 // 设置较大的默认值以减少API调用次数
-	}
-}
-
-// IsDaily 判断是否为按天粒度
-func (req *DescribeInstanceBillRequest) IsDaily() bool {
-	return req.Granularity == "DAILY"
-}
-
-// IsMonthly 判断是否为按月粒度
-func (req *DescribeInstanceBillRequest) IsMonthly() bool {
-	return req.Granularity == "MONTHLY" || req.Granularity == ""
-}
-
-// DescribeInstanceBillResponse 查询实例账单响应
-type DescribeInstanceBillResponse struct {
-	RequestId string             `json:"RequestId"` // 请求ID
-	Success   bool               `json:"Success"`   // 是否成功
-	Code      string             `json:"Code"`      // 响应代码
-	Message   string             `json:"Message"`   // 响应消息
-	Data      BillInstanceResult `json:"Data"`      // 账单数据
-}
-
-// BillInstanceResult 账单实例结果
-type BillInstanceResult struct {
-	BillingCycle string       `json:"BillingCycle"` // 账期
-	AccountID    string       `json:"AccountID"`    // 账号ID
-	AccountName  string       `json:"AccountName"`  // 账号名称
-	TotalCount   int32        `json:"TotalCount"`   // 总记录数
-	NextToken    string       `json:"NextToken"`    // 下一页标记
-	MaxResults   int32        `json:"MaxResults"`   // 页大小
-	Items        []BillDetail `json:"Items"`        // 账单明细列表
-}
+// 类型别名（保持向后兼容性）
+type (
+	// DescribeInstanceBillRequest 请求类型已迁移到 request.go
+	// DescribeInstanceBillResponse 响应类型已迁移到 response.go
+	// BillInstanceResult 结果类型已迁移到 response.go
+	
+	// 为保持向后兼容性，保留这些别名
+	AliCloudBillRequest  = DescribeInstanceBillRequest
+	AliCloudBillResponse = DescribeInstanceBillResponse
+	AliCloudBillResult   = BillInstanceResult
+)
 
 // BillDetail 账单明细项
 // 严格按照阿里云 BSS OpenAPI 返回字段定义
@@ -605,17 +509,7 @@ func parseTimeFromString(timeStr string) time.Time {
 	return time.Time{}
 }
 
-// ValidationError 数据验证错误
-type ValidationError struct {
-	Field   string `json:"field"`
-	Value   string `json:"value"`
-	Message string `json:"message"`
-}
-
-// Error 实现error接口
-func (ve *ValidationError) Error() string {
-	return fmt.Sprintf("validation error for field '%s' with value '%s': %s", ve.Field, ve.Value, ve.Message)
-}
+// 注意：ValidationError 类型已迁移到 errors.go 文件
 
 // Validate 验证BillDetail数据
 func (bd *BillDetail) Validate() error {
@@ -646,58 +540,7 @@ func (bd *BillDetail) Validate() error {
 	return nil
 }
 
-// ProcessingStats 处理统计信息（复用火山云的实现）
-type ProcessingStats struct {
-	StartTime        time.Time     `json:"start_time"`
-	LastUpdateTime   time.Time     `json:"last_update_time"`
-	TotalRecords     int           `json:"total_records"`
-	ProcessedRecords int           `json:"processed_records"`
-	CurrentBatch     int           `json:"current_batch"`
-	TotalBatches     int           `json:"total_batches"`
-	AverageSpeed     float64       `json:"average_speed"`  // records per second
-	EstimatedTime    time.Duration `json:"estimated_time"` // remaining time
-	Granularity      string        `json:"granularity"`    // MONTHLY 或 DAILY
-}
-
-// Update 更新统计信息
-func (ps *ProcessingStats) Update(processedRecords int) {
-	now := time.Now()
-	ps.LastUpdateTime = now
-	ps.ProcessedRecords = processedRecords
-
-	// 计算平均速度
-	elapsed := now.Sub(ps.StartTime)
-	if elapsed > 0 {
-		ps.AverageSpeed = float64(processedRecords) / elapsed.Seconds()
-	}
-
-	// 估算剩余时间
-	if ps.AverageSpeed > 0 && ps.TotalRecords > 0 {
-		remaining := ps.TotalRecords - processedRecords
-		if remaining > 0 {
-			ps.EstimatedTime = time.Duration(float64(remaining)/ps.AverageSpeed) * time.Second
-		}
-	}
-}
-
-// GetProgress 获取进度百分比
-func (ps *ProcessingStats) GetProgress() float64 {
-	if ps.TotalRecords == 0 {
-		return 0
-	}
-	return float64(ps.ProcessedRecords) / float64(ps.TotalRecords) * 100
-}
-
-// String 返回统计信息的字符串表示
-func (ps *ProcessingStats) String() string {
-	progress := ps.GetProgress()
-	granularityInfo := ""
-	if ps.Granularity != "" {
-		granularityInfo = fmt.Sprintf(" [%s]", ps.Granularity)
-	}
-	return fmt.Sprintf("Progress: %.1f%% (%d/%d)%s, Speed: %.1f records/s, ETA: %v",
-		progress, ps.ProcessedRecords, ps.TotalRecords, granularityInfo, ps.AverageSpeed, ps.EstimatedTime)
-}
+// 注意：ProcessingStats 类型已迁移到 response.go 文件
 
 // parseFloat64 辅助函数：安全解析字符串为float64
 func parseFloat64(s string) float64 {
@@ -710,7 +553,7 @@ func parseFloat64(s string) float64 {
 	return 0.0
 }
 
-// BatchTransformationOptions 批量转换选项（复用火山云的实现）
+// BatchTransformationOptions 批量转换选项
 type BatchTransformationOptions struct {
 	BatchSize        int            `json:"batch_size"`         // 批次大小
 	WorkerCount      int            `json:"worker_count"`       // 工作协程数
@@ -735,27 +578,6 @@ func DefaultBatchTransformationOptions() *BatchTransformationOptions {
 		TimeoutPerBatch:  30 * time.Second,
 		Granularity:      "MONTHLY",
 	}
-}
-
-// BatchTransformationResult 批量转换结果
-type BatchTransformationResult struct {
-	TransformedRecords []*BillDetailForDB `json:"transformed_records"`
-	Stats              *ProcessingStats   `json:"stats"`
-	Errors             []error            `json:"errors,omitempty"`
-	Granularity        string             `json:"granularity"`
-}
-
-// IsSuccess 检查批量转换是否成功
-func (btr *BatchTransformationResult) IsSuccess() bool {
-	return len(btr.Errors) == 0
-}
-
-// GetSuccessRate 获取成功率
-func (btr *BatchTransformationResult) GetSuccessRate() float64 {
-	if btr.Stats.TotalRecords == 0 {
-		return 0
-	}
-	return float64(btr.Stats.ProcessedRecords) / float64(btr.Stats.TotalRecords) * 100
 }
 
 // BatchTransformer 批量数据转换器
@@ -859,113 +681,6 @@ func (bt *BatchTransformer) GetOptions() *BatchTransformationOptions {
 	return bt.options
 }
 
-// APIError 阿里云API错误
-type APIError struct {
-	RequestId string `json:"RequestId"`
-	Code      string `json:"Code"`
-	Message   string `json:"Message"`
-}
+// 注意：APIError 类型已迁移到 errors.go 文件
 
-// Error 实现error接口
-func (e *APIError) Error() string {
-	return fmt.Sprintf("AliCloud API Error: %s - %s (RequestId: %s)", e.Code, e.Message, e.RequestId)
-}
-
-// IsRetryable 判断错误是否可重试
-func (e *APIError) IsRetryable() bool {
-	retryableCodes := []string{
-		"InternalError",
-		"ServiceUnavailable",
-		"Throttling",
-		"RequestTimeout",
-		"QpsLimitExceeded",
-		"FlowLimitExceeded",
-	}
-
-	for _, code := range retryableCodes {
-		if strings.Contains(e.Code, code) {
-			return true
-		}
-	}
-	return false
-}
-
-// IsAuthError 判断是否为认证错误
-func (e *APIError) IsAuthError() bool {
-	authCodes := []string{
-		"InvalidAccessKeyId",
-		"SignatureDoesNotMatch",
-		"InvalidSecurityToken",
-		"Forbidden",
-		"Unauthorized",
-	}
-
-	for _, code := range authCodes {
-		if strings.Contains(e.Code, code) {
-			return true
-		}
-	}
-	return false
-}
-
-// ValidateBillingCycle 验证账期格式和范围
-func ValidateBillingCycle(billingCycle string) error {
-	if billingCycle == "" {
-		return fmt.Errorf("billing cycle cannot be empty")
-	}
-
-	// 验证格式
-	cycleTime, err := time.Parse("2006-01", billingCycle)
-	if err != nil {
-		return fmt.Errorf("invalid billing cycle format, expected YYYY-MM: %s", billingCycle)
-	}
-
-	// 验证范围：阿里云支持18个月历史数据
-	now := time.Now()
-	earliestTime := now.AddDate(0, -18, 0)
-	futureTime := now.AddDate(0, 1, 0) // 允许查询下个月
-
-	if cycleTime.Before(earliestTime) {
-		return fmt.Errorf("billing cycle %s is too old, only supports 18 months history", billingCycle)
-	}
-
-	if cycleTime.After(futureTime) {
-		return fmt.Errorf("billing cycle %s is in the future", billingCycle)
-	}
-
-	return nil
-}
-
-// GenerateDatesInMonth 生成指定月份的所有日期
-func GenerateDatesInMonth(billingCycle string) ([]string, error) {
-	if err := ValidateBillingCycle(billingCycle); err != nil {
-		return nil, err
-	}
-
-	// 解析月份
-	monthTime, err := time.Parse("2006-01", billingCycle)
-	if err != nil {
-		return nil, err
-	}
-
-	var dates []string
-
-	// 获取该月的第一天和最后一天
-	firstDay := time.Date(monthTime.Year(), monthTime.Month(), 1, 0, 0, 0, 0, monthTime.Location())
-	lastDay := firstDay.AddDate(0, 1, -1)
-
-	// 如果是当前月份，不要超过今天
-	now := time.Now()
-	if monthTime.Year() == now.Year() && monthTime.Month() == now.Month() {
-		if lastDay.After(now) {
-			lastDay = now
-		}
-	}
-
-	// 生成日期列表
-	for d := firstDay; !d.After(lastDay); d = d.AddDate(0, 0, 1) {
-		dates = append(dates, d.Format("2006-01-02"))
-	}
-
-	return dates, nil
-}
+// 注意：验证相关函数已迁移到 validator.go 文件

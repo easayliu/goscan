@@ -10,9 +10,22 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// HTTP response constants
+const (
+	ContentTypeJSON = "application/json"
+)
+
+// Error response field names
+const (
+	FieldError   = "error"
+	FieldMessage = "message"
+	FieldCode    = "code"
+	FieldDetails = "details"
+)
+
 // WriteJSONResponse writes a JSON response with the given status code
 func WriteJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		slog.Error("Failed to encode JSON response", "error", err)
@@ -22,13 +35,13 @@ func WriteJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) 
 // WriteErrorResponse writes an error response in JSON format
 func WriteErrorResponse(w http.ResponseWriter, statusCode int, message string, err error) {
 	errorResp := map[string]interface{}{
-		"error":   true,
-		"message": message,
-		"code":    statusCode,
+		FieldError:   true,
+		FieldMessage: message,
+		FieldCode:    statusCode,
 	}
 
 	if err != nil {
-		errorResp["details"] = err.Error()
+		errorResp[FieldDetails] = err.Error()
 		slog.Error("API error", "message", message, "error", err, "status_code", statusCode)
 	}
 

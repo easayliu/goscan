@@ -28,11 +28,6 @@ func DefaultPaginatorConfig() *PaginatorConfig {
 // ProgressCallback 进度回调函数
 type ProgressCallback func(current, total int, duration time.Duration)
 
-// DataProcessor 数据处理器接口
-type DataProcessor interface {
-	Process(ctx context.Context, data []BillDetail) error
-}
-
 // BillPaginator 账单分页器
 type BillPaginator struct {
 	client    *Client
@@ -75,98 +70,83 @@ func (p *BillPaginator) PaginateBillDetails(ctx context.Context, req *ListBillDe
 
 	log.Printf("[分页器] 开始处理账单数据，账期: %s", req.BillPeriod)
 
-	offset := 0
-	totalRecords := 0
-	processedRecords := 0
-
-	// 第一次请求获取总记录数
-	firstReq := *req
-	firstReq.Limit = int32(p.config.BatchSize)
-	firstReq.Offset = 0
-	firstReq.NeedRecordNum = 1
-
-	firstResp, err := p.fetchBillDetailWithRetry(ctx, &firstReq)
+	// 获取总记录数和第一批数据
+	totalRecords, err := p.initializeAndProcessFirstBatch(ctx, req, result)
 	if err != nil {
-		return result, fmt.Errorf("获取首页数据失败: %w", err)
-	}
-
-	totalRecords = int(firstResp.Result.Total)
-	if totalRecords == 0 {
-		totalRecords = 999999 // 如果API不返回总数，设置一个大数
+		return result, err
 	}
 
 	result.TotalRecords = totalRecords
 	log.Printf("[分页器] 总记录数: %d，批次大小: %d", totalRecords, p.config.BatchSize)
 
-	// 处理第一批数据
-	if len(firstResp.Result.List) > 0 {
-		if err := p.processor.Process(ctx, firstResp.Result.List); err != nil {
-			result.Errors = append(result.Errors, err)
-			log.Printf("[分页器] 处理第1批数据失败: %v", err)
-		} else {
-			processedRecords += len(firstResp.Result.List)
-			log.Printf("[分页器] 处理第1批数据成功: %d条", len(firstResp.Result.List))
-		}
-
-		if p.progress != nil {
-			p.progress(processedRecords, totalRecords, time.Since(startTime))
-		}
-
-		// 如果第一批数据少于批次大小，说明没有更多数据
-		if len(firstResp.Result.List) < p.config.BatchSize {
-			result.ProcessedRecords = processedRecords
-			result.Duration = time.Since(startTime)
-			log.Printf("[分页器] 数据处理完成，共处理: %d条，耗时: %v", processedRecords, result.Duration)
-			return result, nil
-		}
+	// 如果只有一批数据，直接返回
+	if result.ProcessedRecords < p.config.BatchSize {
+		p.finalizeResult(result, startTime)
+		return result, nil
 	}
 
-	offset = p.config.BatchSize
+	// 继续处理剩余批次
+	err = p.processRemainingBatches(ctx, req, result, startTime)
+	p.finalizeResult(result, startTime)
+
+	return result, err
+}
+
+// initializeAndProcessFirstBatch 初始化并处理第一批数据
+func (p *BillPaginator) initializeAndProcessFirstBatch(ctx context.Context, req *ListBillDetailRequest, result *PaginateResult) (int, error) {
+	// 构建第一次请求
+	firstReq := p.buildPageRequest(req, 0, true)
+
+	firstResp, err := p.fetchBillDetailWithRetry(ctx, firstReq)
+	if err != nil {
+		return 0, fmt.Errorf("获取首页数据失败: %w", err)
+	}
+
+	totalRecords := int(firstResp.Result.Total)
+	if totalRecords == 0 {
+		totalRecords = 999999 // 如果API不返回总数，设置一个大数
+	}
+
+	// 处理第一批数据
+	if len(firstResp.Result.List) > 0 {
+		p.processBatch(ctx, firstResp.Result.List, 1, result, time.Now())
+	}
+
+	return totalRecords, nil
+}
+
+// processRemainingBatches 处理剩余的批次
+func (p *BillPaginator) processRemainingBatches(ctx context.Context, req *ListBillDetailRequest, result *PaginateResult, startTime time.Time) error {
+	offset := p.config.BatchSize
 	batchNum := 2
 
-	// 继续分页处理
 	for {
-		select {
-		case <-ctx.Done():
-			return result, ctx.Err()
-		default:
+		if err := p.checkContext(ctx); err != nil {
+			return err
 		}
 
-		pageReq := *req
-		pageReq.Limit = int32(p.config.BatchSize)
-		pageReq.Offset = int32(offset)
-		pageReq.NeedRecordNum = 0
-
+		// 构建分页请求
+		pageReq := p.buildPageRequest(req, offset, false)
 		log.Printf("[分页器] 获取第%d批数据，offset=%d", batchNum, offset)
 
-		resp, err := p.fetchBillDetailWithRetry(ctx, &pageReq)
+		// 获取数据
+		resp, err := p.fetchBillDetailWithRetry(ctx, pageReq)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
 			log.Printf("[分页器] 获取第%d批数据失败: %v", batchNum, err)
 			break
 		}
 
-		// 没有更多数据
+		// 检查是否有数据
 		if len(resp.Result.List) == 0 {
 			log.Printf("[分页器] 第%d批无数据，停止分页", batchNum)
 			break
 		}
 
-		// 处理数据
-		if err := p.processor.Process(ctx, resp.Result.List); err != nil {
-			result.Errors = append(result.Errors, err)
-			log.Printf("[分页器] 处理第%d批数据失败: %v", batchNum, err)
-		} else {
-			processedRecords += len(resp.Result.List)
-			log.Printf("[分页器] 处理第%d批数据成功: %d条", batchNum, len(resp.Result.List))
-		}
+		// 处理当前批次数据
+		p.processBatch(ctx, resp.Result.List, batchNum, result, startTime)
 
-		// 进度回调
-		if p.progress != nil {
-			p.progress(processedRecords, totalRecords, time.Since(startTime))
-		}
-
-		// 如果当前批次数据少于批次大小，说明这是最后一批
+		// 检查是否为最后一批
 		if len(resp.Result.List) < p.config.BatchSize {
 			log.Printf("[分页器] 第%d批是最后一批（%d条 < %d），停止分页",
 				batchNum, len(resp.Result.List), p.config.BatchSize)
@@ -177,43 +157,131 @@ func (p *BillPaginator) PaginateBillDetails(ctx context.Context, req *ListBillDe
 		batchNum++
 	}
 
-	result.ProcessedRecords = processedRecords
-	result.Duration = time.Since(startTime)
-
-	log.Printf("[分页器] 数据处理完成，总记录: %d，已处理: %d，错误: %d，耗时: %v",
-		totalRecords, processedRecords, len(result.Errors), result.Duration)
-
-	return result, nil
+	return nil
 }
 
-// fetchBillDetailWithRetry 带重试的数据获取
+// buildPageRequest 构建分页请求
+func (p *BillPaginator) buildPageRequest(baseReq *ListBillDetailRequest, offset int, needRecordNum bool) *ListBillDetailRequest {
+	req := *baseReq
+	req.Limit = int32(p.config.BatchSize)
+	req.Offset = int32(offset)
+	
+	if needRecordNum {
+		req.NeedRecordNum = 1
+	} else {
+		req.NeedRecordNum = 0
+	}
+
+	return &req
+}
+
+// processBatch 处理单个批次的数据
+func (p *BillPaginator) processBatch(ctx context.Context, bills []BillDetail, batchNum int, result *PaginateResult, startTime time.Time) {
+	if err := p.processor.Process(ctx, bills); err != nil {
+		result.Errors = append(result.Errors, err)
+		log.Printf("[分页器] 处理第%d批数据失败: %v", batchNum, err)
+	} else {
+		result.ProcessedRecords += len(bills)
+		log.Printf("[分页器] 处理第%d批数据成功: %d条", batchNum, len(bills))
+	}
+
+	// 进度回调
+	if p.progress != nil {
+		p.progress(result.ProcessedRecords, result.TotalRecords, time.Since(startTime))
+	}
+}
+
+// checkContext 检查上下文是否已取消
+func (p *BillPaginator) checkContext(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
+}
+
+// finalizeResult 完成结果统计
+func (p *BillPaginator) finalizeResult(result *PaginateResult, startTime time.Time) {
+	result.Duration = time.Since(startTime)
+	log.Printf("[分页器] 数据处理完成，共处理: %d条，耗时: %v", result.ProcessedRecords, result.Duration)
+}
+
+// fetchBillDetailWithRetry 带重试的获取账单详情
 func (p *BillPaginator) fetchBillDetailWithRetry(ctx context.Context, req *ListBillDetailRequest) (*ListBillDetailResponse, error) {
 	var lastErr error
 
-	for attempt := 0; attempt <= p.config.MaxRetries; attempt++ {
+	for attempt := 0; attempt < p.config.MaxRetries; attempt++ {
 		if attempt > 0 {
-			log.Printf("[分页器] 重试第%d次，延迟%v", attempt, p.config.RetryDelay)
+			// 等待重试延迟
 			select {
 			case <-time.After(p.config.RetryDelay):
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			}
+			log.Printf("[分页器] 第%d次重试", attempt+1)
 		}
 
 		resp, err := p.client.ListBillDetail(ctx, req)
-		if err == nil && resp.ResponseMetadata.Error == nil {
+		if err == nil {
 			return resp, nil
 		}
 
-		if err != nil {
-			lastErr = err
-		} else if resp.ResponseMetadata.Error != nil {
-			lastErr = fmt.Errorf("API错误: %s - %s",
-				resp.ResponseMetadata.Error.Code, resp.ResponseMetadata.Error.Message)
+		lastErr = err
+
+		// 检查是否应该重试
+		if !IsRetryableError(err) {
+			log.Printf("[分页器] 不可重试的错误: %v", err)
+			break
 		}
 
-		log.Printf("[分页器] 第%d次尝试失败: %v", attempt+1, lastErr)
+		log.Printf("[分页器] 第%d次尝试失败: %v", attempt+1, err)
 	}
 
-	return nil, fmt.Errorf("重试%d次后仍失败: %w", p.config.MaxRetries, lastErr)
+	return nil, fmt.Errorf("重试%d次后仍然失败: %w", p.config.MaxRetries, lastErr)
+}
+
+// WithBatchSize 设置批次大小 (链式调用)
+func (p *BillPaginator) WithBatchSize(size int) *BillPaginator {
+	if size > 0 {
+		p.config.BatchSize = size
+	}
+	return p
+}
+
+// WithMaxRetries 设置最大重试次数 (链式调用)
+func (p *BillPaginator) WithMaxRetries(retries int) *BillPaginator {
+	if retries > 0 {
+		p.config.MaxRetries = retries
+	}
+	return p
+}
+
+// WithRetryDelay 设置重试延迟 (链式调用)
+func (p *BillPaginator) WithRetryDelay(delay time.Duration) *BillPaginator {
+	if delay > 0 {
+		p.config.RetryDelay = delay
+	}
+	return p
+}
+
+// GetConfig 获取分页器配置
+func (p *BillPaginator) GetConfig() *PaginatorConfig {
+	return p.config
+}
+
+// String 实现 Stringer 接口
+func (pr *PaginateResult) String() string {
+	successRate := float64(pr.ProcessedRecords) / float64(pr.TotalRecords) * 100
+	if pr.TotalRecords == 0 {
+		successRate = 0
+	}
+
+	return fmt.Sprintf("总数=%d, 已处理=%d, 成功率=%.1f%%, 错误=%d, 耗时=%v",
+		pr.TotalRecords, pr.ProcessedRecords, successRate, len(pr.Errors), pr.Duration)
+}
+
+// IsSuccess 判断分页处理是否成功
+func (pr *PaginateResult) IsSuccess() bool {
+	return len(pr.Errors) == 0
 }

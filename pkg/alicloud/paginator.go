@@ -14,9 +14,10 @@ type Paginator struct {
 	baseRequest  *DescribeInstanceBillRequest
 	nextToken    string
 	hasMore      bool
-	currentPage  int
-	totalFetched int
-	startTime    time.Time
+	currentPage      int
+	totalFetched     int
+	startTime        time.Time
+	progressCallback func(current, total int32)
 }
 
 // NewPaginator 创建新的分页器
@@ -85,6 +86,11 @@ func (p *Paginator) HasMore() bool {
 	return p.hasMore
 }
 
+// HasNext 检查是否还有下一页（实现PaginatorInterface接口）
+func (p *Paginator) HasNext() bool {
+	return p.hasMore
+}
+
 // GetCurrentPage 获取当前页码
 func (p *Paginator) GetCurrentPage() int {
 	return p.currentPage
@@ -107,6 +113,11 @@ func (p *Paginator) Reset() {
 	p.currentPage = 0
 	p.totalFetched = 0
 	p.startTime = time.Now()
+}
+
+// SetProgressCallback 设置进度回调（实现PaginatorInterface接口）
+func (p *Paginator) SetProgressCallback(callback func(current, total int32)) {
+	p.progressCallback = callback
 }
 
 // FetchAll 获取所有页的数据

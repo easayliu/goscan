@@ -6,7 +6,18 @@ import (
 	"time"
 )
 
-func TestValidateBillPeriod(t *testing.T) {
+func TestValidatePeriod(t *testing.T) {
+	// 创建一个测试客户端
+	cfg := &config.VolcEngineConfig{
+		AccessKey: "test-key",
+		SecretKey: "test-secret",
+		Region:    "cn-north-1",
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
 	tests := []struct {
 		name        string
 		billPeriod  string
@@ -44,14 +55,14 @@ func TestValidateBillPeriod(t *testing.T) {
 		},
 		{
 			name:        "too old month",
-			billPeriod:  "2023-01",
+			billPeriod:  "2017-01",
 			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateBillPeriod(tt.billPeriod)
+			err := client.ValidatePeriod(tt.billPeriod)
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
 			}
@@ -62,22 +73,38 @@ func TestValidateBillPeriod(t *testing.T) {
 	}
 }
 
-func TestGetValidBillPeriods(t *testing.T) {
-	periods := GetValidBillPeriods()
-	if len(periods) != 2 {
-		t.Errorf("Expected 2 periods, got %d", len(periods))
+func TestCalculateSmartPeriod(t *testing.T) {
+	// 创建一个测试客户端
+	cfg := &config.VolcEngineConfig{
+		AccessKey: "test-key",
+		SecretKey: "test-secret",
+		Region:    "cn-north-1",
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
 	}
 
+	selectedPeriod, dateRange := client.CalculateSmartPeriod()
+	
+	// 验证返回的账期格式
+	_, err = time.Parse("2006-01", selectedPeriod)
+	if err != nil {
+		t.Errorf("Invalid period format: %s", selectedPeriod)
+	}
+	
+	// 验证日期范围不为空
+	if dateRange == "" {
+		t.Error("Date range should not be empty")
+	}
+	
+	// 验证账期是当前月或上个月
 	now := time.Now()
 	currentMonth := now.Format("2006-01")
 	lastMonth := now.AddDate(0, -1, 0).Format("2006-01")
-
-	if periods[0] != currentMonth {
-		t.Errorf("Expected first period to be %s, got %s", currentMonth, periods[0])
-	}
-
-	if periods[1] != lastMonth {
-		t.Errorf("Expected second period to be %s, got %s", lastMonth, periods[1])
+	
+	if selectedPeriod != currentMonth && selectedPeriod != lastMonth {
+		t.Errorf("Expected period to be %s or %s, got %s", currentMonth, lastMonth, selectedPeriod)
 	}
 }
 
@@ -90,7 +117,10 @@ func TestClient(t *testing.T) {
 		Timeout:   30,
 	}
 
-	client := NewClient(cfg)
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
 	if client == nil {
 		t.Fatal("Client should not be nil")
 	}

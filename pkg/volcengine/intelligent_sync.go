@@ -8,7 +8,7 @@ import (
 )
 
 // IntelligentSyncWithPagination 智能分页同步（支持处理所有数据）
-func (s *BillService) IntelligentSyncWithPagination(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error) {
+func (s *billServiceImpl) IntelligentSyncWithPagination(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error) {
 	log.Printf("🚀 [智能分页同步] 开始同步账期 %s 的所有数据", billPeriod)
 	
 	result := &SyncResult{
@@ -71,7 +71,7 @@ func (s *BillService) IntelligentSyncWithPagination(ctx context.Context, billPer
 }
 
 // SmartSyncAllData 智能同步所有数据（边获取边写入）
-func (s *BillService) SmartSyncAllData(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error) {
+func (s *billServiceImpl) SmartSyncAllData(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error) {
 	log.Printf("🚀 [智能同步] 开始智能同步账期 %s 的所有数据", billPeriod)
 	
 	result := &SyncResult{
@@ -200,7 +200,7 @@ func (s *BillService) SmartSyncAllData(ctx context.Context, billPeriod string, t
 }
 
 // SyncAllDataWithRetry 带重试的智能同步
-func (s *BillService) SyncAllDataWithRetry(ctx context.Context, billPeriod string, tableName string, isDistributed bool, maxRetries int) (*SyncResult, error) {
+func (s *billServiceImpl) SyncAllDataWithRetry(ctx context.Context, billPeriod string, tableName string, isDistributed bool, maxRetries int) (*SyncResult, error) {
 	var lastErr error
 	var bestResult *SyncResult
 	
