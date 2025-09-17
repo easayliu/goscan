@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/clickhouse"
-	"log"
+	"goscan/pkg/logger"
 	"strings"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Processor 阿里云账单数据处理器
@@ -133,7 +135,8 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 	}
 
 	if len(filteredBills) == 0 {
-		log.Printf("[阿里云数据处理] 过滤后没有数据需要处理")
+		logger.Debug("no data after filtering",
+			zap.String("provider", "alicloud"))
 		return nil
 	}
 
@@ -144,7 +147,8 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 	}
 
 	if len(transformedRecords) == 0 {
-		log.Printf("[阿里云数据处理] 转换后没有有效数据")
+		logger.Debug("no data after transformation",
+			zap.String("provider", "alicloud"))
 		return nil
 	}
 
@@ -165,12 +169,12 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 func (p *Processor) preprocessBills(bills []BillDetail) ([]BillDetail, error) {
 	// 应用过滤器
 	filteredBills := p.applyFilters(bills)
-	
+
 	// 如果启用了验证，进行数据验证
 	if p.options.EnableValidation {
 		return p.validateBills(filteredBills)
 	}
-	
+
 	return filteredBills, nil
 }
 
@@ -211,18 +215,20 @@ func (p *Processor) shouldFilterBill(bill *BillDetail) bool {
 func (p *Processor) validateBills(bills []BillDetail) ([]BillDetail, error) {
 	validBills := make([]BillDetail, 0, len(bills))
 	validator := NewValidator()
-	
+
 	for _, bill := range bills {
 		if err := validator.ValidateBillDetail(&bill); err != nil {
 			if p.options.SkipErrorRecords {
-				log.Printf("[阿里云数据验证] 跳过错误记录: %v", err)
+				logger.Warn("skipping invalid record",
+					zap.String("provider", "alicloud"),
+					zap.Error(err))
 				continue
 			}
 			return nil, fmt.Errorf("bill validation failed: %w", err)
 		}
 		validBills = append(validBills, bill)
 	}
-	
+
 	return validBills, nil
 }
 
@@ -230,17 +236,17 @@ func (p *Processor) validateBills(bills []BillDetail) ([]BillDetail, error) {
 func (p *Processor) transformBills(bills []BillDetail, billingCycle string) ([]*BillDetailForDB, error) {
 	var result *BatchTransformationResult
 	var err error
-	
+
 	if billingCycle != "" {
 		result, err = p.transformer.TransformWithBillingCycle(bills, billingCycle)
 	} else {
 		result, err = p.transformer.Transform(bills)
 	}
-	
+
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// 处理转换错误
 	if !result.IsSuccess() && len(result.Errors) > 0 {
 		p.logTransformationErrors(result.Errors)
@@ -248,7 +254,7 @@ func (p *Processor) transformBills(bills []BillDetail, billingCycle string) ([]*
 			return nil, fmt.Errorf("transformation failed with %d errors", len(result.Errors))
 		}
 	}
-	
+
 	return result.TransformedRecords, nil
 }
 
@@ -297,7 +303,9 @@ func (p *Processor) retryWriteToDB(ctx context.Context, tableName string, record
 	var lastErr error
 
 	for attempt := 1; attempt <= maxRetries; attempt++ {
-		log.Printf("[阿里云数据处理] 第 %d 次尝试写入数据库", attempt)
+		logger.Debug("retrying database write",
+			zap.String("provider", "alicloud"),
+			zap.Int("attempt", attempt))
 
 		if err := p.writeToDB(ctx, tableName, records); err != nil {
 			lastErr = err
@@ -308,7 +316,9 @@ func (p *Processor) retryWriteToDB(ctx context.Context, tableName string, record
 				continue
 			}
 		} else {
-			log.Printf("[阿里云数据处理] 第 %d 次尝试成功", attempt)
+			logger.Info("database write retry successful",
+				zap.String("provider", "alicloud"),
+				zap.Int("attempt", attempt))
 			return nil
 		}
 	}
@@ -328,7 +338,10 @@ func (p *Processor) getMaxRetries() int {
 func (p *Processor) waitForRetry(ctx context.Context, attempt int, err error) error {
 	// 指数退避
 	delay := time.Duration(attempt) * time.Second
-	log.Printf("[阿里云数据处理] 写入失败，%v 后重试: %v", delay, err)
+	logger.Warn("database write failed, retrying",
+		zap.String("provider", "alicloud"),
+		zap.Duration("delay", delay),
+		zap.Error(err))
 
 	select {
 	case <-time.After(delay):
@@ -439,9 +452,14 @@ func (p *Processor) logProgressInfo(current, total int64) {
 		remaining := total - current
 		eta := time.Duration(float64(remaining)/speed) * time.Second
 		progress := float64(current) / float64(total) * 100
-		
-		log.Printf("[阿里云数据处理] 进度: %d/%d (%.1f%%), 速度: %.1f records/s, 预计剩余: %v",
-			current, total, progress, speed, eta)
+
+		logger.Debug("processing progress",
+			zap.String("provider", "alicloud"),
+			zap.Int64("current", current),
+			zap.Int64("total", total),
+			zap.Float64("progress_pct", progress),
+			zap.Float64("records_per_sec", speed),
+			zap.Duration("eta", eta))
 	}
 }
 
@@ -547,7 +565,9 @@ func (p *Processor) ProcessMultipleBatches(ctx context.Context, tableName string
 		return nil
 	}
 
-	log.Printf("[阿里云数据处理] 开始并发处理 %d 个批次", len(batches))
+	logger.Info("starting concurrent batch processing",
+		zap.String("provider", "alicloud"),
+		zap.Int("batches", len(batches)))
 
 	// 初始化并发处理
 	totalRecords := p.calculateTotalRecords(batches)
@@ -560,7 +580,8 @@ func (p *Processor) ProcessMultipleBatches(ctx context.Context, tableName string
 		return fmt.Errorf("batch processing failed: %s", strings.Join(errors, "; "))
 	}
 
-	log.Printf("[阿里云数据处理] 所有批次处理完成")
+	logger.Info("all batch processing completed",
+		zap.String("provider", "alicloud"))
 	return nil
 }
 
@@ -661,11 +682,15 @@ func (p *Processor) ValidateData(ctx context.Context, tableName string) error {
 		FROM %s
 	`, tableName)
 
-	log.Printf("[阿里云数据验证] 验证表 %s 的数据完整性", tableName)
+	logger.Info("starting table integrity validation",
+		zap.String("provider", "alicloud"),
+		zap.String("table", tableName))
 
 	// 执行验证查询（这里需要实现具体的查询逻辑）
 	// 由于 clickhouse.Client 的具体实现未知，这里只是示例
-	log.Printf("[阿里云数据验证] SQL: %s", validationSQL)
+	logger.Debug("executing validation query",
+		zap.String("provider", "alicloud"),
+		zap.String("query", validationSQL))
 
 	return nil
 }
@@ -687,7 +712,9 @@ func (p *Processor) GetTableStats(ctx context.Context, tableName string) (map[st
 
 	// 获取基本统计信息
 	statsSQL := p.buildStatsSQL(tableName)
-	log.Printf("[阿里云表统计] SQL: %s", statsSQL)
+	logger.Debug("executing statistics query",
+		zap.String("provider", "alicloud"),
+		zap.String("query", statsSQL))
 
 	// 这里需要根据实际的 clickhouse.Client 实现来执行查询
 	// 暂时返回空统计信息
@@ -712,27 +739,38 @@ func (p *Processor) buildStatsSQL(tableName string) string {
 
 // logBatchStart 记录批次开始
 func (p *Processor) logBatchStart(billCount int, billingCycle string) {
-	log.Printf("[阿里云数据处理] 开始处理批次数据: %d 条记录", billCount)
-	if billingCycle != "" {
-		log.Printf("[阿里云数据处理] 使用账期: %s", billingCycle)
-	}
+	logger.Debug("starting batch processing",
+		zap.String("provider", "alicloud"),
+		zap.Int("records", billCount),
+		zap.String("cycle", billingCycle))
 }
 
 // logBatchComplete 记录批次完成
 func (p *Processor) logBatchComplete(inputCount, filteredCount, transformedCount int) {
-	log.Printf("[阿里云数据处理] 批次处理完成: 输入 %d 条，过滤 %d 条，转换 %d 条，入库 %d 条",
-		inputCount, inputCount-filteredCount, transformedCount, transformedCount)
+	logger.Debug("batch processing completed",
+		zap.String("provider", "alicloud"),
+		zap.Int("input", inputCount),
+		zap.Int("filtered", filteredCount),
+		zap.Int("transformed", transformedCount),
+		zap.Int("inserted", transformedCount))
 }
 
 // logTransformationErrors 记录转换错误
 func (p *Processor) logTransformationErrors(errors []error) {
-	log.Printf("[阿里云数据处理] 转换过程中发生错误: %d 个", len(errors))
+	logger.Warn("transformation errors occurred",
+		zap.String("provider", "alicloud"),
+		zap.Int("error_count", len(errors)))
 	for i, err := range errors {
 		if i < 5 { // 只显示前5个错误
-			log.Printf("[阿里云数据处理] 错误 %d: %v", i+1, err)
+			logger.Warn("transformation error detail",
+				zap.String("provider", "alicloud"),
+				zap.Int("index", i+1),
+				zap.Error(err))
 		}
 	}
 	if len(errors) > 5 {
-		log.Printf("[阿里云数据处理] ...还有 %d 个错误未显示", len(errors)-5)
+		logger.Warn("additional errors not displayed",
+			zap.String("provider", "alicloud"),
+			zap.Int("hidden_count", len(errors)-5))
 	}
 }

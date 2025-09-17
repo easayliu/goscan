@@ -1,5 +1,27 @@
-basePath: /api/v1
+basePath: /
 definitions:
+  goscan_pkg_models.ProviderConfig:
+    properties:
+      enabled:
+        example: true
+        type: boolean
+      endpoint:
+        example: ecs.cn-hangzhou.aliyuncs.com
+        type: string
+      has_credentials:
+        description: 'Note: AccessKey and SecretKey are masked for security'
+        example: true
+        type: boolean
+      host:
+        example: billing.volcengineapi.com
+        type: string
+      region:
+        example: cn-north-1
+        type: string
+      timeout:
+        example: 30
+        type: integer
+    type: object
   models.AppConfig:
     properties:
       log_file:
@@ -35,15 +57,15 @@ definitions:
   models.CloudProviderConfig:
     properties:
       alicloud:
-        $ref: '#/definitions/pkg_models.ProviderConfig'
+        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
       aws:
-        $ref: '#/definitions/pkg_models.ProviderConfig'
+        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
       azure:
-        $ref: '#/definitions/pkg_models.ProviderConfig'
+        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
       gcp:
-        $ref: '#/definitions/pkg_models.ProviderConfig'
+        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
       volcengine:
-        $ref: '#/definitions/pkg_models.ProviderConfig'
+        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
     type: object
   models.ConfigResponse:
     properties:
@@ -69,19 +91,16 @@ definitions:
         example: 参数验证失败
         type: string
     type: object
-  models.HealthResponse:
+  models.HealthCheckResponse:
     properties:
-      service:
-        example: goscan
-        type: string
+      checks:
+        additionalProperties: true
+        type: object
       status:
         example: healthy
         type: string
       timestamp:
         example: "2025-09-11T08:13:24Z"
-        type: string
-      version:
-        example: 1.0.0
         type: string
     type: object
   models.JobListResponse:
@@ -170,6 +189,26 @@ definitions:
       success:
         example: true
         type: boolean
+    type: object
+  models.SchedulerMetricsResponse:
+    properties:
+      active_jobs:
+        example: 8
+        type: integer
+      inactive_jobs:
+        example: 2
+        type: integer
+      scheduler_status:
+        $ref: '#/definitions/models.SchedulerStatus'
+      timestamp:
+        example: "2025-09-11T08:13:24Z"
+        type: string
+      total_jobs:
+        example: 10
+        type: integer
+      uptime:
+        example: 3h45m
+        type: string
     type: object
   models.SchedulerStatus:
     properties:
@@ -413,21 +452,25 @@ definitions:
         type: string
     type: object
   models.WeChatNotificationRequest:
+    description: 企业微信费用报告通知触发请求，支持指定分析日期、云服务商和告警阈值
     properties:
       alert_threshold:
-        description: 告警阈值（百分比），默认使用配置值
+        description: 费用变化告警阈值（百分比），当费用变化超过此值时触发告警，默认使用系统配置值，范围：0-100
         example: 10
+        maximum: 100
+        minimum: 0
         type: number
       date:
-        description: 分析日期，格式：2006-01-02，默认当前日期
+        description: 分析日期，格式：YYYY-MM-DD，默认为当前日期。示例：2025-09-12
         example: "2025-09-12"
         type: string
       force_notify:
-        description: 强制发送通知，即使未达到告警阈值
+        description: 强制发送通知，设为true时即使未达到告警阈值也会发送通知，默认为false
         example: false
         type: boolean
       providers:
-        description: 云服务商列表，默认：["volcengine", "alicloud"]
+        description: 要分析的云服务商列表，支持：volcengine（火山云）、alicloud（阿里云）、aws、azure、gcp，默认为
+          ["volcengine", "alicloud"]
         example:
         - volcengine
         - alicloud
@@ -435,7 +478,7 @@ definitions:
           type: string
         type: array
       test_mode:
-        description: 测试模式，仅测试连接不发送实际报告
+        description: 测试模式，设为true时仅测试企业微信连接而不发送实际的费用报告，默认为false
         example: false
         type: boolean
     type: object
@@ -482,10 +525,6 @@ definitions:
         description: 重试延迟时间（秒）
         example: 5
         type: integer
-      send_time:
-        description: 发送时间
-        example: "09:00"
-        type: string
       timestamp:
         description: 状态查询时间戳
         example: "2025-09-12T08:13:24Z"
@@ -499,26 +538,19 @@ definitions:
         example: https://qyapi***webhook
         type: string
     type: object
-  pkg_models.ProviderConfig:
+  models.WeChatTestRequest:
+    description: 企业微信Webhook连接测试请求，用于验证Webhook URL的可用性
     properties:
-      enabled:
-        example: true
-        type: boolean
-      endpoint:
-        example: ecs.cn-hangzhou.aliyuncs.com
-        type: string
-      has_credentials:
-        description: 'Note: AccessKey and SecretKey are masked for security'
-        example: true
-        type: boolean
-      host:
-        example: billing.volcengineapi.com
-        type: string
-      region:
-        example: cn-north-1
+      custom_message:
+        description: 自定义测试消息内容，最大长度500字符，默认使用系统预设的测试消息
+        example: 这是一条来自费用监控系统的测试消息
+        maxLength: 500
         type: string
       timeout:
-        example: 30
+        description: 连接超时时间（秒），范围1-60秒，默认为10秒
+        example: 10
+        maximum: 60
+        minimum: 1
         type: integer
     type: object
 host: localhost:8080
@@ -536,95 +568,52 @@ info:
   title: Goscan API
   version: "1.0"
 paths:
-  /config:
-    get:
-      consumes:
-      - application/json
-      description: 返回系统配置信息，敏感数据已脱敏处理
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/models.ConfigResponse'
-      summary: 获取系统配置
-      tags:
-      - System
-    put:
-      consumes:
-      - application/json
-      description: 基于安全考虑，此接口暂不支持配置更新
-      produces:
-      - application/json
-      responses:
-        "501":
-          description: Not Implemented
-          schema:
-            $ref: '#/definitions/models.ErrorResponse'
-      summary: 更新系统配置
-      tags:
-      - System
   /health:
     get:
       consumes:
       - application/json
-      description: 返回服务健康状态
+      description: 'Perform comprehensive system health check including database connection,
+        task manager status, etc. (Note: this endpoint is not under /api/v1 path)'
       produces:
       - application/json
       responses:
         "200":
-          description: OK
+          description: Health check passed
           schema:
-            $ref: '#/definitions/models.HealthResponse'
-      summary: 健康检查
-      tags:
-      - System
-  /notifications/wechat/status:
-    get:
-      consumes:
-      - application/json
-      description: 返回企业微信通知功能的配置状态和最近的通知历史
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
+            $ref: '#/definitions/models.HealthCheckResponse'
+        "503":
+          description: Service unhealthy
           schema:
-            $ref: '#/definitions/models.WeChatNotificationStatusResponse'
-      summary: 获取企业微信通知状态
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Perform health check
       tags:
-      - Notifications
-  /notifications/wechat/test:
+      - Health Check
+  /notifications/wechat:
     post:
       consumes:
       - application/json
-      description: 测试企业微信Webhook URL的连通性，不发送实际的费用报告
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/models.MessageResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/models.ErrorResponse'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/models.ErrorResponse'
-      summary: 测试企业微信Webhook连接
-      tags:
-      - Notifications
-  /notifications/wechat/trigger:
-    post:
-      consumes:
-      - application/json
-      description: 手动触发企业微信费用报告通知，支持指定分析参数
+      description: |-
+        Manually trigger WeChat Enterprise cost report notification, supports specifying analysis date, cloud provider list and alert threshold. Can be used for temporary notification needs outside of scheduled tasks.
+
+        **请求示例：**
+        ```json
+        {
+        "date": "2025-09-12",
+        "providers": ["volcengine", "alicloud"],
+        "alert_threshold": 15.0,
+        "force_notify": false,
+        "test_mode": false
+        }
+        ```
+
+        **Field Descriptions:**
+        - `date`: Analysis date, format YYYY-MM-DD, uses current date if not provided
+        - `providers`: Cloud provider list, supports volcengine/alicloud/aws/azure/gcp
+        - `alert_threshold`: Cost change alert threshold (percentage), range 0-100
+        - `force_notify`: Whether to force send, ignores alert threshold when true
+        - `test_mode`: Test mode, only tests connection without sending actual report when true
       parameters:
-      - description: 微信通知触发请求参数
+      - description: WeChat notification trigger request parameters
         in: body
         name: request
         required: true
@@ -634,25 +623,85 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: Triggered successfully
           schema:
             $ref: '#/definitions/models.MessageResponse'
         "400":
-          description: Bad Request
+          description: Invalid request parameters or WeChat notification not enabled
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":
-          description: Internal Server Error
+          description: Internal server error
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 手动触发企业微信通知
+      summary: Manually trigger WeChat Enterprise notification
       tags:
-      - Notifications
+      - Notification Management
+  /notifications/wechat/status:
+    get:
+      consumes:
+      - application/json
+      description: Returns detailed information about WeChat Enterprise notification
+        feature configuration status, connection status, recent notification history,
+        etc.
+      parameters:
+      - default: 10
+        description: History record count limit
+        in: query
+        maximum: 50
+        minimum: 1
+        name: history_limit
+        type: integer
+      - default: true
+        description: Whether to include detailed configuration
+        in: query
+        name: include_config
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Status information retrieved successfully
+          schema:
+            $ref: '#/definitions/models.WeChatNotificationStatusResponse'
+      summary: Get WeChat Enterprise notification status
+      tags:
+      - Notification Management
+  /notifications/wechat/test:
+    post:
+      consumes:
+      - application/json
+      description: Send test message to WeChat Enterprise group to verify correctness
+        and connectivity of Webhook URL configuration, will not send actual cost reports
+      parameters:
+      - description: Test request parameters (optional)
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/models.WeChatTestRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Connection test successful
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: WeChat notification not enabled or Webhook URL not configured
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "500":
+          description: Connection test failed or internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Test WeChat Enterprise Webhook connection
+      tags:
+      - Notification Management
   /scheduler/jobs:
     get:
       consumes:
       - application/json
-      description: 返回所有已配置的定时任务信息
+      description: Returns information of all configured scheduled jobs
       produces:
       - application/json
       responses:
@@ -664,15 +713,15 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 获取定时任务列表
+      summary: Get scheduled job list
       tags:
-      - Scheduler
+      - Schedule Management
     post:
       consumes:
       - application/json
-      description: 创建一个新的定时同步任务
+      description: Create a new scheduled sync job
       parameters:
-      - description: 定时任务请求参数
+      - description: Scheduled job request parameters
         in: body
         name: job
         required: true
@@ -693,16 +742,16 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 创建定时任务
+      summary: Create scheduled job
       tags:
-      - Scheduler
+      - Schedule Management
   /scheduler/jobs/{id}:
     delete:
       consumes:
       - application/json
-      description: 删除指定的定时任务
+      description: Delete specified scheduled job
       parameters:
-      - description: 任务ID
+      - description: Job ID
         in: path
         name: id
         required: true
@@ -726,14 +775,138 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 删除定时任务
+      summary: Delete scheduled job
       tags:
-      - Scheduler
+      - Schedule Management
+    get:
+      consumes:
+      - application/json
+      description: Returns detailed information of scheduled job by job ID
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.JobResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get specific scheduled job
+      tags:
+      - Schedule Management
+    put:
+      consumes:
+      - application/json
+      description: Update scheduled job configuration for specified ID
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Scheduled job update parameters
+        in: body
+        name: job
+        required: true
+        schema:
+          $ref: '#/definitions/models.JobRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Update scheduled job
+      tags:
+      - Schedule Management
+  /scheduler/jobs/{id}/trigger:
+    post:
+      consumes:
+      - application/json
+      description: Immediately execute specified scheduled job without waiting for
+        next scheduled time
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.MessageResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Manually trigger scheduled job
+      tags:
+      - Schedule Management
+  /scheduler/metrics:
+    get:
+      consumes:
+      - application/json
+      description: Returns performance metrics information of scheduler, including
+        task execution statistics, success rate, etc.
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SchedulerMetricsResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get scheduler performance metrics
+      tags:
+      - Schedule Management
   /scheduler/status:
     get:
       consumes:
       - application/json
-      description: 返回任务调度器的运行状态信息
+      description: Returns running status information of the task scheduler
       produces:
       - application/json
       responses:
@@ -745,61 +918,34 @@ paths:
           description: Service Unavailable
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 获取调度器状态
+      summary: Get scheduler status
       tags:
-      - Scheduler
-  /status:
+      - Schedule Management
+  /sync:
     get:
       consumes:
       - application/json
-      description: 返回服务运行状态、任务统计和调度器状态等系统信息
+      description: Returns summary status information of all current data sync tasks,
+        including running task count, total task count and other statistics
       produces:
       - application/json
       responses:
         "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/models.SystemStatus'
-      summary: 获取系统状态
-      tags:
-      - System
-  /sync/history:
-    get:
-      consumes:
-      - application/json
-      description: 返回历史同步任务的执行记录
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/models.SyncHistoryResponse'
-      summary: 获取同步历史
-      tags:
-      - Sync
-  /sync/status:
-    get:
-      consumes:
-      - application/json
-      description: 返回当前数据同步任务的状态信息
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
+          description: Sync status retrieved successfully
           schema:
             $ref: '#/definitions/models.SyncStatusResponse'
-      summary: 获取同步状态
+      summary: Get data sync status
       tags:
-      - Sync
-  /sync/trigger:
+      - Data Sync
     post:
       consumes:
       - application/json
-      description: 手动触发指定云服务商的账单数据同步操作
+      description: |-
+        Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.
+        Supports configuring sync mode, time range, granularity and other parameters.
       parameters:
-      - description: 同步请求参数
+      - description: Sync request parameters including cloud provider, sync mode,
+          billing period range and other configurations
         in: body
         name: sync
         required: true
@@ -809,37 +955,129 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: Sync task triggered successfully
           schema:
             $ref: '#/definitions/models.MessageResponse'
         "400":
-          description: Bad Request
+          description: Invalid request parameters or missing cloud provider configuration
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 手动触发数据同步
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Manually trigger billing data sync
       tags:
-      - Sync
-  /tasks:
+      - Data Sync
+  /sync/history:
     get:
       consumes:
       - application/json
-      description: 返回所有任务的详细信息
+      description: Returns execution records of historical sync tasks, including successful
+        and failed tasks, as well as detailed information of each sync
+      parameters:
+      - default: 100
+        description: Limit of returned records
+        in: query
+        maximum: 1000
+        minimum: 1
+        name: limit
+        type: integer
+      - description: Filter records by specified cloud provider
+        enum:
+        - volcengine
+        - alicloud
+        - aws
+        - azure
+        - gcp
+        in: query
+        name: provider
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: History records retrieved successfully
+          schema:
+            $ref: '#/definitions/models.SyncHistoryResponse'
+      summary: Get sync history records
+      tags:
+      - Data Sync
+  /system/config:
+    get:
+      consumes:
+      - application/json
+      description: Returns system configuration information with sensitive data masked
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/models.TaskListResponse'
-      summary: 获取任务列表
+            $ref: '#/definitions/models.ConfigResponse'
+      summary: Get system configuration
       tags:
-      - Tasks
+      - System Management
+    put:
+      consumes:
+      - application/json
+      description: This endpoint does not support configuration updates for security
+        reasons
+      produces:
+      - application/json
+      responses:
+        "501":
+          description: Not Implemented
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Update system configuration
+      tags:
+      - System Management
+  /system/status:
+    get:
+      consumes:
+      - application/json
+      description: Returns system information including service running status, task
+        statistics and scheduler status
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.SystemStatus'
+      summary: Get system status
+      tags:
+      - System Management
+  /tasks:
+    get:
+      consumes:
+      - application/json
+      description: Returns detailed information of all tasks in the system, including
+        running, completed and failed tasks
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Task list retrieved successfully
+          schema:
+            $ref: '#/definitions/models.TaskListResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Get all task list
+      tags:
+      - Task Management
     post:
       consumes:
       - application/json
-      description: 创建并异步执行一个新的同步任务
+      description: Create and asynchronously execute a new cloud provider billing
+        data sync task. Supports multiple cloud providers like Volcengine, Alibaba
+        Cloud, etc.
       parameters:
-      - description: 任务请求参数
+      - description: Task request parameters including task type, cloud provider,
+          sync configuration, etc.
         in: body
         name: task
         required: true
@@ -849,23 +1087,28 @@ paths:
       - application/json
       responses:
         "201":
-          description: Created
+          description: Task created successfully
           schema:
             $ref: '#/definitions/models.MessageResponse'
         "400":
-          description: Bad Request
+          description: Invalid request parameters
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 创建新任务
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+      summary: Create new sync task
       tags:
-      - Tasks
+      - Task Management
   /tasks/{id}:
     delete:
       consumes:
       - application/json
-      description: 取消或删除指定的任务
+      description: Cancel running tasks or delete completed task records. Running
+        tasks will be forcibly stopped.
       parameters:
-      - description: 任务ID
+      - description: Unique task identifier ID
         in: path
         name: id
         required: true
@@ -874,26 +1117,27 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: Task cancelled/deleted successfully
           schema:
             $ref: '#/definitions/models.MessageResponse'
         "400":
-          description: Bad Request
+          description: Invalid task ID
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Not Found
+          description: Task not found or cannot be cancelled
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 删除任务
+      summary: Cancel or delete task
       tags:
-      - Tasks
+      - Task Management
     get:
       consumes:
       - application/json
-      description: 根据任务ID返回任务的详细信息
+      description: Get detailed information of a specific task by task ID, including
+        task status, execution progress, error information, etc.
       parameters:
-      - description: 任务ID
+      - description: Unique task identifier ID
         in: path
         name: id
         required: true
@@ -902,20 +1146,20 @@ paths:
       - application/json
       responses:
         "200":
-          description: OK
+          description: Task details retrieved successfully
           schema:
             $ref: '#/definitions/models.TaskResponse'
         "400":
-          description: Bad Request
+          description: Invalid task ID
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "404":
-          description: Not Found
+          description: Task not found
           schema:
             $ref: '#/definitions/models.ErrorResponse'
-      summary: 获取指定任务
+      summary: Get specific task details
       tags:
-      - Tasks
+      - Task Management
 schemes:
 - http
 - https

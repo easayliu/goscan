@@ -6,9 +6,11 @@ import (
 	"goscan/pkg/analysis"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
+	"goscan/pkg/logger"
 	"goscan/pkg/wechat"
-	"log/slog"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // NotificationTaskExecutor 通知任务执行器
@@ -87,7 +89,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 		Message:   "执行费用报告通知任务",
 	}
 
-	slog.Info("开始执行费用报告通知任务")
+	logger.Info("Starting cost report notification task execution")
 
 	// 检查微信通知是否启用
 	if !nte.config.Enabled {
@@ -95,7 +97,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 		result.Message = "微信通知未启用，跳过任务"
 		result.CompletedAt = time.Now()
 		result.Duration = time.Since(startTime)
-		slog.Info("微信通知未启用，跳过任务")
+		logger.Info("WeChat notification not enabled, skipping task")
 		return result, nil
 	}
 
@@ -122,26 +124,26 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 		dateStr = params.Date.Format("2006-01-02")
 	}
 
-	slog.Info("执行费用报告通知任务，参数详情",
-		"date", dateStr,
-		"providers", params.Providers,
-		"alert_threshold", params.AlertThreshold,
-		"force_notify", params.ForceNotify)
+	logger.Info("Executing cost report notification task, parameter details",
+		zap.String("date", dateStr),
+		zap.Strings("providers", params.Providers),
+		zap.Float64("alert_threshold", params.AlertThreshold),
+		zap.Bool("force_notify", params.ForceNotify))
 
 	analysisDateStr := "默认（将使用昨天）"
 	if !analysisReq.Date.IsZero() {
 		analysisDateStr = analysisReq.Date.Format("2006-01-02")
 	}
 
-	slog.Info("调用CostAnalyzer.AnalyzeDailyCosts，分析请求参数",
-		"analysis_date", analysisDateStr,
-		"analysis_providers", analysisReq.Providers,
-		"analysis_alert_threshold", analysisReq.AlertThreshold)
+	logger.Info("Calling CostAnalyzer.AnalyzeDailyCosts, analysis request parameters",
+		zap.String("analysis_date", analysisDateStr),
+		zap.Strings("analysis_providers", analysisReq.Providers),
+		zap.Float64("analysis_alert_threshold", analysisReq.AlertThreshold))
 
 	analysisResult, err := nte.analyzer.AnalyzeDailyCosts(ctx, analysisReq)
 	if err != nil {
 		wrappedErr := fmt.Errorf("%w: cost analysis failed: %v", ErrDataValidationFailed, err)
-		slog.Error("费用分析失败", "error", wrappedErr)
+		logger.Error("Cost analysis failed", zap.Error(wrappedErr))
 		result.Status = "failed"
 		result.Message = "费用分析失败"
 		result.Error = wrappedErr.Error()
@@ -157,7 +159,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 	if wechatCostData, ok := wechatData.(*wechat.CostComparisonData); ok {
 		if err := nte.wechatClient.SendCostReport(ctx, wechatCostData); err != nil {
 			wrappedErr := fmt.Errorf("%w: send wechat notification failed: %v", ErrNotificationFailed, err)
-			slog.Error("发送微信通知失败", "error", wrappedErr)
+			logger.Error("Failed to send WeChat notification", zap.Error(wrappedErr))
 			result.Status = "failed"
 			result.Message = "发送微信通知失败"
 			result.Error = wrappedErr.Error()
@@ -167,7 +169,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 		}
 	} else {
 		wrappedErr := fmt.Errorf("%w: failed to convert wechat data format", ErrNotificationFailed)
-		slog.Error("转换微信数据格式失败", "error", wrappedErr)
+		logger.Error("Failed to convert WeChat data format", zap.Error(wrappedErr))
 		result.Status = "failed"
 		result.Message = "转换微信数据格式失败"
 		result.Error = wrappedErr.Error()
@@ -184,10 +186,10 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 	result.Duration = time.Since(startTime)
 	result.RecordsProcessed = nte.calculateTotalRecords(analysisResult)
 
-	slog.Info("费用报告通知任务完成",
-		"duration", result.Duration,
-		"providers", len(analysisResult.Providers),
-		"alerts", len(analysisResult.Alerts))
+	logger.Info("Cost report notification task completed",
+		zap.Duration("duration", result.Duration),
+		zap.Int("providers", len(analysisResult.Providers)),
+		zap.Int("alerts", len(analysisResult.Alerts)))
 
 	return result, nil
 }

@@ -5,14 +5,15 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
-	"log/slog"
+	"goscan/pkg/logger"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
-// TaskManagerImpl 任务管理器实现
+// TaskManagerImpl task manager implementation
 type TaskManagerImpl struct {
 	config               *config.Config
 	ctx                  context.Context
@@ -25,29 +26,29 @@ type TaskManagerImpl struct {
 	maxTasks             int
 }
 
-// NewTaskManager 创建新的任务管理器
+// NewTaskManager creates a new task manager
 func NewTaskManager(ctx context.Context, cfg *config.Config) (*TaskManagerImpl, error) {
-	slog.Info("Initializing task manager")
+	logger.Info("Initializing task manager")
 
-	// 创建ClickHouse客户端
+	// Create ClickHouse client
 	chClient, err := clickhouse.NewClient(cfg.ClickHouse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ClickHouse client: %w", err)
 	}
 
-	// 测试连接
+	// Test connection
 	if err := chClient.Ping(ctx); err != nil {
 		return nil, fmt.Errorf("failed to ping ClickHouse: %w", err)
 	}
 
-	// 初始化通知执行器
+	// Initialize notification executor
 	notificationExecutor, err := NewNotificationTaskExecutor(chClient, cfg)
 	if err != nil {
-		slog.Warn("Failed to initialize notification executor", "error", err)
-		// 不返回错误，继续初始化任务管理器，只是通知功能不可用
+		logger.Warn("Failed to initialize notification executor", zap.Error(err))
+		// Don't return error, continue initializing task manager, only notification functionality unavailable
 	}
 
-	// 创建执行器工厂
+	// Create executor factory
 	executorFactory := NewExecutorFactory(cfg, chClient)
 
 	tm := &TaskManagerImpl{
@@ -58,35 +59,35 @@ func NewTaskManager(ctx context.Context, cfg *config.Config) (*TaskManagerImpl, 
 		chClient:             chClient,
 		notificationExecutor: notificationExecutor,
 		executorFactory:      executorFactory,
-		maxTasks:             10, // 最大并发任务数
+		maxTasks:             10, // Maximum concurrent tasks
 	}
 
-	slog.Info("Task manager initialized")
+	logger.Info("Task manager initialized")
 	return tm, nil
 }
 
-// ExecuteTask 执行任务
+// ExecuteTask executes a task
 func (tm *TaskManagerImpl) ExecuteTask(ctx context.Context, req *TaskRequest) (*TaskResult, error) {
-	// 生成ID（如果未提供）
+	// Generate ID (if not provided)
 	if req.ID == "" {
 		req.ID = uuid.New().String()
 	}
 
-	// 检查是否有太多任务正在运行
+	// Check if too many tasks are running
 	if err := tm.checkTaskLimit(); err != nil {
 		return nil, err
 	}
 
-	// 创建任务
+	// Create task
 	task := tm.createTask(req)
 
-	// 添加到任务列表
+	// Add to task list
 	tm.addTask(task)
 
-	// 异步执行任务
+	// Execute task asynchronously
 	go tm.executeTaskInternal(ctx, task)
 
-	// 返回初始结果
+	// Return initial result
 	return &TaskResult{
 		ID:        task.ID,
 		Type:      string(task.Type),
@@ -97,17 +98,17 @@ func (tm *TaskManagerImpl) ExecuteTask(ctx context.Context, req *TaskRequest) (*
 	}, nil
 }
 
-// GetTask 获取特定任务
+// GetTask retrieves a specific task
 func (tm *TaskManagerImpl) GetTask(taskID string) (*Task, error) {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
 
-	// 检查运行中的任务
+	// Check running tasks
 	if task, exists := tm.tasks[taskID]; exists {
 		return task, nil
 	}
 
-	// 检查历史任务
+	// Check historical tasks
 	for _, task := range tm.taskHistory {
 		if task.ID == taskID {
 			return task, nil
@@ -117,7 +118,7 @@ func (tm *TaskManagerImpl) GetTask(taskID string) (*Task, error) {
 	return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 }
 
-// GetTasks 获取所有活动任务
+// GetTasks retrieves all active tasks
 func (tm *TaskManagerImpl) GetTasks() []*Task {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
@@ -129,18 +130,18 @@ func (tm *TaskManagerImpl) GetTasks() []*Task {
 	return tasks
 }
 
-// GetTaskHistory 获取任务历史
+// GetTaskHistory retrieves task history
 func (tm *TaskManagerImpl) GetTaskHistory() []*Task {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
 
-	// 创建副本以避免并发修改
+	// Create copy to avoid concurrent modification
 	history := make([]*Task, len(tm.taskHistory))
 	copy(history, tm.taskHistory)
 	return history
 }
 
-// CancelTask 取消任务
+// CancelTask cancels a task
 func (tm *TaskManagerImpl) CancelTask(taskID string) error {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
@@ -154,22 +155,22 @@ func (tm *TaskManagerImpl) CancelTask(taskID string) error {
 		return fmt.Errorf("task %s is not running (status: %s)", taskID, task.Status)
 	}
 
-	// 调用取消函数
+	// Call cancel function
 	if task.Cancel != nil {
 		task.Cancel()
 	}
 
-	// 更新任务状态
+	// Update task status
 	task.Status = TaskStatusCancelled
 	task.EndTime = time.Now()
 	task.Duration = task.EndTime.Sub(task.StartTime)
 	task.Error = "Task was cancelled"
 
-	slog.Info("Task cancelled", "task_id", taskID)
+	logger.Info("Task cancelled", zap.String("task_id", taskID))
 	return nil
 }
 
-// GetRunningTaskCount 获取运行中的任务数量
+// GetRunningTaskCount retrieves count of running tasks
 func (tm *TaskManagerImpl) GetRunningTaskCount() int {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
@@ -183,16 +184,16 @@ func (tm *TaskManagerImpl) GetRunningTaskCount() int {
 	return count
 }
 
-// GetTotalTaskCount 获取总任务数量
+// GetTotalTaskCount retrieves total task count
 func (tm *TaskManagerImpl) GetTotalTaskCount() int {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
 	return len(tm.tasks)
 }
 
-// 私有方法
+// Private methods
 
-// checkTaskLimit 检查任务限制
+// checkTaskLimit checks task limits
 func (tm *TaskManagerImpl) checkTaskLimit() error {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
@@ -211,7 +212,7 @@ func (tm *TaskManagerImpl) checkTaskLimit() error {
 	return nil
 }
 
-// createTask 创建任务
+// createTask creates a task
 func (tm *TaskManagerImpl) createTask(req *TaskRequest) *Task {
 	_, cancel := context.WithCancel(tm.ctx)
 
@@ -226,31 +227,31 @@ func (tm *TaskManagerImpl) createTask(req *TaskRequest) *Task {
 	}
 }
 
-// addTask 添加任务到列表
+// addTask adds task to list
 func (tm *TaskManagerImpl) addTask(task *Task) {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 	tm.tasks[task.ID] = task
 }
 
-// executeTaskInternal 内部任务执行
+// executeTaskInternal internal task execution
 func (tm *TaskManagerImpl) executeTaskInternal(ctx context.Context, task *Task) {
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("Task execution panicked", "task_id", task.ID, "panic", r)
+			logger.Error("Task execution panicked", zap.String("task_id", task.ID), zap.Any("panic", r))
 			tm.finishTask(task, nil, fmt.Errorf("task panicked: %v", r))
 		}
 	}()
 
-	// 更新任务状态为运行中
+	// Update task status to running
 	tm.updateTaskStatus(task, TaskStatusRunning)
 
-	slog.Info("Starting task execution", "task_id", task.ID, "type", task.Type, "provider", task.Provider)
+	logger.Info("Starting task execution", zap.String("task_id", task.ID), zap.String("type", string(task.Type)), zap.String("provider", task.Provider))
 
 	var result *TaskResult
 	var err error
 
-	// 根据任务类型执行
+	// Execute based on task type
 	switch task.Type {
 	case TaskTypeSync:
 		result, err = tm.executeSyncTask(ctx, task)
@@ -260,19 +261,19 @@ func (tm *TaskManagerImpl) executeTaskInternal(ctx context.Context, task *Task) 
 		err = fmt.Errorf("unsupported task type: %s", task.Type)
 	}
 
-	// 完成任务
+	// Complete task
 	tm.finishTask(task, result, err)
 }
 
-// executeSyncTask 执行同步任务
+// executeSyncTask executes sync task
 func (tm *TaskManagerImpl) executeSyncTask(ctx context.Context, task *Task) (*TaskResult, error) {
-	// 创建同步执行器
+	// Create sync executor
 	executor, err := tm.executorFactory.CreateExecutor(ctx, task.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create executor for provider %s: %w", task.Provider, err)
 	}
 
-	// 转换任务配置为同步配置
+	// Convert task config to sync config
 	syncConfig := &SyncConfig{
 		Provider:       task.Provider,
 		SyncMode:       task.Config.SyncMode,
@@ -286,7 +287,7 @@ func (tm *TaskManagerImpl) executeSyncTask(ctx context.Context, task *Task) (*Ta
 		Limit:          task.Config.Limit,
 	}
 
-	// 如果需要创建表，先创建表
+	// If table creation is needed, create tables first
 	if task.Config.CreateTable {
 		tableConfig := tm.createTableConfig(task)
 		if err := executor.CreateTables(ctx, tableConfig); err != nil {
@@ -294,17 +295,17 @@ func (tm *TaskManagerImpl) executeSyncTask(ctx context.Context, task *Task) (*Ta
 		}
 	}
 
-	// 执行同步
+	// Execute sync
 	syncResult, err := executor.ExecuteSync(ctx, syncConfig)
 	if err != nil {
 		return nil, fmt.Errorf("sync execution failed: %w", err)
 	}
 
-	// 转换结果
+	// Convert result
 	return tm.convertSyncResult(syncResult, task), nil
 }
 
-// executeNotificationTask 执行通知任务
+// executeNotificationTask executes notification task
 func (tm *TaskManagerImpl) executeNotificationTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	if tm.notificationExecutor == nil {
 		return nil, fmt.Errorf("notification executor not available")
@@ -318,7 +319,7 @@ func (tm *TaskManagerImpl) executeNotificationTask(ctx context.Context, task *Ta
 	return result, nil
 }
 
-// createTableConfig 创建表配置
+// createTableConfig creates table configuration
 func (tm *TaskManagerImpl) createTableConfig(task *Task) *TableConfig {
 	useDistributed := task.Config.UseDistributed || tm.config.ClickHouse.Cluster != ""
 
@@ -328,7 +329,7 @@ func (tm *TaskManagerImpl) createTableConfig(task *Task) *TableConfig {
 		localTableName = "volcengine_bill_details_local"
 		distributedTableName = "volcengine_bill_details_distributed"
 	case "alicloud":
-		// 阿里云的表名由billService管理，这里使用通用名称
+		// Alibaba Cloud table names are managed by billService, use generic names here
 		localTableName = "alicloud_bill_details_local"
 		distributedTableName = "alicloud_bill_details_distributed"
 	default:
@@ -344,7 +345,7 @@ func (tm *TaskManagerImpl) createTableConfig(task *Task) *TableConfig {
 	}
 }
 
-// convertSyncResult 转换同步结果
+// convertSyncResult converts sync result
 func (tm *TaskManagerImpl) convertSyncResult(syncResult *SyncResult, task *Task) *TaskResult {
 	return &TaskResult{
 		ID:               task.ID,
@@ -361,38 +362,38 @@ func (tm *TaskManagerImpl) convertSyncResult(syncResult *SyncResult, task *Task)
 	}
 }
 
-// updateTaskStatus 更新任务状态
+// updateTaskStatus updates task status
 func (tm *TaskManagerImpl) updateTaskStatus(task *Task, status TaskStatus) {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 	task.Status = status
 }
 
-// finishTask 完成任务
+// finishTask completes a task
 func (tm *TaskManagerImpl) finishTask(task *Task, result *TaskResult, err error) {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 
-	// 设置结束时间和持续时间
+	// Set end time and duration
 	task.EndTime = time.Now()
 	task.Duration = task.EndTime.Sub(task.StartTime)
 
-	// 设置任务状态和结果
+	// Set task status and result
 	if err != nil {
 		task.Status = TaskStatusFailed
 		task.Error = err.Error()
-		slog.Error("Task execution failed", "task_id", task.ID, "error", err)
+		logger.Error("Task execution failed", zap.String("task_id", task.ID), zap.Error(err))
 	} else {
 		task.Status = TaskStatusCompleted
 		task.Result = result
-		slog.Info("Task execution completed", "task_id", task.ID, "duration", task.Duration)
+		logger.Info("Task execution completed", zap.String("task_id", task.ID), zap.Duration("duration", task.Duration))
 	}
 
-	// 从活动任务中移除并添加到历史
+	// Remove from active tasks and add to history
 	delete(tm.tasks, task.ID)
 	tm.taskHistory = append(tm.taskHistory, task)
 
-	// 限制历史记录数量
+	// Limit history record count
 	if len(tm.taskHistory) > 100 {
 		tm.taskHistory = tm.taskHistory[1:]
 	}

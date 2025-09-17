@@ -6,22 +6,23 @@ import (
 	"time"
 )
 
-// costCalculator 成本计算器实现
+// costCalculator cost calculator implementation
 type costCalculator struct {
 	alertThreshold float64
 }
 
-// newCostCalculator 创建成本计算器
+
+// newCostCalculator creates cost calculator
 func newCostCalculator(alertThreshold float64) *costCalculator {
 	return &costCalculator{
 		alertThreshold: alertThreshold,
 	}
 }
 
-// CalculateCostChanges 计算成本变化
+// CalculateCostChanges calculates cost changes
 func (c *costCalculator) CalculateCostChanges(rawData []*RawCostData, yesterday, today time.Time) (*CostAnalysisResult, error) {
 	if len(rawData) == 0 {
-		return nil, wrapError(ErrNoDataFound, "原始数据为空")
+		return nil, wrapError(ErrNoDataFound, "raw data is empty")
 	}
 
 	result := &CostAnalysisResult{
@@ -32,38 +33,38 @@ func (c *costCalculator) CalculateCostChanges(rawData []*RawCostData, yesterday,
 		GeneratedAt:   time.Now(),
 	}
 
-	// 按服务商分组数据
+	// group data by provider
 	aggregator := newDataAggregator(nil, nil, nil)
 	providerData := aggregator.GroupDataByProvider(rawData)
 
-	// 计算总费用
+	// calculate total cost
 	totalMetric := &CostMetric{
-		Name:     "总费用",
+		Name:     "Total Cost",
 		Currency: "CNY",
 	}
 
-	// 分析各服务商数据
+	// analyze provider data
 	for provider, data := range providerData {
 		providerMetric, err := c.AnalyzeProviderCosts(provider, data, yesterday, today)
 		if err != nil {
-			return nil, wrapError(err, "分析服务商 %s 费用失败", provider)
+			return nil, wrapError(err, "failed to analyze provider %s costs", provider)
 		}
-		
+
 		if providerMetric != nil && len(providerMetric.Products) > 0 {
 			result.Providers = append(result.Providers, providerMetric)
 
-			// 累加到总费用
+			// accumulate to total cost
 			totalMetric.YesterdayCost += providerMetric.TotalCost.YesterdayCost
 			totalMetric.TodayCost += providerMetric.TotalCost.TodayCost
 		}
 	}
 
-	// 计算总费用变化
+	// calculate total cost changes
 	totalMetric.CalculateChange()
 	totalMetric.SetSignificant(c.alertThreshold)
 	result.TotalCost = totalMetric
 
-	// 按服务商名称排序
+	// sort by provider name
 	sort.Slice(result.Providers, func(i, j int) bool {
 		return result.Providers[i].Provider < result.Providers[j].Provider
 	})
@@ -71,24 +72,24 @@ func (c *costCalculator) CalculateCostChanges(rawData []*RawCostData, yesterday,
 	return result, nil
 }
 
-// AnalyzeProviderCosts 分析单个服务商的费用
+// AnalyzeProviderCosts analyzes costs for a single provider
 func (c *costCalculator) AnalyzeProviderCosts(provider string, data []*RawCostData, yesterday, today time.Time) (*ProviderCostMetric, error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
 
-	// 验证输入参数
+	// validate input parameters
 	if provider == "" {
-		return nil, NewValidationError("provider", provider, "服务商名称不能为空")
+		return nil, NewValidationError("provider", provider, "provider name cannot be empty")
 	}
 
-	// 按产品分组
+	// group by product
 	productData, err := c.groupDataByProduct(data)
 	if err != nil {
-		return nil, wrapError(err, "按产品分组数据失败")
+		return nil, wrapError(err, "failed to group data by product")
 	}
 
-	// 分析各产品费用
+	// analyze product costs
 	products := make([]*CostMetric, 0)
 	providerTotal := &CostMetric{
 		Name:     GetProviderDisplayName(provider),
@@ -98,21 +99,21 @@ func (c *costCalculator) AnalyzeProviderCosts(provider string, data []*RawCostDa
 	for product, dates := range productData {
 		metric, err := c.calculateProductCost(product, dates, yesterday, today)
 		if err != nil {
-			return nil, wrapError(err, "计算产品 %s 费用失败", product)
+			return nil, wrapError(err, "failed to calculate product %s cost", product)
 		}
 
 		if metric != nil {
-			// 累加到服务商总计
+			// accumulate to provider total
 			providerTotal.YesterdayCost += metric.YesterdayCost
 			providerTotal.TodayCost += metric.TodayCost
 			products = append(products, metric)
 		}
 	}
 
-	// 计算服务商总计变化
+	// calculate provider total changes
 	providerTotal.CalculateChange()
 
-	// 按产品名称排序
+	// sort by product name
 	sort.Slice(products, func(i, j int) bool {
 		return products[i].Name < products[j].Name
 	})
@@ -125,7 +126,7 @@ func (c *costCalculator) AnalyzeProviderCosts(provider string, data []*RawCostDa
 	}, nil
 }
 
-// groupDataByProduct 按产品分组数据
+// groupDataByProduct groups data by product
 func (c *costCalculator) groupDataByProduct(data []*RawCostData) (map[string]map[string]*RawCostData, error) {
 	productData := make(map[string]map[string]*RawCostData) // product -> date -> data
 
@@ -134,16 +135,16 @@ func (c *costCalculator) groupDataByProduct(data []*RawCostData) (map[string]map
 			continue
 		}
 
-		// 验证必要字段
+		// validate required fields
 		if item.Product == "" {
-			return nil, NewValidationError("product", item.Product, "产品名称不能为空")
+			return nil, NewValidationError("product", item.Product, "product name cannot be empty")
 		}
 
 		if _, exists := productData[item.Product]; !exists {
 			productData[item.Product] = make(map[string]*RawCostData)
 		}
 
-		// 使用日期字符串作为key
+		// use date string as key
 		dateKey := item.ExpenseDate.Format("2006-01-02")
 		productData[item.Product][dateKey] = item
 	}
@@ -151,18 +152,18 @@ func (c *costCalculator) groupDataByProduct(data []*RawCostData) (map[string]map
 	return productData, nil
 }
 
-// calculateProductCost 计算单个产品的费用
+// calculateProductCost calculates cost for a single product
 func (c *costCalculator) calculateProductCost(product string, dates map[string]*RawCostData, yesterday, today time.Time) (*CostMetric, error) {
 	if product == "" {
-		return nil, NewValidationError("product", product, "产品名称不能为空")
+		return nil, NewValidationError("product", product, "product name cannot be empty")
 	}
 
 	metric := &CostMetric{
 		Name:     product,
-		Currency: "CNY", // 默认货币
+		Currency: "CNY", // default currency
 	}
 
-	// 获取昨天和今天的数据
+	// get yesterday and today data
 	yesterdayStr := yesterday.Format("2006-01-02")
 	todayStr := today.Format("2006-01-02")
 
@@ -177,13 +178,13 @@ func (c *costCalculator) calculateProductCost(product string, dates map[string]*
 		metric.RecordCount = todayData.RecordCount
 	}
 
-	// 计算变化
+	// calculate changes
 	metric.CalculateChange()
 
 	return metric, nil
 }
 
-// GenerateAlerts 生成告警信息
+// GenerateAlerts generates alert messages
 func (c *costCalculator) GenerateAlerts(result *CostAnalysisResult, threshold float64) []string {
 	var alerts []string
 
@@ -191,11 +192,11 @@ func (c *costCalculator) GenerateAlerts(result *CostAnalysisResult, threshold fl
 		return alerts
 	}
 
-	// 总费用异常
+	// total cost anomalies
 	if result.TotalCost != nil && result.TotalCost.IsSignificant {
 		if result.TotalCost.IsIncrease() {
 			alerts = append(alerts,
-				fmt.Sprintf("总费用增长 %.1f%%，超过告警阈值 %.1f%%",
+				fmt.Sprintf("总费用上涨 %.1f%%，超过告警阈值 %.1f%%",
 					result.TotalCost.ChangePercent, threshold))
 		} else if result.TotalCost.IsDecrease() {
 			alerts = append(alerts,
@@ -204,13 +205,13 @@ func (c *costCalculator) GenerateAlerts(result *CostAnalysisResult, threshold fl
 		}
 	}
 
-	// 各产品异常
+	// product anomalies
 	alerts = c.generateProductAlerts(result.Providers, threshold, alerts)
 
 	return alerts
 }
 
-// generateProductAlerts 生成产品级告警
+// generateProductAlerts generates product-level alerts
 func (c *costCalculator) generateProductAlerts(providers []*ProviderCostMetric, threshold float64, alerts []string) []string {
 	for _, provider := range providers {
 		if provider == nil {
@@ -224,7 +225,7 @@ func (c *costCalculator) generateProductAlerts(providers []*ProviderCostMetric, 
 
 			if product.ChangePercent >= threshold {
 				alerts = append(alerts,
-					fmt.Sprintf("%s %s 费用增长 %.1f%%",
+					fmt.Sprintf("%s %s 费用上涨 %.1f%%",
 						provider.DisplayName, product.Name, product.ChangePercent))
 			} else if product.ChangePercent <= -threshold {
 				alerts = append(alerts,
@@ -237,10 +238,10 @@ func (c *costCalculator) generateProductAlerts(providers []*ProviderCostMetric, 
 	return alerts
 }
 
-// calculateTotalCosts 计算总成本
+// calculateTotalCosts calculates total costs
 func (c *costCalculator) calculateTotalCosts(providers []*ProviderCostMetric) *CostMetric {
 	totalMetric := &CostMetric{
-		Name:     "总费用",
+		Name:     "Total Cost",
 		Currency: "CNY",
 	}
 
@@ -257,7 +258,7 @@ func (c *costCalculator) calculateTotalCosts(providers []*ProviderCostMetric) *C
 	return totalMetric
 }
 
-// validateCostData 验证成本数据
+// validateCostData validates cost data
 func (c *costCalculator) validateCostData(data []*RawCostData) error {
 	if len(data) == 0 {
 		return ErrNoDataFound
@@ -265,19 +266,19 @@ func (c *costCalculator) validateCostData(data []*RawCostData) error {
 
 	for i, item := range data {
 		if item == nil {
-			return NewValidationError("data", i, fmt.Sprintf("第 %d 条数据为空", i))
+			return NewValidationError("data", i, fmt.Sprintf("data item %d is nil", i))
 		}
 
 		if item.Provider == "" {
-			return NewValidationError("provider", item.Provider, fmt.Sprintf("第 %d 条数据的服务商名称为空", i))
+			return NewValidationError("provider", item.Provider, fmt.Sprintf("provider name is empty for data item %d", i))
 		}
 
 		if item.Product == "" {
-			return NewValidationError("product", item.Product, fmt.Sprintf("第 %d 条数据的产品名称为空", i))
+			return NewValidationError("product", item.Product, fmt.Sprintf("product name is empty for data item %d", i))
 		}
 
 		if item.TotalAmount < 0 {
-			return NewValidationError("amount", item.TotalAmount, fmt.Sprintf("第 %d 条数据的金额为负数", i))
+			return NewValidationError("amount", item.TotalAmount, fmt.Sprintf("amount is negative for data item %d", i))
 		}
 	}
 

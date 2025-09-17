@@ -3,34 +3,35 @@ package handlers
 import (
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 
+	"go.uber.org/zap"
+	"goscan/pkg/logger"
 	"goscan/pkg/response"
 )
 
-// 定义常见的错误类型
+// Common error type definitions
 var (
-	// ErrInvalidParam 参数无效错误
+	// ErrInvalidParam indicates invalid parameter error
 	ErrInvalidParam = errors.New("invalid parameter")
-	
-	// ErrResourceNotFound 资源未找到错误
+
+	// ErrResourceNotFound indicates resource not found error
 	ErrResourceNotFound = errors.New("resource not found")
-	
-	// ErrServiceUnavailable 服务不可用错误
+
+	// ErrServiceUnavailable indicates service unavailable error
 	ErrServiceUnavailable = errors.New("service unavailable")
-	
-	// ErrUnauthorized 未授权错误
+
+	// ErrUnauthorized indicates unauthorized error
 	ErrUnauthorized = errors.New("unauthorized")
-	
-	// ErrInternalServer 内部服务器错误
+
+	// ErrInternalServer indicates internal server error
 	ErrInternalServer = errors.New("internal server error")
-	
-	// ErrBadRequest 请求错误
+
+	// ErrBadRequest indicates bad request error
 	ErrBadRequest = errors.New("bad request")
 )
 
-// APIError 自定义API错误结构
+// APIError represents a custom API error structure
 type APIError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -38,7 +39,7 @@ type APIError struct {
 	Err     error  `json:"-"`
 }
 
-// Error 实现error接口
+// Error implements the error interface
 func (e *APIError) Error() string {
 	if e.Err != nil {
 		return fmt.Sprintf("API Error (Code: %d, Message: %s): %v", e.Code, e.Message, e.Err)
@@ -46,12 +47,12 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("API Error (Code: %d, Message: %s)", e.Code, e.Message)
 }
 
-// Unwrap 支持错误链
+// Unwrap supports error wrapping
 func (e *APIError) Unwrap() error {
 	return e.Err
 }
 
-// NewAPIError 创建新的API错误
+// NewAPIError creates a new API error
 func NewAPIError(code int, message string, err error) *APIError {
 	return &APIError{
 		Code:    code,
@@ -60,7 +61,7 @@ func NewAPIError(code int, message string, err error) *APIError {
 	}
 }
 
-// NewBadRequestError 创建400错误
+// NewBadRequestError creates a 400 Bad Request error
 func NewBadRequestError(message string, err error) *APIError {
 	return &APIError{
 		Code:    http.StatusBadRequest,
@@ -69,7 +70,7 @@ func NewBadRequestError(message string, err error) *APIError {
 	}
 }
 
-// NewNotFoundError 创建404错误
+// NewNotFoundError creates a 404 Not Found error
 func NewNotFoundError(message string, err error) *APIError {
 	return &APIError{
 		Code:    http.StatusNotFound,
@@ -78,7 +79,7 @@ func NewNotFoundError(message string, err error) *APIError {
 	}
 }
 
-// NewInternalServerError 创建500错误
+// NewInternalServerError creates a 500 Internal Server Error
 func NewInternalServerError(message string, err error) *APIError {
 	return &APIError{
 		Code:    http.StatusInternalServerError,
@@ -87,7 +88,7 @@ func NewInternalServerError(message string, err error) *APIError {
 	}
 }
 
-// NewServiceUnavailableError 创建503错误
+// NewServiceUnavailableError creates a 503 Service Unavailable error
 func NewServiceUnavailableError(message string, err error) *APIError {
 	return &APIError{
 		Code:    http.StatusServiceUnavailable,
@@ -96,7 +97,7 @@ func NewServiceUnavailableError(message string, err error) *APIError {
 	}
 }
 
-// HandleError 统一错误处理函数
+// HandleError provides unified error handling
 func HandleError(w http.ResponseWriter, err error) {
 	if err == nil {
 		return
@@ -104,23 +105,23 @@ func HandleError(w http.ResponseWriter, err error) {
 
 	var apiErr *APIError
 	if errors.As(err, &apiErr) {
-		// 记录详细错误信息
+		// Log detailed error information
 		if apiErr.Err != nil {
-			slog.Error("API error occurred",
-				"code", apiErr.Code,
-				"message", apiErr.Message,
-				"details", apiErr.Err.Error())
+			logger.Error("API error occurred",
+				zap.Int("code", apiErr.Code),
+				zap.String("message", apiErr.Message),
+				zap.Error(apiErr.Err))
 		} else {
-			slog.Warn("API error occurred",
-				"code", apiErr.Code,
-				"message", apiErr.Message)
+			logger.Warn("API error occurred",
+				zap.Int("code", apiErr.Code),
+				zap.String("message", apiErr.Message))
 		}
-		
+
 		response.WriteErrorResponse(w, apiErr.Code, apiErr.Message, apiErr.Err)
 		return
 	}
 
-	// 处理标准错误
+	// Handle standard errors
 	switch {
 	case errors.Is(err, ErrInvalidParam):
 		response.WriteErrorResponse(w, http.StatusBadRequest, "Invalid parameter", err)
@@ -133,13 +134,13 @@ func HandleError(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrBadRequest):
 		response.WriteErrorResponse(w, http.StatusBadRequest, "Bad request", err)
 	default:
-		// 未知错误，记录详细信息并返回通用500错误
-		slog.Error("Unexpected error occurred", "error", err)
+		// Unknown error, log details and return generic 500 error
+		logger.Error("Unexpected error occurred", zap.Error(err))
 		response.WriteErrorResponse(w, http.StatusInternalServerError, "Internal server error", nil)
 	}
 }
 
-// WrapError 包装错误，添加上下文信息
+// WrapError wraps an error and adds context information
 func WrapError(err error, message string) error {
 	if err == nil {
 		return nil
@@ -147,7 +148,7 @@ func WrapError(err error, message string) error {
 	return fmt.Errorf("%s: %w", message, err)
 }
 
-// ValidateRequired 验证必需参数
+// ValidateRequired validates required parameters
 func ValidateRequired(value, fieldName string) error {
 	if value == "" {
 		return fmt.Errorf("%w: %s is required", ErrInvalidParam, fieldName)
@@ -155,7 +156,7 @@ func ValidateRequired(value, fieldName string) error {
 	return nil
 }
 
-// ValidateStringSlice 验证字符串切片参数
+// ValidateStringSlice validates string slice parameters
 func ValidateStringSlice(slice []string, fieldName string) error {
 	if len(slice) == 0 {
 		return fmt.Errorf("%w: %s cannot be empty", ErrInvalidParam, fieldName)
@@ -163,13 +164,26 @@ func ValidateStringSlice(slice []string, fieldName string) error {
 	return nil
 }
 
-// LogErrorWithContext 记录错误并添加上下文信息
+// LogErrorWithContext logs errors with context information
 func LogErrorWithContext(err error, context string, fields ...interface{}) {
 	if err == nil {
 		return
 	}
-	
-	args := []interface{}{"error", err, "context", context}
-	args = append(args, fields...)
-	slog.Error("Error occurred", args...)
+
+	// Convert parameters to zap fields
+	zapFields := []zap.Field{
+		zap.Error(err),
+		zap.String("context", context),
+	}
+
+	// Add incoming parameters to zap fields in pairs
+	for i := 0; i < len(fields); i += 2 {
+		if i+1 < len(fields) {
+			key := fmt.Sprintf("%v", fields[i])
+			value := fields[i+1]
+			zapFields = append(zapFields, zap.Any(key, value))
+		}
+	}
+
+	logger.Error("Error occurred", zapFields...)
 }

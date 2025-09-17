@@ -31,14 +31,14 @@ func LoadConfig(configPath string) (*Config, error) {
 	switch ext {
 	case ".json":
 		if err := json.Unmarshal(data, config); err != nil {
-			return nil, fmt.Errorf("%w: JSON解析失败: %v", ErrInvalidFormat, err)
+			return nil, fmt.Errorf("%w: JSON parsing failed: %v", ErrInvalidFormat, err)
 		}
 	case ".yaml", ".yml":
 		if err := yaml.Unmarshal(data, config); err != nil {
-			return nil, fmt.Errorf("%w: YAML解析失败: %v", ErrInvalidFormat, err)
+			return nil, fmt.Errorf("%w: YAML parsing failed: %v", ErrInvalidFormat, err)
 		}
 	default:
-		return nil, fmt.Errorf("%w: 不支持的配置文件格式: %s", ErrInvalidFormat, ext)
+		return nil, fmt.Errorf("%w: unsupported config file format: %s", ErrInvalidFormat, ext)
 	}
 
 	mergeEnvVars(config)
@@ -54,7 +54,7 @@ func SaveConfig(config *Config, configPath string) error {
 	// 确保目录存在
 	dir := filepath.Dir(configPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("创建配置目录失败: %w", err)
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	ext := filepath.Ext(configPath)
@@ -67,15 +67,15 @@ func SaveConfig(config *Config, configPath string) error {
 	case ".yaml", ".yml":
 		data, err = yaml.Marshal(config)
 	default:
-		return fmt.Errorf("%w: 不支持的配置文件格式: %s", ErrInvalidFormat, ext)
+		return fmt.Errorf("%w: unsupported config file format: %s", ErrInvalidFormat, ext)
 	}
 
 	if err != nil {
-		return fmt.Errorf("序列化配置失败: %w", err)
+		return fmt.Errorf("config serialization failed: %w", err)
 	}
 
 	if err := os.WriteFile(configPath, data, 0644); err != nil {
-		return fmt.Errorf("写入配置文件失败: %w", err)
+		return fmt.Errorf("failed to write config file: %w", err)
 	}
 
 	return nil

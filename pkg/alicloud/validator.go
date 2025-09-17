@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// 实现 Validator 接口
+// Implements Validator interface
 type validator struct{}
 
 // NewValidator 创建验证器
@@ -23,7 +23,7 @@ func (v *validator) ValidateBillingCycle(billingCycle string) error {
 	// 验证格式 YYYY-MM
 	_, err := time.Parse("2006-01", billingCycle)
 	if err != nil {
-		return fmt.Errorf("%w: expected YYYY-MM format, got %s", 
+		return fmt.Errorf("%w: expected YYYY-MM format, got %s",
 			ErrInvalidBillingCycle, billingCycle)
 	}
 
@@ -31,16 +31,16 @@ func (v *validator) ValidateBillingCycle(billingCycle string) error {
 	billingTime, _ := time.Parse("2006-01", billingCycle)
 	now := time.Now()
 	currentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	
+
 	if billingTime.After(currentMonth) {
-		return fmt.Errorf("%w: billing cycle %s is in the future", 
+		return fmt.Errorf("%w: billing cycle %s is in the future",
 			ErrFutureBillingCycle, billingCycle)
 	}
 
 	// 验证不能太早（2018年之前）
 	minTime := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
 	if billingTime.Before(minTime) {
-		return fmt.Errorf("%w: billing cycle %s is before 2018", 
+		return fmt.Errorf("%w: billing cycle %s is before 2018",
 			ErrTooOldBillingCycle, billingCycle)
 	}
 
@@ -56,7 +56,7 @@ func (v *validator) ValidateBillingDate(billingDate string) error {
 	// 验证格式 YYYY-MM-DD
 	_, err := time.Parse("2006-01-02", billingDate)
 	if err != nil {
-		return fmt.Errorf("%w: expected YYYY-MM-DD format, got %s", 
+		return fmt.Errorf("%w: expected YYYY-MM-DD format, got %s",
 			ErrInvalidBillingDate, billingDate)
 	}
 
@@ -64,16 +64,16 @@ func (v *validator) ValidateBillingDate(billingDate string) error {
 	billingTime, _ := time.Parse("2006-01-02", billingDate)
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	
+
 	if billingTime.After(today) {
-		return fmt.Errorf("%w: billing date %s is in the future", 
+		return fmt.Errorf("%w: billing date %s is in the future",
 			ErrInvalidBillingDate, billingDate)
 	}
 
 	// 验证不能太早（2018年之前）
 	minTime := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
 	if billingTime.Before(minTime) {
-		return fmt.Errorf("%w: billing date %s is before 2018", 
+		return fmt.Errorf("%w: billing date %s is before 2018",
 			ErrInvalidBillingDate, billingDate)
 	}
 
@@ -86,7 +86,7 @@ func (v *validator) ValidateGranularity(granularity string) error {
 	case "MONTHLY", "DAILY", "BOTH":
 		return nil
 	default:
-		return fmt.Errorf("%w: expected MONTHLY, DAILY, or BOTH, got %s", 
+		return fmt.Errorf("%w: expected MONTHLY, DAILY, or BOTH, got %s",
 			ErrInvalidGranularity, granularity)
 	}
 }
@@ -116,7 +116,7 @@ func (v *validator) ValidateRequest(req *DescribeInstanceBillRequest) error {
 
 	// 验证账单日期与粒度的一致性
 	if req.Granularity == "DAILY" && req.BillingDate == "" {
-		return NewValidationError("BillingDate", req.BillingDate, 
+		return NewValidationError("BillingDate", req.BillingDate,
 			"BillingDate is required when Granularity is DAILY")
 	}
 
@@ -127,7 +127,7 @@ func (v *validator) ValidateRequest(req *DescribeInstanceBillRequest) error {
 			expectedMonth := billingDate.Format("2006-01")
 			if expectedMonth != req.BillingCycle {
 				return NewValidationError("BillingDate", req.BillingDate,
-					fmt.Sprintf("BillingDate (%s) must be in the same month as BillingCycle (%s)", 
+					fmt.Sprintf("BillingDate (%s) must be in the same month as BillingCycle (%s)",
 						req.BillingDate, req.BillingCycle))
 			}
 		}
@@ -135,7 +135,7 @@ func (v *validator) ValidateRequest(req *DescribeInstanceBillRequest) error {
 
 	// 验证分页参数
 	if req.MaxResults != 0 && (req.MaxResults < 1 || req.MaxResults > 300) {
-		return NewValidationError("MaxResults", req.MaxResults, 
+		return NewValidationError("MaxResults", req.MaxResults,
 			"MaxResults must be between 1 and 300")
 	}
 
@@ -184,7 +184,7 @@ func (v *validator) ValidateTableName(tableName string) error {
 			(char >= 'A' && char <= 'Z') ||
 			(char >= '0' && char <= '9') ||
 			char == '_') {
-			return fmt.Errorf("%w: table name contains invalid character '%c'", 
+			return fmt.Errorf("%w: table name contains invalid character '%c'",
 				ErrInvalidTableName, char)
 		}
 	}
@@ -239,7 +239,7 @@ func GenerateDatesInMonth(billingCycle string) ([]string, error) {
 	// 生成日期列表
 	var dates []string
 	current := firstDay
-	
+
 	for current.Day() <= lastDay.Day() {
 		dates = append(dates, current.Format("2006-01-02"))
 		current = current.AddDate(0, 0, 1)
@@ -267,18 +267,18 @@ func IsValidGranularity(granularity string) bool {
 func NormalizeBillingCycle(billingCycle string) (string, error) {
 	// 去除空格
 	billingCycle = strings.TrimSpace(billingCycle)
-	
+
 	// 验证格式
 	if err := ValidateBillingCycle(billingCycle); err != nil {
 		return "", err
 	}
-	
+
 	// 解析并重新格式化
 	t, err := time.Parse("2006-01", billingCycle)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return t.Format("2006-01"), nil
 }
 
@@ -287,21 +287,21 @@ func NormalizeBillingDate(billingDate string) (string, error) {
 	if billingDate == "" {
 		return "", nil
 	}
-	
+
 	// 去除空格
 	billingDate = strings.TrimSpace(billingDate)
-	
+
 	// 验证格式
 	if err := ValidateBillingDate(billingDate); err != nil {
 		return "", err
 	}
-	
+
 	// 解析并重新格式化
 	t, err := time.Parse("2006-01-02", billingDate)
 	if err != nil {
 		return "", err
 	}
-	
+
 	return t.Format("2006-01-02"), nil
 }
 
@@ -319,7 +319,7 @@ func GetPreviousBillingCycle(billingCycle string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid billing cycle format: %w", err)
 	}
-	
+
 	previous := t.AddDate(0, -1, 0)
 	return previous.Format("2006-01"), nil
 }
@@ -330,7 +330,7 @@ func GetNextBillingCycle(billingCycle string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid billing cycle format: %w", err)
 	}
-	
+
 	next := t.AddDate(0, 1, 0)
 	return next.Format("2006-01"), nil
 }

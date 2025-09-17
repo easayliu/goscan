@@ -3,9 +3,11 @@ package alicloud
 import (
 	"context"
 	"fmt"
-	"log"
+	"goscan/pkg/logger"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // SyncManager 同步管理器实现
@@ -22,7 +24,7 @@ func NewSyncManager(service *BillService) SyncManager {
 func (sm *syncManager) SyncData(ctx context.Context, req *SyncRequest) (*SyncResult, error) {
 	start := time.Now()
 	result := &SyncResult{
-		Success: false,
+		Success:  false,
 		Duration: 0,
 	}
 
@@ -59,7 +61,7 @@ func (sm *syncManager) SyncData(ctx context.Context, req *SyncRequest) (*SyncRes
 func (sm *syncManager) IntelligentSync(ctx context.Context, params *IntelligentSyncParams) (*SyncResult, error) {
 	start := time.Now()
 	result := &SyncResult{
-		Success: false,
+		Success:  false,
 		Duration: 0,
 	}
 
@@ -76,7 +78,9 @@ func (sm *syncManager) IntelligentSync(ctx context.Context, params *IntelligentS
 			result.Success = true
 			result.Duration = time.Since(start)
 			result.Details = checkResult
-			log.Printf("[阿里云智能同步] %s", checkResult.Summary)
+			logger.Info("intelligent sync completed",
+				zap.String("provider", "alicloud"),
+				zap.String("summary", checkResult.Summary))
 			return result, nil
 		}
 
@@ -95,7 +99,7 @@ func (sm *syncManager) IntelligentSync(ctx context.Context, params *IntelligentS
 			Period:      params.Period,
 			Options:     params.SyncOptions,
 		}
-		
+
 		return sm.SyncData(ctx, req)
 	}
 
@@ -142,7 +146,7 @@ func (sm *syncManager) validateSyncRequest(req *SyncRequest) error {
 	case "BOTH":
 		// BOTH 粒度的特殊格式处理
 		if !strings.Contains(req.Period, ",") {
-			return NewValidationError("period", req.Period, 
+			return NewValidationError("period", req.Period,
 				"BOTH granularity requires period format: 'yesterday:YYYY-MM-DD,last_month:YYYY-MM'")
 		}
 	}
@@ -152,7 +156,9 @@ func (sm *syncManager) validateSyncRequest(req *SyncRequest) error {
 
 // syncMonthlyBillDataImpl 同步按月账单数据的实现
 func (sm *syncManager) syncMonthlyBillDataImpl(ctx context.Context, billingCycle string, options *SyncOptions) error {
-	log.Printf("[阿里云按月同步] 开始同步账期: %s", billingCycle)
+	logger.Info("monthly sync started",
+		zap.String("provider", "alicloud"),
+		zap.String("period", billingCycle))
 
 	// 验证账期
 	if err := ValidateBillingCycle(billingCycle); err != nil {
@@ -175,13 +181,15 @@ func (sm *syncManager) syncMonthlyBillDataImpl(ctx context.Context, billingCycle
 		tableName = options.DistributedTableName
 	}
 
-	return sm.executePaginatedSyncImpl(ctx, paginator, processor, tableName, 
+	return sm.executePaginatedSyncImpl(ctx, paginator, processor, tableName,
 		fmt.Sprintf("[阿里云按月同步] 账期 %s", billingCycle))
 }
 
 // syncDailyBillDataImpl 同步按天账单数据的实现
 func (sm *syncManager) syncDailyBillDataImpl(ctx context.Context, billingCycle string, options *SyncOptions) error {
-	log.Printf("[阿里云按天同步] 开始同步账期: %s", billingCycle)
+	logger.Info("daily sync started",
+		zap.String("provider", "alicloud"),
+		zap.String("period", billingCycle))
 
 	// 验证账期
 	if err := ValidateBillingCycle(billingCycle); err != nil {
@@ -194,7 +202,10 @@ func (sm *syncManager) syncDailyBillDataImpl(ctx context.Context, billingCycle s
 		return fmt.Errorf("failed to generate dates for cycle %s: %w", billingCycle, err)
 	}
 
-	log.Printf("[阿里云按天同步] 账期 %s 包含 %d 天", billingCycle, len(dates))
+	logger.Info("daily sync dates generated",
+		zap.String("provider", "alicloud"),
+		zap.String("period", billingCycle),
+		zap.Int("total_days", len(dates)))
 
 	// 创建数据处理器
 	processor := NewProcessor(sm.service.chClient, options)
@@ -209,7 +220,11 @@ func (sm *syncManager) syncDailyBillDataImpl(ctx context.Context, billingCycle s
 
 	// 按天循环获取数据
 	for i, date := range dates {
-		log.Printf("[阿里云按天同步] 同步日期 %s (%d/%d)", date, i+1, len(dates))
+		logger.Debug("processing daily sync",
+			zap.String("provider", "alicloud"),
+			zap.String("date", date),
+			zap.Int("current", i+1),
+			zap.Int("total", len(dates)))
 
 		// 创建分页器（每天的数据）
 		paginator := NewPaginator(sm.service.aliClient, &DescribeInstanceBillRequest{
@@ -221,13 +236,19 @@ func (sm *syncManager) syncDailyBillDataImpl(ctx context.Context, billingCycle s
 
 		dayRecords, err := sm.syncDayDataImpl(ctx, paginator, processor, tableName, date)
 		if err != nil {
-			log.Printf("[阿里云按天同步] 日期 %s 同步失败: %v", date, err)
+			logger.Error("daily sync failed for date",
+				zap.String("provider", "alicloud"),
+				zap.String("date", date),
+				zap.Error(err))
 			continue // 跳过这一天，继续下一天
 		}
 
 		totalRecords += dayRecords
 		if dayRecords > 0 {
-			log.Printf("[阿里云按天同步] 日期 %s 同步完成，%d 条记录", date, dayRecords)
+			logger.Debug("daily sync completed for date",
+				zap.String("provider", "alicloud"),
+				zap.String("date", date),
+				zap.Int("rows", dayRecords))
 		}
 
 		// 简单的延迟，避免API调用过于频繁
@@ -240,13 +261,18 @@ func (sm *syncManager) syncDailyBillDataImpl(ctx context.Context, billingCycle s
 		}
 	}
 
-	log.Printf("[阿里云按天同步] 账期 %s 同步完成，共同步 %d 条记录", billingCycle, totalRecords)
+	logger.Info("daily sync completed",
+		zap.String("provider", "alicloud"),
+		zap.String("period", billingCycle),
+		zap.Int("total_records", totalRecords))
 	return nil
 }
 
 // syncSpecificDayBillDataImpl 同步指定日期的天表数据的实现
 func (sm *syncManager) syncSpecificDayBillDataImpl(ctx context.Context, billingDate string, options *SyncOptions) error {
-	log.Printf("[阿里云指定日期同步] 开始同步日期: %s", billingDate)
+	logger.Info("specific date sync started",
+		zap.String("provider", "alicloud"),
+		zap.String("date", billingDate))
 
 	// 验证日期格式
 	date, err := time.Parse("2006-01-02", billingDate)
@@ -284,13 +310,18 @@ func (sm *syncManager) syncSpecificDayBillDataImpl(ctx context.Context, billingD
 		return fmt.Errorf("failed to sync data for date %s: %w", billingDate, err)
 	}
 
-	log.Printf("[阿里云指定日期同步] 日期 %s 同步完成，共同步 %d 条记录", billingDate, totalRecords)
+	logger.Info("specific date sync completed",
+		zap.String("provider", "alicloud"),
+		zap.String("date", billingDate),
+		zap.Int("total_records", totalRecords))
 	return nil
 }
 
 // syncBothGranularityDataImpl 同步两种粒度的数据的实现
 func (sm *syncManager) syncBothGranularityDataImpl(ctx context.Context, billingCycle string, options *SyncOptions) error {
-	log.Printf("[阿里云双粒度同步] 开始同步账期: %s", billingCycle)
+	logger.Info("dual granularity sync started",
+		zap.String("provider", "alicloud"),
+		zap.String("period", billingCycle))
 
 	// 先同步按月数据
 	monthlyOptions := *options
@@ -312,7 +343,9 @@ func (sm *syncManager) syncBothGranularityDataImpl(ctx context.Context, billingC
 		return fmt.Errorf("failed to sync daily data: %w", err)
 	}
 
-	log.Printf("[阿里云双粒度同步] 账期 %s 双粒度同步完成", billingCycle)
+	logger.Info("dual granularity sync completed",
+		zap.String("provider", "alicloud"),
+		zap.String("period", billingCycle))
 	return nil
 }
 
@@ -368,7 +401,10 @@ func (sm *syncManager) executePaginatedSyncImpl(ctx context.Context, paginator P
 		}
 
 		totalRecords += len(response.Data.Items)
-		log.Printf("%s 已同步 %d 条记录", logPrefix, totalRecords)
+		logger.Debug("sync progress",
+			zap.String("provider", "alicloud"),
+			zap.String("operation", logPrefix),
+			zap.Int("records", totalRecords))
 
 		// 检查是否还有更多数据
 		if !paginator.HasNext() {
@@ -376,7 +412,10 @@ func (sm *syncManager) executePaginatedSyncImpl(ctx context.Context, paginator P
 		}
 	}
 
-	log.Printf("%s 同步完成，共同步 %d 条记录", logPrefix, totalRecords)
+	logger.Info("sync task completed",
+		zap.String("provider", "alicloud"),
+		zap.String("operation", logPrefix),
+		zap.Int("total_records", totalRecords))
 	return nil
 }
 
@@ -389,14 +428,17 @@ func (sm *syncManager) executeIntelligentCleanupAndSyncImpl(ctx context.Context,
 
 	if result.NeedCleanup {
 		// 需要先清理数据
-		log.Printf("[阿里云智能同步] 检测到数据不一致，先清理 %s %s 的数据",
-			result.Granularity, result.Period)
+		logger.Warn("data inconsistency detected, cleanup required",
+			zap.String("provider", "alicloud"),
+			zap.String("granularity", result.Granularity),
+			zap.String("period", result.Period))
 
 		if err := sm.service.CleanSpecificPeriodData(ctx, result.Granularity, result.Period); err != nil {
 			return fmt.Errorf("failed to clean data before sync: %w", err)
 		}
 
-		log.Printf("[阿里云智能同步] 数据清理完成，开始同步新数据")
+		logger.Info("pre-sync cleanup completed",
+			zap.String("provider", "alicloud"))
 	}
 
 	// 执行同步

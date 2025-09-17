@@ -26,7 +26,7 @@ func (qe *queryExecutor) Exec(ctx context.Context, query string, args ...interfa
 	if qe.conn == nil {
 		return WrapConnectionError(fmt.Errorf("connection is nil"))
 	}
-	
+
 	if err := qe.conn.Exec(ctx, query, args...); err != nil {
 		return WrapError("exec", "", err)
 	}
@@ -38,7 +38,7 @@ func (qe *queryExecutor) Query(ctx context.Context, query string, args ...interf
 	if qe.conn == nil {
 		return nil, WrapConnectionError(fmt.Errorf("connection is nil"))
 	}
-	
+
 	rows, err := qe.conn.Query(ctx, query, args...)
 	if err != nil {
 		return nil, WrapError("query", "", err)
@@ -52,7 +52,7 @@ func (qe *queryExecutor) QueryRow(ctx context.Context, query string, args ...int
 		// 这里不能返回nil，因为driver.Row是接口，需要返回一个错误的实现
 		return &errorRow{err: WrapConnectionError(fmt.Errorf("connection is nil"))}
 	}
-	
+
 	return qe.conn.QueryRow(ctx, query, args...)
 }
 
@@ -77,7 +77,7 @@ func (er *errorRow) Err() error {
 func (qe *queryExecutor) QueryWithTimeout(timeout time.Duration, query string, args ...interface{}) (driver.Rows, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	return qe.Query(ctx, query, args...)
 }
 
@@ -85,7 +85,7 @@ func (qe *queryExecutor) QueryWithTimeout(timeout time.Duration, query string, a
 func (qe *queryExecutor) ExecWithTimeout(timeout time.Duration, query string, args ...interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	return qe.Exec(ctx, query, args...)
 }
 
@@ -93,7 +93,7 @@ func (qe *queryExecutor) ExecWithTimeout(timeout time.Duration, query string, ar
 func (qe *queryExecutor) QueryRowWithTimeout(timeout time.Duration, query string, args ...interface{}) driver.Row {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	
+
 	return qe.QueryRow(ctx, query, args...)
 }
 
@@ -102,10 +102,10 @@ func ValidateQuery(query string) error {
 	if strings.TrimSpace(query) == "" {
 		return fmt.Errorf("query cannot be empty")
 	}
-	
+
 	// 移除注释和多余空格
 	cleanQuery := strings.TrimSpace(strings.ToUpper(query))
-	
+
 	// 检查危险操作
 	dangerousOps := []string{
 		"DROP DATABASE",
@@ -113,13 +113,13 @@ func ValidateQuery(query string) error {
 		"TRUNCATE TABLE",
 		"DELETE FROM",
 	}
-	
+
 	for _, op := range dangerousOps {
 		if strings.Contains(cleanQuery, op) {
 			return fmt.Errorf("potentially dangerous operation detected: %s", op)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -128,12 +128,12 @@ func BuildInsertQuery(tableName string, columns []string) string {
 	if len(columns) == 0 {
 		return ""
 	}
-	
+
 	placeholders := make([]string, len(columns))
 	for i := range placeholders {
 		placeholders[i] = "?"
 	}
-	
+
 	return fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)",
 		tableName,
 		joinStrings(columns, ", "),
@@ -143,15 +143,15 @@ func BuildInsertQuery(tableName string, columns []string) string {
 // BuildSelectQuery 构建查询语句
 func BuildSelectQuery(tableName string, columns []string, conditions map[string]interface{}, limit int) string {
 	query := "SELECT "
-	
+
 	if len(columns) == 0 {
 		query += "*"
 	} else {
 		query += joinStrings(columns, ", ")
 	}
-	
+
 	query += " FROM " + tableName
-	
+
 	if len(conditions) > 0 {
 		var conditionParts []string
 		for key := range conditions {
@@ -159,11 +159,11 @@ func BuildSelectQuery(tableName string, columns []string, conditions map[string]
 		}
 		query += " WHERE " + joinStrings(conditionParts, " AND ")
 	}
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
-	
+
 	return query
 }
 
@@ -172,15 +172,15 @@ func BuildUpdateQuery(tableName string, updates map[string]interface{}, conditio
 	if len(updates) == 0 {
 		return ""
 	}
-	
+
 	query := "ALTER TABLE " + tableName + " UPDATE "
-	
+
 	var setParts []string
 	for key := range updates {
 		setParts = append(setParts, key+" = ?")
 	}
 	query += joinStrings(setParts, ", ")
-	
+
 	if len(conditions) > 0 {
 		var conditionParts []string
 		for key := range conditions {
@@ -188,14 +188,14 @@ func BuildUpdateQuery(tableName string, updates map[string]interface{}, conditio
 		}
 		query += " WHERE " + joinStrings(conditionParts, " AND ")
 	}
-	
+
 	return query
 }
 
 // BuildDeleteQuery 构建删除语句
 func BuildDeleteQuery(tableName string, conditions map[string]interface{}) string {
 	query := "DELETE FROM " + tableName
-	
+
 	if len(conditions) > 0 {
 		var conditionParts []string
 		for key := range conditions {
@@ -203,7 +203,7 @@ func BuildDeleteQuery(tableName string, conditions map[string]interface{}) strin
 		}
 		query += " WHERE " + joinStrings(conditionParts, " AND ")
 	}
-	
+
 	return query
 }
 
@@ -212,12 +212,12 @@ func ExtractColumnsFromData(data []map[string]interface{}) []string {
 	if len(data) == 0 {
 		return nil
 	}
-	
+
 	columns := make([]string, 0, len(data[0]))
 	for column := range data[0] {
 		columns = append(columns, column)
 	}
-	
+
 	return columns
 }
 
@@ -269,25 +269,25 @@ func (qe *queryExecutor) ExecuteWithStats(ctx context.Context, query string, arg
 	stats := &QueryStats{
 		QueryType: getQueryType(query),
 	}
-	
+
 	start := time.Now()
 	defer func() {
 		stats.Duration = time.Since(start)
 	}()
-	
+
 	err := qe.Exec(ctx, query, args...)
 	if err != nil {
 		stats.Error = err
 		return stats, err
 	}
-	
+
 	return stats, nil
 }
 
 // getQueryType 获取查询类型
 func getQueryType(query string) string {
 	query = strings.TrimSpace(strings.ToUpper(query))
-	
+
 	if strings.HasPrefix(query, "SELECT") {
 		return "SELECT"
 	} else if strings.HasPrefix(query, "INSERT") {

@@ -232,7 +232,7 @@ type BillDetail struct {
 // ToDBMap 转换为数据库插入映射
 func (bd *BillDetail) ToDBMap() map[string]interface{} {
 	data := make(map[string]interface{})
-	
+
 	// 使用反射或手动映射关键字段
 	data["BillDetailId"] = bd.BillDetailID
 	data["BillID"] = bd.BillID
@@ -329,17 +329,16 @@ func (bd *BillDetail) ToDBMap() map[string]interface{} {
 	data["OriginalOrderNo"] = bd.OriginalOrderNo
 	data["EffectiveFactor"] = bd.EffectiveFactor
 	data["ExpandField"] = bd.ExpandField
-	
+
 	return data
 }
 
-
 // TableHealthStatus 表健康状态
 type TableHealthStatus struct {
-	LocalTableExists       bool `json:"local_table_exists"`
-	DistributedTableExists bool `json:"distributed_table_exists"`
-	IsHealthy              bool `json:"is_healthy"`
-	NeedsRepair            bool `json:"needs_repair"`
+	LocalTableExists       bool   `json:"local_table_exists"`
+	DistributedTableExists bool   `json:"distributed_table_exists"`
+	IsHealthy              bool   `json:"is_healthy"`
+	NeedsRepair            bool   `json:"needs_repair"`
 	ErrorMessage           string `json:"error_message,omitempty"`
 }
 
@@ -349,8 +348,8 @@ func (ths *TableHealthStatus) String() string {
 	if !ths.IsHealthy {
 		status = "异常"
 	}
-	
-	return fmt.Sprintf("表状态: %s, 本地表: %v, 分布式表: %v, 需要修复: %v", 
+
+	return fmt.Sprintf("表状态: %s, 本地表: %v, 分布式表: %v, 需要修复: %v",
 		status, ths.LocalTableExists, ths.DistributedTableExists, ths.NeedsRepair)
 }
 
@@ -375,20 +374,20 @@ type IntelligentSyncOptions struct {
 
 // InitialPullResult 初始拉取结果
 type InitialPullResult struct {
-	PullResults      []*SyncResult `json:"pull_results"`
-	TotalPeriods     int           `json:"total_periods"`
-	SuccessfulPulls  int           `json:"successful_pulls"`
-	FailedPulls      int           `json:"failed_pulls"`
-	TotalRecords     int           `json:"total_records"`
-	Duration         time.Duration `json:"duration"`
-	Strategy         *PullStrategy `json:"strategy"`
+	PullResults     []*SyncResult `json:"pull_results"`
+	TotalPeriods    int           `json:"total_periods"`
+	SuccessfulPulls int           `json:"successful_pulls"`
+	FailedPulls     int           `json:"failed_pulls"`
+	TotalRecords    int           `json:"total_records"`
+	Duration        time.Duration `json:"duration"`
+	Strategy        *PullStrategy `json:"strategy"`
 }
 
 // ValidationResult 验证结果
 type ValidationResult struct {
-	IsValid      bool     `json:"is_valid"`
-	Issues       []string `json:"issues"`
-	Suggestions  []string `json:"suggestions"`
+	IsValid     bool     `json:"is_valid"`
+	Issues      []string `json:"issues"`
+	Suggestions []string `json:"suggestions"`
 }
 
 // PullStrategy 拉取策略
@@ -402,16 +401,16 @@ type PullStrategy struct {
 
 // SmartBillResponse 智能账单响应
 type SmartBillResponse struct {
-	Bills        []BillDetail      `json:"bills"`
-	Summary      BillSummary       `json:"summary"`
-	FilteredFrom []string          `json:"filtered_from"`
-	DateRange    string            `json:"date_range"`
+	Bills        []BillDetail `json:"bills"`
+	Summary      BillSummary  `json:"summary"`
+	FilteredFrom []string     `json:"filtered_from"`
+	DateRange    string       `json:"date_range"`
 }
 
 // BillSummary 账单汇总
 type BillSummary struct {
-	TotalRecords    int     `json:"total_records"`
-	TotalAmount     string  `json:"total_amount"`
-	PeriodsCovered  []string `json:"periods_covered"`
-	TopProducts     []string `json:"top_products"`
+	TotalRecords   int      `json:"total_records"`
+	TotalAmount    string   `json:"total_amount"`
+	PeriodsCovered []string `json:"periods_covered"`
+	TopProducts    []string `json:"top_products"`
 }

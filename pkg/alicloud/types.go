@@ -17,7 +17,7 @@ type (
 	// DescribeInstanceBillRequest 请求类型已迁移到 request.go
 	// DescribeInstanceBillResponse 响应类型已迁移到 response.go
 	// BillInstanceResult 结果类型已迁移到 response.go
-	
+
 	// 为保持向后兼容性，保留这些别名
 	AliCloudBillRequest  = DescribeInstanceBillRequest
 	AliCloudBillResponse = DescribeInstanceBillResponse

@@ -2,13 +2,13 @@ package config
 
 import "fmt"
 
-// SchedulerConfig 调度器配置
+// SchedulerConfig represents the scheduler configuration
 type SchedulerConfig struct {
 	Enabled bool           `json:"enabled" yaml:"enabled"`
 	Jobs    []ScheduledJob `json:"jobs" yaml:"jobs"`
 }
 
-// ScheduledJob 调度任务配置
+// ScheduledJob represents a scheduled job configuration
 type ScheduledJob struct {
 	Name     string    `json:"name" yaml:"name"`
 	Provider string    `json:"provider" yaml:"provider"`
@@ -16,7 +16,7 @@ type ScheduledJob struct {
 	Config   JobConfig `json:"config" yaml:"config"`
 }
 
-// JobConfig 任务配置
+// JobConfig represents job-specific configuration
 type JobConfig struct {
 	SyncMode       string `json:"sync_mode" yaml:"sync_mode"`
 	UseDistributed bool   `json:"use_distributed" yaml:"use_distributed"`
@@ -25,26 +25,28 @@ type JobConfig struct {
 	Granularity    string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
 }
 
-// RuntimeConfig 运行时配置
+// RuntimeConfig represents runtime configuration settings
 type RuntimeConfig struct {
 	MaxConcurrentTasks      int `json:"max_concurrent_tasks" yaml:"max_concurrent_tasks"`
 	TaskTimeout             int `json:"task_timeout" yaml:"task_timeout"`                           // seconds
 	GracefulShutdownTimeout int `json:"graceful_shutdown_timeout" yaml:"graceful_shutdown_timeout"` // seconds
 }
 
-// ServerConfig 服务器配置
+// ServerConfig represents server configuration settings
 type ServerConfig struct {
 	Port    int    `json:"port" yaml:"port"`
 	Address string `json:"address" yaml:"address"`
 }
 
-// AppConfig 应用配置
+// AppConfig represents application configuration settings
 type AppConfig struct {
-	LogLevel string `json:"log_level" yaml:"log_level"`
-	LogFile  string `json:"log_file" yaml:"log_file"`
+	LogLevel    string `json:"log_level" yaml:"log_level"`
+	LogFile     string `json:"log_file" yaml:"log_file"`
+	Environment string `json:"environment" yaml:"environment"`
+	LogPath     string `json:"log_path" yaml:"log_path"`
 }
 
-// NewSchedulerConfig 创建调度器配置，使用环境变量填充默认值
+// NewSchedulerConfig creates a scheduler configuration with default values populated from environment variables
 func NewSchedulerConfig() *SchedulerConfig {
 	return &SchedulerConfig{
 		Enabled: getEnvBool("SCHEDULER_ENABLED", true),
@@ -52,7 +54,7 @@ func NewSchedulerConfig() *SchedulerConfig {
 	}
 }
 
-// NewRuntimeConfig 创建运行时配置，使用环境变量填充默认值
+// NewRuntimeConfig creates a runtime configuration with default values populated from environment variables
 func NewRuntimeConfig() *RuntimeConfig {
 	return &RuntimeConfig{
 		MaxConcurrentTasks:      getEnvInt("RUNTIME_MAX_CONCURRENT_TASKS", 3),
@@ -61,7 +63,7 @@ func NewRuntimeConfig() *RuntimeConfig {
 	}
 }
 
-// NewServerConfig 创建服务器配置，使用环境变量填充默认值
+// NewServerConfig creates a server configuration with default values populated from environment variables
 func NewServerConfig() *ServerConfig {
 	return &ServerConfig{
 		Port:    getEnvInt("SERVER_PORT", 8080),
@@ -69,7 +71,7 @@ func NewServerConfig() *ServerConfig {
 	}
 }
 
-// NewAppConfig 创建应用配置，使用环境变量填充默认值
+// NewAppConfig creates an application configuration with default values populated from environment variables
 func NewAppConfig() *AppConfig {
 	return &AppConfig{
 		LogLevel: getEnv("LOG_LEVEL", "info"),
@@ -77,10 +79,10 @@ func NewAppConfig() *AppConfig {
 	}
 }
 
-// Validate 验证调度器配置
+// Validate validates the scheduler configuration
 func (sc *SchedulerConfig) Validate() error {
 	if !sc.Enabled {
-		return nil // 如果未启用，跳过验证
+		return nil // skip validation if not enabled
 	}
 
 	for i, job := range sc.Jobs {
@@ -92,7 +94,7 @@ func (sc *SchedulerConfig) Validate() error {
 	return nil
 }
 
-// Validate 验证单个调度任务
+// Validate validates a single scheduled job
 func (sj *ScheduledJob) Validate() error {
 	if sj.Name == "" {
 		return ErrMissingRequired
@@ -106,7 +108,7 @@ func (sj *ScheduledJob) Validate() error {
 		return ErrMissingRequired
 	}
 
-	// 简单的Cron表达式验证
+	// simple cron expression validation
 	if !isValidCronExpression(sj.Cron) {
 		return ErrInvalidCron
 	}
@@ -114,9 +116,9 @@ func (sj *ScheduledJob) Validate() error {
 	return sj.Config.Validate()
 }
 
-// Validate 验证任务配置
+// Validate validates job configuration
 func (jc *JobConfig) Validate() error {
-	// 验证同步模式
+	// validate sync mode
 	if jc.SyncMode != "" {
 		validSyncModes := []string{"all_periods", "current_period", "range"}
 		if !isValidValue(jc.SyncMode, validSyncModes) {
@@ -124,7 +126,7 @@ func (jc *JobConfig) Validate() error {
 		}
 	}
 
-	// 验证粒度
+	// validate granularity
 	if jc.Granularity != "" {
 		validGranularities := []string{"monthly", "daily", "both"}
 		if !isValidValue(jc.Granularity, validGranularities) {
@@ -135,7 +137,7 @@ func (jc *JobConfig) Validate() error {
 	return nil
 }
 
-// Validate 验证运行时配置
+// Validate validates runtime configuration
 func (rc *RuntimeConfig) Validate() error {
 	if rc.MaxConcurrentTasks <= 0 {
 		rc.MaxConcurrentTasks = 3
@@ -152,7 +154,7 @@ func (rc *RuntimeConfig) Validate() error {
 	return nil
 }
 
-// Validate 验证服务器配置
+// Validate validates server configuration
 func (sc *ServerConfig) Validate() error {
 	if sc.Port <= 0 || sc.Port > 65535 {
 		return ErrInvalidValue
@@ -165,7 +167,7 @@ func (sc *ServerConfig) Validate() error {
 	return nil
 }
 
-// Validate 验证应用配置
+// Validate validates application configuration
 func (ac *AppConfig) Validate() error {
 	if ac.LogLevel != "" {
 		validLevels := []string{"debug", "info", "warn", "error", "fatal"}

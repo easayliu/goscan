@@ -2,47 +2,47 @@ package tasks
 
 import "errors"
 
-// 包级错误变量，用于统一错误处理
+// Package-level error variables for unified error handling
 var (
-	// ErrCredentialsNotConfigured 表示云服务凭证未配置
+	// ErrCredentialsNotConfigured indicates cloud provider credentials not configured
 	ErrCredentialsNotConfigured = errors.New("cloud provider credentials not configured")
-	
-	// ErrTableCreationFailed 表示数据表创建失败
+
+	// ErrTableCreationFailed indicates table creation failed
 	ErrTableCreationFailed = errors.New("failed to create table")
-	
-	// ErrSyncFailed 表示数据同步失败
+
+	// ErrSyncFailed indicates data synchronization failed
 	ErrSyncFailed = errors.New("data synchronization failed")
-	
-	// ErrTaskNotFound 表示任务未找到
+
+	// ErrTaskNotFound indicates task not found
 	ErrTaskNotFound = errors.New("task not found")
-	
-	// ErrTooManyTasks 表示运行的任务过多
+
+	// ErrTooManyTasks indicates too many running tasks
 	ErrTooManyTasks = errors.New("too many running tasks")
-	
-	// ErrInvalidTaskConfig 表示任务配置无效
+
+	// ErrInvalidTaskConfig indicates invalid task configuration
 	ErrInvalidTaskConfig = errors.New("invalid task configuration")
-	
-	// ErrTaskAlreadyRunning 表示任务已在运行
+
+	// ErrTaskAlreadyRunning indicates task already running
 	ErrTaskAlreadyRunning = errors.New("task already running")
-	
-	// ErrTaskCancelled 表示任务已被取消
+
+	// ErrTaskCancelled indicates task was cancelled
 	ErrTaskCancelled = errors.New("task was cancelled")
-	
-	// ErrInvalidPeriod 表示账期参数无效
+
+	// ErrInvalidPeriod indicates invalid billing period
 	ErrInvalidPeriod = errors.New("invalid billing period")
-	
-	// ErrDataValidationFailed 表示数据校验失败
+
+	// ErrDataValidationFailed indicates data validation failed
 	ErrDataValidationFailed = errors.New("data validation failed")
-	
-	// ErrProviderNotSupported 表示不支持的云服务提供商
+
+	// ErrProviderNotSupported indicates provider not supported
 	ErrProviderNotSupported = errors.New("provider not supported")
-	
-	// ErrContextCancelled 表示上下文已取消
+
+	// ErrContextCancelled indicates context cancelled
 	ErrContextCancelled = errors.New("context cancelled")
-	
-	// ErrDatabaseConnection 表示数据库连接失败
+
+	// ErrDatabaseConnection indicates database connection failed
 	ErrDatabaseConnection = errors.New("database connection failed")
-	
-	// ErrNotificationFailed 表示通知发送失败
+
+	// ErrNotificationFailed indicates notification delivery failed
 	ErrNotificationFailed = errors.New("notification delivery failed")
 )

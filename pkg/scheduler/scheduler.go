@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/config"
+	"goscan/pkg/logger"
 	"goscan/pkg/tasks"
-	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 )
 
 // Job statuses
@@ -65,7 +66,7 @@ type JobConfig struct {
 
 // NewTaskScheduler creates a new task scheduler
 func NewTaskScheduler(ctx context.Context, config *Config) (*TaskScheduler, error) {
-	slog.Info("Initializing task scheduler")
+	logger.Info("Initializing task scheduler")
 
 	// Create cron scheduler with logger
 	cronScheduler := cron.New(
@@ -91,13 +92,13 @@ func NewTaskScheduler(ctx context.Context, config *Config) (*TaskScheduler, erro
 		return nil, fmt.Errorf("failed to load configured jobs: %w", err)
 	}
 
-	slog.Info("Task scheduler initialized", "job_count", len(scheduler.jobs))
+	logger.Info("Task scheduler initialized", zap.Int("job_count", len(scheduler.jobs)))
 	return scheduler, nil
 }
 
 // Start starts the task scheduler
 func (ts *TaskScheduler) Start() error {
-	slog.Info("Starting task scheduler")
+	logger.Info("Starting task scheduler")
 
 	ts.cron.Start()
 
@@ -106,14 +107,14 @@ func (ts *TaskScheduler) Start() error {
 
 	// Keep scheduler running until context is cancelled
 	<-ts.ctx.Done()
-	slog.Info("Task scheduler context cancelled")
+	logger.Info("Task scheduler context cancelled")
 
 	return nil
 }
 
 // Shutdown gracefully shuts down the task scheduler
 func (ts *TaskScheduler) Shutdown(ctx context.Context) error {
-	slog.Info("Shutting down task scheduler")
+	logger.Info("Shutting down task scheduler")
 
 	// Stop accepting new jobs
 	cronCtx := ts.cron.Stop()
@@ -121,9 +122,9 @@ func (ts *TaskScheduler) Shutdown(ctx context.Context) error {
 	// Wait for running jobs to complete or timeout
 	select {
 	case <-cronCtx.Done():
-		slog.Info("All scheduled jobs completed")
+		logger.Info("All scheduled jobs completed")
 	case <-ctx.Done():
-		slog.Warn("Scheduler shutdown timeout, some jobs may still be running")
+		logger.Warn("Scheduler shutdown timeout, some jobs may still be running")
 	}
 
 	return nil
@@ -152,17 +153,17 @@ func (ts *TaskScheduler) AddJob(job *ScheduledJob) error {
 
 	// Update next run time
 	if err := ts.updateJobNextRunTime(job); err != nil {
-		slog.Warn("Failed to update next run time", "job", job.Name, "error", err)
+		logger.Warn("Failed to update next run time", zap.String("job_name", job.Name), zap.Error(err))
 	}
 
 	ts.jobs[job.ID] = job
 
-	slog.Info("Added scheduled job",
-		"id", job.ID,
-		"name", job.Name,
-		"cron", job.Cron,
-		"provider", job.Provider,
-		"next_run", job.NextRun,
+	logger.Info("Added scheduled job",
+		zap.String("job_id", job.ID),
+		zap.String("job_name", job.Name),
+		zap.String("cron", job.Cron),
+		zap.String("provider", job.Provider),
+		zap.Time("next_run", job.NextRun),
 	)
 
 	return nil
@@ -184,7 +185,7 @@ func (ts *TaskScheduler) RemoveJob(jobID string) error {
 	// Remove from jobs map
 	delete(ts.jobs, jobID)
 
-	slog.Info("Removed scheduled job", "id", jobID, "name", job.Name)
+	logger.Info("Removed scheduled job", zap.String("job_id", jobID), zap.String("job_name", job.Name))
 	return nil
 }
 
@@ -233,12 +234,12 @@ func (ts *TaskScheduler) GetStatus() map[string]interface{} {
 
 // loadConfiguredJobs loads predefined jobs from configuration
 func (ts *TaskScheduler) loadConfiguredJobs() error {
-	// 首先加载配置文件中定义的任务
+	// First load tasks defined in configuration file
 	if ts.config.Config.Scheduler != nil && ts.config.Config.Scheduler.Enabled && len(ts.config.Config.Scheduler.Jobs) > 0 {
-		slog.Info("Loading jobs from configuration file", "count", len(ts.config.Config.Scheduler.Jobs))
+		logger.Info("Loading jobs from configuration file", zap.Int("count", len(ts.config.Config.Scheduler.Jobs)))
 
 		for _, configJob := range ts.config.Config.Scheduler.Jobs {
-			// 将配置文件中的 ScheduledJob 转换为调度器的 ScheduledJob
+			// Convert ScheduledJob from configuration file to scheduler's ScheduledJob
 			job := &ScheduledJob{
 				Name:     configJob.Name,
 				Provider: configJob.Provider,
@@ -253,22 +254,22 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 			}
 
 			if err := ts.AddJob(job); err != nil {
-				slog.Warn("Failed to add configured job", "job", job.Name, "error", err)
+				logger.Warn("Failed to add configured job", zap.String("job_name", job.Name), zap.Error(err))
 			} else {
-				slog.Info("Added configured job", "name", job.Name, "provider", job.Provider, "cron", job.Cron)
+				logger.Info("Added configured job", zap.String("job_name", job.Name), zap.String("provider", job.Provider), zap.String("cron", job.Cron))
 			}
 		}
 
 		return nil
 	}
 
-	// 如果配置文件中没有任务或调度器未启用，则使用默认任务
-	slog.Info("No jobs found in configuration, loading default jobs")
+	// Use default tasks if no tasks in configuration file or scheduler not enabled
+	logger.Info("No jobs found in configuration, loading default jobs")
 	defaultJobs := ts.getDefaultJobs()
 
 	for _, job := range defaultJobs {
 		if err := ts.AddJob(job); err != nil {
-			slog.Warn("Failed to add default job", "job", job.Name, "error", err)
+			logger.Warn("Failed to add default job", zap.String("job_name", job.Name), zap.Error(err))
 		}
 	}
 
@@ -308,26 +309,26 @@ func (ts *TaskScheduler) getDefaultJobs() []*ScheduledJob {
 		})
 	}
 
-	// WeChat notification job (仅在没有配置文件定义的情况下使用默认任务)
+	// WeChat notification job (only use default task when no configuration file is defined)
 	if weChatCfg := ts.config.Config.GetWeChatConfig(); weChatCfg.Enabled && weChatCfg.WebhookURL != "" {
 		jobs = append(jobs, &ScheduledJob{
 			Name:     "daily_cost_report_notification",
-			Cron:     "0 9 * * *", // 默认每天上午9点
+			Cron:     "0 9 * * *", // Default daily at 9 AM
 			Provider: "notification",
 			Config: JobConfig{
-				SyncMode: "cost_report", // 特殊标识
+				SyncMode: "cost_report", // Special identifier
 			},
 		})
 	}
 
-	slog.Info("Generated default jobs", "count", len(jobs))
+	logger.Info("Generated default jobs", zap.Int("count", len(jobs)))
 	return jobs
 }
 
 // createJobFunction creates a function to execute for a scheduled job
 func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 	return func() {
-		slog.Info("Executing scheduled job", "id", job.ID, "name", job.Name, "provider", job.Provider)
+		logger.Info("Executing scheduled job", zap.String("job_id", job.ID), zap.String("job_name", job.Name), zap.String("provider", job.Provider))
 
 		// Update job status
 		ts.updateJobStatus(job, JobStatusRunning)
@@ -336,7 +337,7 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 		// Create task request based on provider type
 		var taskReq *tasks.TaskRequest
 		if job.Provider == "notification" {
-			// 创建通知任务
+			// Create notification task
 			taskReq = &tasks.TaskRequest{
 				ID:       uuid.New().String(),
 				Type:     tasks.TaskTypeNotification,
@@ -346,7 +347,7 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 				},
 			}
 		} else {
-			// 创建同步任务
+			// Create sync task
 			taskReq = &tasks.TaskRequest{
 				ID:       uuid.New().String(),
 				Type:     tasks.TaskTypeSync,
@@ -364,21 +365,21 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 		// Execute task
 		result, err := ts.taskMgr.ExecuteTask(ts.ctx, taskReq)
 		if err != nil {
-			slog.Error("Scheduled job failed", "job", job.Name, "error", err)
+			logger.Error("Scheduled job failed", zap.String("job_name", job.Name), zap.Error(err))
 			ts.updateJobStatus(job, JobStatusFailed)
 			return
 		}
 
 		// Check if result is not nil before accessing its fields
 		if result != nil {
-			slog.Info("Scheduled job completed successfully",
-				"job", job.Name,
-				"duration", result.Duration,
-				"records_processed", result.RecordsProcessed,
+			logger.Info("Scheduled job completed successfully",
+				zap.String("job_name", job.Name),
+				zap.Duration("duration", result.Duration),
+				zap.Int("records_processed", result.RecordsProcessed),
 			)
 		} else {
-			slog.Info("Scheduled job completed successfully",
-				"job", job.Name,
+			logger.Info("Scheduled job completed successfully",
+				zap.String("job_name", job.Name),
 			)
 		}
 
@@ -393,18 +394,18 @@ func (ts *TaskScheduler) logScheduledJobs() {
 	defer ts.jobsMutex.RUnlock()
 
 	if len(ts.jobs) == 0 {
-		slog.Info("No scheduled jobs configured")
+		logger.Info("No scheduled jobs configured")
 		return
 	}
 
-	slog.Info("Active scheduled jobs:")
+	logger.Info("Active scheduled jobs:")
 	for _, job := range ts.jobs {
-		slog.Info("Scheduled job",
-			"name", job.Name,
-			"provider", job.Provider,
-			"cron", job.Cron,
-			"next_run", job.NextRun,
-			"status", job.Status,
+		logger.Info("Scheduled job",
+			zap.String("job_name", job.Name),
+			zap.String("provider", job.Provider),
+			zap.String("cron", job.Cron),
+			zap.Time("next_run", job.NextRun),
+			zap.String("status", job.Status),
 		)
 	}
 }

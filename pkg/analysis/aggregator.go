@@ -4,23 +4,24 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/clickhouse"
-	"log/slog"
+	"goscan/pkg/logger"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"go.uber.org/zap"
 )
 
-// dataAggregator 数据聚合器实现
+// dataAggregator is the data aggregator implementation
 type dataAggregator struct {
-	chClient    *clickhouse.Client
-	directConn  driver.Conn
+	chClient     *clickhouse.Client
+	directConn   driver.Conn
 	nameResolver *clickhouse.TableNameResolver
 	queryTimeout time.Duration
 }
 
-// newDataAggregator 创建数据聚合器
+// newDataAggregator creates a data aggregator
 func newDataAggregator(chClient *clickhouse.Client, directConn driver.Conn, nameResolver *clickhouse.TableNameResolver) *dataAggregator {
 	return &dataAggregator{
 		chClient:     chClient,
@@ -30,7 +31,7 @@ func newDataAggregator(chClient *clickhouse.Client, directConn driver.Conn, name
 	}
 }
 
-// GroupDataByProvider 按服务商分组数据
+// GroupDataByProvider groups data by service provider
 func (a *dataAggregator) GroupDataByProvider(rawData []*RawCostData) map[string][]*RawCostData {
 	grouped := make(map[string][]*RawCostData)
 
@@ -48,56 +49,74 @@ func (a *dataAggregator) GroupDataByProvider(rawData []*RawCostData) map[string]
 	return grouped
 }
 
-// GetCostDataForDates 获取指定日期的费用数据，支持云服务商过滤
+// GetCostDataForDates retrieves cost data for specified dates with cloud provider filtering support
 func (a *dataAggregator) GetCostDataForDates(ctx context.Context, dates []time.Time, providers []string) ([]*RawCostData, error) {
 	if len(dates) == 0 {
-		return nil, NewValidationError("dates", dates, "日期列表不能为空")
+		return nil, NewValidationError("dates", dates, "date list cannot be empty")
 	}
 
 	var allData []*RawCostData
 	allTableInfo := GetProviderTableInfo()
 
-	// 如果没有指定provider，使用所有的
+	// if no provider specified, use all providers
 	if len(providers) == 0 {
 		providers = a.getAllProviders(allTableInfo)
 	}
 
-	// 根据指定的云服务商过滤表信息
+	// filter table information based on specified cloud providers
 	for tableKey, info := range allTableInfo {
 		baseProvider := extractBaseProvider(tableKey)
 
-		// 检查是否在指定的云服务商列表中
+		// check if in the specified cloud provider list
 		if !contains(providers, baseProvider) {
-			slog.Debug("跳过非指定云服务商的表", "table", info.TableName, "provider", baseProvider, "requested_providers", providers)
+			logger.Debug("Skipping table for non-specified cloud provider",
+				zap.String("table", info.TableName),
+				zap.String("provider", baseProvider),
+				zap.Strings("requested_providers", providers))
 			continue
 		}
 
 		data, err := a.queryCostDataFromTable(ctx, info, dates)
 		if err != nil {
-			// 获取解析后的表名用于日志
+			// Resolve normalized table name for logging
 			resolvedTableName := a.resolveTableName(info.TableName)
-			slog.Warn("查询表数据失败", "original_table", info.TableName, "resolved_table", resolvedTableName, "provider", baseProvider, "error", err)
-			continue // 继续查询其他表
+			logger.Error("Failed to query table data - this will cause missing provider data",
+				zap.String("original_table", info.TableName),
+				zap.String("resolved_table", resolvedTableName),
+				zap.String("provider", baseProvider),
+				zap.Strings("requested_dates", func() []string {
+					var dateStrs []string
+					for _, d := range dates {
+						dateStrs = append(dateStrs, d.Format("2006-01-02"))
+					}
+					return dateStrs
+				}()),
+				zap.Error(err))
+			continue // continue querying other tables
 		}
-		slog.Info("成功查询表数据", "table", info.TableName, "provider", baseProvider, "records", len(data))
+		logger.Debug("Successfully queried table data",
+			zap.String("table", info.TableName),
+			zap.String("provider", baseProvider),
+			zap.Int("records", len(data)),
+			zap.Int("dates_count", len(dates)))
 		allData = append(allData, data...)
 	}
 
 	return allData, nil
 }
 
-// BatchQueryCostData 批量查询费用数据，支持并发查询多个表
+// BatchQueryCostData batch queries cost data with concurrent querying of multiple tables
 func (a *dataAggregator) BatchQueryCostData(ctx context.Context, tables []DatabaseTableInfo, dates []time.Time) ([]*RawCostData, error) {
 	if len(tables) == 0 {
 		return nil, nil
 	}
 
 	if len(dates) == 0 {
-		return nil, NewValidationError("dates", dates, "日期列表不能为空")
+		return nil, NewValidationError("dates", dates, "date list cannot be empty")
 	}
 
-	// 使用工作池模式进行并发查询
-	const maxConcurrency = 5 // 限制并发数避免过载
+	// use worker pool pattern for concurrent querying
+	const maxConcurrency = 5 // limit concurrency to avoid overload
 	semaphore := make(chan struct{}, maxConcurrency)
 
 	var wg sync.WaitGroup
@@ -110,7 +129,7 @@ func (a *dataAggregator) BatchQueryCostData(ctx context.Context, tables []Databa
 		go func(tableInfo DatabaseTableInfo) {
 			defer wg.Done()
 
-			// 获取信号量
+			// acquire semaphore
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
 
@@ -120,119 +139,134 @@ func (a *dataAggregator) BatchQueryCostData(ctx context.Context, tables []Databa
 			defer mu.Unlock()
 
 			if err != nil {
-				errors = append(errors, fmt.Errorf("查询表 %s 失败: %w", tableInfo.TableName, err))
-				slog.Warn("批量查询中表查询失败", "table", tableInfo.TableName, "error", err)
+				errors = append(errors, fmt.Errorf("Failed to query table %s: %w", tableInfo.TableName, err))
+				logger.Warn("Table query failed in batch query", zap.String("table", tableInfo.TableName), zap.Error(err))
 			} else {
 				allData = append(allData, data...)
-				slog.Debug("批量查询表完成", "table", tableInfo.TableName, "records", len(data))
+				logger.Debug("Batch query table completed", zap.String("table", tableInfo.TableName), zap.Int("records", len(data)))
 			}
 		}(table)
 	}
 
 	wg.Wait()
 
-	// 如果有错误但也有数据，记录警告但继续
+	// if there are errors but also data, log warning but continue
 	if len(errors) > 0 {
-		slog.Warn("批量查询完成，但有部分失败", "total_tables", len(tables), "errors", len(errors), "success_records", len(allData))
+		logger.Warn("Batch query completed with some failures",
+			zap.Int("total_tables", len(tables)),
+			zap.Int("errors", len(errors)),
+			zap.Int("success_records", len(allData)))
 		for _, err := range errors {
-			slog.Warn("批量查询错误详情", "error", err)
+			logger.Warn("Batch query error details", zap.Error(err))
 		}
 	}
 
-	slog.Info("批量查询完成", "tables", len(tables), "total_records", len(allData), "errors", len(errors))
+	logger.Info("Batch query completed",
+		zap.Int("tables", len(tables)),
+		zap.Int("total_records", len(allData)),
+		zap.Int("errors", len(errors)))
 	return allData, nil
 }
 
-// queryCostDataFromTable 从单个表查询费用数据
+// queryCostDataFromTable queries cost data from a single table
 func (a *dataAggregator) queryCostDataFromTable(ctx context.Context, info DatabaseTableInfo, dates []time.Time) ([]*RawCostData, error) {
-	// 验证表信息
+	// validate table information
 	if err := a.validateTableInfo(info); err != nil {
-		return nil, wrapError(err, "表信息验证失败")
+		return nil, wrapError(err, "table information validation failed")
 	}
 
-	// 优先使用直接连接
+	// prefer using direct connection
 	if a.directConn != nil {
 		return a.queryCostDataFromTableDirect(ctx, info, dates)
 	}
 
-	// 回退到原来的封装方法
+	// fall back to the original wrapped method
 	return a.queryCostDataFromTableLegacy(ctx, info, dates)
 }
 
-// queryCostDataFromTableDirect 使用直接连接查询费用数据
+// queryCostDataFromTableDirect queries cost data using direct connection
 func (a *dataAggregator) queryCostDataFromTableDirect(ctx context.Context, info DatabaseTableInfo, dates []time.Time) ([]*RawCostData, error) {
 	startTime := time.Now()
 
-	// 使用表名解析器解析目标查询表名
+	// use table name resolver to resolve target query table name
 	resolvedTableName := a.resolveTableName(info.TableName)
 
-	slog.Debug("直接查询表名解析", "original", info.TableName, "resolved", resolvedTableName)
+	logger.Debug("Direct query table name resolution",
+		zap.String("original_table", info.TableName),
+		zap.String("resolved_table", resolvedTableName),
+		zap.String("provider", info.Provider))
 
-	// 构建查询语句
+	// build query statement
 	query, args := a.buildQuery(info, resolvedTableName, dates)
 
-	// 创建带超时的上下文
+
+	// create context with timeout
 	queryCtx, cancel := context.WithTimeout(ctx, a.queryTimeout)
 	defer cancel()
 
-	// 执行查询
+	// execute query
 	rows, err := a.directConn.Query(queryCtx, query, args...)
 	if err != nil {
-		return nil, NewQueryError(resolvedTableName, query, "直接查询执行失败", err)
+		return nil, NewQueryError(resolvedTableName, query, "direct query execution failed", err)
 	}
 	defer rows.Close()
 
 	data, err := a.scanQueryResults(rows)
 	if err != nil {
-		return nil, wrapError(err, "扫描查询结果失败")
+		return nil, wrapError(err, "scan query results failed")
 	}
 
 	duration := time.Since(startTime)
-	slog.Info("直接查询表完成",
-		"table", resolvedTableName,
-		"provider", info.Provider,
-		"records", len(data),
-		"duration", duration)
+	logger.Debug("Direct table query completed",
+		zap.String("table", resolvedTableName),
+		zap.String("provider", info.Provider),
+		zap.Int("records", len(data)),
+		zap.Duration("duration", duration),
+		zap.Int("dates_count", len(dates)))
+
 
 	return data, nil
 }
 
-// queryCostDataFromTableLegacy 使用封装客户端查询费用数据（原实现）
+// queryCostDataFromTableLegacy queries cost data using wrapped client (original implementation)
 func (a *dataAggregator) queryCostDataFromTableLegacy(ctx context.Context, info DatabaseTableInfo, dates []time.Time) ([]*RawCostData, error) {
 	if a.chClient == nil {
-		return nil, wrapError(ErrConnectionNotInitialized, "ClickHouse客户端未初始化")
+		return nil, wrapError(ErrConnectionNotInitialized, "ClickHouse client not initialized")
 	}
 
-	// 使用表名解析器解析目标查询表名
+	// use table name resolver to resolve target query table name
 	resolvedTableName := a.resolveTableName(info.TableName)
-	slog.Info("Legacy表名解析", 
-		"original_table", info.TableName, 
-		"resolved_table", resolvedTableName,
-		"provider", info.Provider,
-		"has_resolver", a.nameResolver != nil)
+	logger.Debug("Legacy table name resolution",
+		zap.String("original_table", info.TableName),
+		zap.String("resolved_table", resolvedTableName),
+		zap.String("provider", info.Provider),
+		zap.Bool("has_resolver", a.nameResolver != nil))
 
-	// 构建查询语句（Legacy方式）
+	// build query statement (Legacy method)
 	query := a.buildLegacyQuery(info, resolvedTableName, dates)
 
-	slog.Info("执行Legacy费用查询SQL", "query", query, "provider", info.Provider, "table", resolvedTableName)
+	logger.Debug("Executing legacy cost query SQL",
+		zap.String("provider", info.Provider),
+		zap.String("table", resolvedTableName),
+		zap.Int("query_length", len(query)))
 
 	rows, err := a.chClient.Query(ctx, query)
 	if err != nil {
-		return nil, NewQueryError(resolvedTableName, query, "Legacy查询失败", err)
+		return nil, NewQueryError(resolvedTableName, query, "Legacy query failed", err)
 	}
 	defer rows.Close()
 
 	data, err := a.scanQueryResults(rows)
 	if err != nil {
-		return nil, wrapError(err, "扫描查询结果失败")
+		return nil, wrapError(err, "scan query results failed")
 	}
 
 	return data, nil
 }
 
-// buildQuery 构建参数化查询语句
+// buildQuery builds parameterized query statement
 func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName string, dates []time.Time) (string, []interface{}) {
-	// 构建参数化查询，避免SQL注入
+	// build parameterized query to prevent SQL injection
 	placeholders := make([]string, len(dates))
 	args := make([]interface{}, len(dates))
 	for i, date := range dates {
@@ -241,23 +275,25 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 	}
 	dateCondition := "(" + strings.Join(placeholders, ", ") + ")"
 
-	// 对于火山引擎，需要特殊处理字段类型转换
+	// for VolcEngine, special handling of field type conversion is needed
 	dateSelectExpr := info.DateColumn
 	amountSumExpr := fmt.Sprintf("SUM(%s)", info.AmountColumn)
 	amountWhereExpr := info.AmountColumn
+	dateWhereExpr := info.DateColumn
 
 	if info.Provider == "volcengine" {
-		// 日期字段：字符串转Date类型
+		// date field: string to Date type (for both SELECT and WHERE)
 		dateSelectExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
-		// 金额字段：字符串转Float64类型
+		dateWhereExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
+		// amount field: string to Float64 type
 		amountSumExpr = fmt.Sprintf("SUM(toFloat64OrZero(%s))", info.AmountColumn)
 		amountWhereExpr = fmt.Sprintf("toFloat64OrZero(%s)", info.AmountColumn)
 	}
 
-	// 构建后付费过滤条件
+	// build postpaid filter condition
 	postpaidCondition := a.buildPostpaidCondition(info.Provider)
-	
-	// 构建优化的查询语句
+
+	// build optimized query statement
 	query := fmt.Sprintf(`
 		SELECT 
 			'%s' as provider,
@@ -280,7 +316,7 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 		amountSumExpr,
 		info.CurrencyColumn,
 		resolvedTableName,
-		info.DateColumn, // WHERE子句中保持原始字段
+		dateWhereExpr,   // use processed date field in WHERE clause
 		dateCondition,
 		amountWhereExpr,
 		info.ProductColumn,
@@ -290,9 +326,9 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 	return query, args
 }
 
-// buildLegacyQuery 构建Legacy查询语句
+// buildLegacyQuery builds Legacy query statement
 func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableName string, dates []time.Time) string {
-	// 构建日期条件
+	// build date condition
 	dateStrs := make([]string, len(dates))
 	for i, date := range dates {
 		dateStrs[i] = "'" + date.Format("2006-01-02") + "'"
@@ -303,22 +339,24 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 	}
 	dateCondition += ")"
 
-	// 对于火山引擎，需要特殊处理字段类型转换
+	// for VolcEngine, special handling of field type conversion is needed
 	dateSelectExpr := info.DateColumn
 	amountSumExpr := fmt.Sprintf("SUM(%s)", info.AmountColumn)
 	amountWhereExpr := info.AmountColumn
+	dateWhereExpr := info.DateColumn
 
 	if info.Provider == "volcengine" {
-		// 日期字段：字符串转Date类型
+		// date field: string to Date type (for both SELECT and WHERE)
 		dateSelectExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
-		// 金额字段：字符串转Float64类型
+		dateWhereExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
+		// amount field: string to Float64 type
 		amountSumExpr = fmt.Sprintf("SUM(toFloat64OrZero(%s))", info.AmountColumn)
 		amountWhereExpr = fmt.Sprintf("toFloat64OrZero(%s)", info.AmountColumn)
 	}
 
-	// 构建后付费过滤条件
+	// build postpaid filter condition
 	postpaidCondition := a.buildPostpaidCondition(info.Provider)
-	
+
 	query := fmt.Sprintf(`
 		SELECT 
 			'%s' as provider,
@@ -338,8 +376,8 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 		dateSelectExpr,
 		amountSumExpr,
 		info.CurrencyColumn,
-		resolvedTableName, // 使用解析后的表名
-		info.DateColumn,   // WHERE子句中保持原始字段
+		resolvedTableName, // use resolved table name
+		dateWhereExpr,     // use processed date field in WHERE clause
 		dateCondition,
 		amountWhereExpr,
 		postpaidCondition)
@@ -347,22 +385,22 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 	return query
 }
 
-// buildPostpaidCondition 构建后付费过滤条件
+// buildPostpaidCondition builds postpaid filter condition
 func (a *dataAggregator) buildPostpaidCondition(provider string) string {
 	switch strings.ToLower(provider) {
 	case "volcengine":
-		// 火山引擎：BillingMode = '按量计费'
+		// Volcengine: BillingMode = '按量计费'
 		return "AND BillingMode = '按量计费'"
 	case "alicloud":
-		// 阿里云：subscription_type = 'PayAsYouGo' (注意数据库中字段名是下划线格式)
+		// Alibaba Cloud: subscription_type = 'PayAsYouGo' (note database field name uses underscore format)
 		return "AND subscription_type = 'PayAsYouGo'"
 	default:
-		// 其他云服务商暂时不过滤
+		// other cloud providers not filtered for now
 		return ""
 	}
 }
 
-// scanQueryResults 扫描查询结果
+// scanQueryResults scans query results
 func (a *dataAggregator) scanQueryResults(rows driver.Rows) ([]*RawCostData, error) {
 	var data []*RawCostData
 	rowCount := 0
@@ -377,31 +415,31 @@ func (a *dataAggregator) scanQueryResults(rows driver.Rows) ([]*RawCostData, err
 			&item.Currency,
 			&item.RecordCount,
 		); err != nil {
-			slog.Warn("扫描行数据失败", "error", err, "row", rowCount)
+			logger.Warn("Failed to scan row data", zap.Error(err), zap.Int("row", rowCount))
 			continue
 		}
 		data = append(data, &item)
 		rowCount++
 
-		// 防止内存溢出，限制最大行数
+		// prevent memory overflow, limit maximum row count
 		if rowCount > 100000 {
-			slog.Warn("查询结果超过最大行数限制", "limit", 100000)
+			logger.Warn("Query result exceeds maximum row limit", zap.Int("limit", 100000))
 			break
 		}
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, wrapError(err, "遍历查询结果失败")
+		return nil, wrapError(err, "failed to iterate query results")
 	}
 
 	return data, nil
 }
 
-// getAllProviders 获取所有云服务商列表
+// getAllProviders gets list of all cloud providers
 func (a *dataAggregator) getAllProviders(allTableInfo map[string]DatabaseTableInfo) []string {
 	providers := make([]string, 0, len(allTableInfo))
 	for provider := range allTableInfo {
-		// 提取基础的云服务商标识（去掉_monthly、_daily等后缀）
+		// extract base cloud provider identifier (remove suffixes like _monthly, _daily)
 		baseProvider := extractBaseProvider(provider)
 		if !contains(providers, baseProvider) {
 			providers = append(providers, baseProvider)
@@ -410,7 +448,7 @@ func (a *dataAggregator) getAllProviders(allTableInfo map[string]DatabaseTableIn
 	return providers
 }
 
-// resolveTableName 解析表名
+// resolveTableName resolves table name
 func (a *dataAggregator) resolveTableName(tableName string) string {
 	if a.nameResolver != nil {
 		return a.nameResolver.ResolveQueryTarget(tableName)
@@ -418,30 +456,30 @@ func (a *dataAggregator) resolveTableName(tableName string) string {
 	return tableName
 }
 
-// validateTableInfo 验证表信息
+// validateTableInfo validates table information
 func (a *dataAggregator) validateTableInfo(info DatabaseTableInfo) error {
 	if info.Provider == "" {
-		return NewValidationError("provider", info.Provider, "服务商名称不能为空")
+		return NewValidationError("provider", info.Provider, "provider name cannot be empty")
 	}
 	if info.TableName == "" {
-		return NewValidationError("table_name", info.TableName, "表名不能为空")
+		return NewValidationError("table_name", info.TableName, "table name cannot be empty")
 	}
 	if info.DateColumn == "" {
-		return NewValidationError("date_column", info.DateColumn, "日期字段不能为空")
+		return NewValidationError("date_column", info.DateColumn, "date column cannot be empty")
 	}
 	if info.AmountColumn == "" {
-		return NewValidationError("amount_column", info.AmountColumn, "金额字段不能为空")
+		return NewValidationError("amount_column", info.AmountColumn, "amount column cannot be empty")
 	}
 	if info.ProductColumn == "" {
-		return NewValidationError("product_column", info.ProductColumn, "产品字段不能为空")
+		return NewValidationError("product_column", info.ProductColumn, "product column cannot be empty")
 	}
 	if info.CurrencyColumn == "" {
-		return NewValidationError("currency_column", info.CurrencyColumn, "货币字段不能为空")
+		return NewValidationError("currency_column", info.CurrencyColumn, "currency column cannot be empty")
 	}
 	return nil
 }
 
-// setQueryTimeout 设置查询超时时间
+// setQueryTimeout sets query timeout
 func (a *dataAggregator) setQueryTimeout(timeout time.Duration) {
 	a.queryTimeout = timeout
 }

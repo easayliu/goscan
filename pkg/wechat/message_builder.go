@@ -6,15 +6,15 @@ import (
 	"time"
 )
 
-// DefaultMessageBuilder 默认消息构建器
+// DefaultMessageBuilder default message builder
 type DefaultMessageBuilder struct{}
 
-// NewMessageBuilder 创建消息构建器
+// NewMessageBuilder creates message builder
 func NewMessageBuilder() MessageBuilder {
 	return &DefaultMessageBuilder{}
 }
 
-// BuildTextMessage 构建文本消息
+// BuildTextMessage builds text message
 func (b *DefaultMessageBuilder) BuildTextMessage(content string, mentionUsers []string) *WebhookMessage {
 	return &WebhookMessage{
 		MsgType: MessageTypeText,
@@ -25,7 +25,7 @@ func (b *DefaultMessageBuilder) BuildTextMessage(content string, mentionUsers []
 	}
 }
 
-// BuildMarkdownMessage 构建Markdown消息
+// BuildMarkdownMessage builds Markdown message
 func (b *DefaultMessageBuilder) BuildMarkdownMessage(content string) *WebhookMessage {
 	return &WebhookMessage{
 		MsgType: MessageTypeMarkdown,
@@ -35,7 +35,7 @@ func (b *DefaultMessageBuilder) BuildMarkdownMessage(content string) *WebhookMes
 	}
 }
 
-// BuildTemplateCardMessage 构建模板卡片消息
+// BuildTemplateCardMessage builds template card message
 func (b *DefaultMessageBuilder) BuildTemplateCardMessage(card *TemplateCard) *WebhookMessage {
 	return &WebhookMessage{
 		MsgType:      MessageTypeTemplateCard,
@@ -43,15 +43,15 @@ func (b *DefaultMessageBuilder) BuildTemplateCardMessage(card *TemplateCard) *We
 	}
 }
 
-// DefaultMessageFormatter 默认消息格式化器
+// DefaultMessageFormatter default message formatter
 type DefaultMessageFormatter struct{}
 
-// NewMessageFormatter 创建消息格式化器
+// NewMessageFormatter creates message formatter
 func NewMessageFormatter() MessageFormatter {
 	return &DefaultMessageFormatter{}
 }
 
-// FormatTestMessage 格式化测试消息
+// FormatTestMessage formats test message
 func (f *DefaultMessageFormatter) FormatTestMessage() string {
 	return fmt.Sprintf(`## 🤖 企业微信通知测试
 > 📅 测试时间：**%s**
@@ -69,17 +69,17 @@ func (f *DefaultMessageFormatter) FormatTestMessage() string {
 		time.Now().Format("2006-01-02 15:04:05"))
 }
 
-// FormatCostReport 格式化费用报告为Markdown
+// FormatCostReport formats cost report as Markdown
 func (f *DefaultMessageFormatter) FormatCostReport(data *CostComparisonData) string {
 	var builder strings.Builder
 
-	// 标题 - 使用emoji增强视觉效果
+	// Title - use emoji to enhance visual effect
 	builder.WriteString("## 📊 云服务费用日报\n\n")
 
-	// 日期信息
+	// Date information
 	builder.WriteString(fmt.Sprintf("📅 **报告日期：%s**\n\n", data.Date))
 
-	// 各云服务商明细
+	// Details of each cloud provider
 	for _, provider := range data.Providers {
 		if len(provider.Products) == 0 {
 			continue
@@ -88,37 +88,37 @@ func (f *DefaultMessageFormatter) FormatCostReport(data *CostComparisonData) str
 		f.buildProviderSection(&builder, provider)
 	}
 
-	// 异常提醒
+	// Exception alerts
 	f.buildAlertsSection(&builder, data.Alerts)
 
-	// 生成时间和说明
+	// Generation time and description
 	f.buildFooterSection(&builder, data.GeneratedAt)
 
 	return builder.String()
 }
 
-// buildProviderSection 构建服务商费用段落
+// buildProviderSection builds provider cost section
 func (f *DefaultMessageFormatter) buildProviderSection(builder *strings.Builder, provider *ProviderCostData) {
-	// 服务商图标
+	// Provider icon
 	icon := f.getProviderIcon(provider.Provider)
 
-	// 服务商标题
+	// Provider title
 	builder.WriteString(fmt.Sprintf("### %s %s\n", icon, provider.DisplayName))
 
-	// 服务商总计 - 使用表格格式
+	// Provider total - use table format
 	if provider.TotalCost != nil {
 		f.buildTotalCostTable(builder, provider.TotalCost)
 	}
 
-	// 产品费用列表 - 使用表格格式显示所有产品
+	// Product cost list - use table format to display all products
 	if len(provider.Products) > 0 {
 		f.buildProductsTable(builder, provider.Products)
 	}
 }
 
-// buildTotalCostTable 构建总费用表格
+// buildTotalCostTable builds total cost table
 func (f *DefaultMessageFormatter) buildTotalCostTable(builder *strings.Builder, total *CostChange) {
-	// 变化趋势图标
+	// Change trend icon
 	changeIcon := "➡️"
 	if total.ChangeAmount > 0 {
 		changeIcon = "📈"
@@ -126,24 +126,24 @@ func (f *DefaultMessageFormatter) buildTotalCostTable(builder *strings.Builder, 
 		changeIcon = "📉"
 	}
 
-	// 变化幅度
+	// Change magnitude
 	changeStr := f.formatProductChange(total)
 
-	// 构建与产品明细一致的表格格式
+	// Build table format consistent with product details
 	tableStr := fmt.Sprintf("| 服务商 | 前天费用 | 昨天费用 | 变化趋势 | 变化幅度 |\n| :--- | ---: | ---: | :---: | ---: |\n| **总计** | ¥%.2f | ¥%.2f | %s | %s |",
 		total.YesterdayCost, total.TodayCost, changeIcon, changeStr)
 	builder.WriteString(tableStr + "\n\n")
 }
 
-// buildProductsTable 构建产品费用表格
+// buildProductsTable builds product cost table
 func (f *DefaultMessageFormatter) buildProductsTable(builder *strings.Builder, products []*CostChange) {
 	builder.WriteString("**📦 产品明细：**\n\n")
 
-	// 构建完整表格字符串
+	// Build complete table string
 	var tableBuilder strings.Builder
 	tableBuilder.WriteString("| 产品名称 | 前天费用 | 昨天费用 | 变化趋势 | 变化幅度 |\n| :--- | ---: | ---: | :---: | ---: |")
 
-	// 显示所有产品
+	// Display all products
 	for _, product := range products {
 		f.buildProductRow(&tableBuilder, product)
 	}
@@ -152,9 +152,9 @@ func (f *DefaultMessageFormatter) buildProductsTable(builder *strings.Builder, p
 	builder.WriteString("\n\n")
 }
 
-// buildProductRow 构建产品费用行
+// buildProductRow builds product cost row
 func (f *DefaultMessageFormatter) buildProductRow(builder *strings.Builder, product *CostChange) {
-	// 变化趋势图标
+	// Change trend icon
 	changeIcon := "➡️"
 	if product.ChangeAmount > 0 {
 		changeIcon = "📈"
@@ -162,26 +162,26 @@ func (f *DefaultMessageFormatter) buildProductRow(builder *strings.Builder, prod
 		changeIcon = "📉"
 	}
 
-	// 变化幅度
+	// Change magnitude
 	changeStr := f.formatProductChange(product)
 
-	// 添加产品行
-	builder.WriteString(fmt.Sprintf("\n| **%s** | ¥%.2f | ¥%.2f | %s | %s |",
+	// Add product row
+	builder.WriteString(fmt.Sprintf("\n| %s | ¥%.2f | ¥%.2f | %s | %s |",
 		product.Name, product.YesterdayCost, product.TodayCost, changeIcon, changeStr))
 }
 
-// buildAlertsSection 构建异常提醒段落
+// buildAlertsSection builds exception alerts section
 func (f *DefaultMessageFormatter) buildAlertsSection(builder *strings.Builder, alerts []string) {
 	if len(alerts) > 0 {
 		builder.WriteString("### ⚠️ 费用异常提醒\n")
 
-		// 根据告警数量使用不同的提示
+		// Use different prompts based on alert count
 		if len(alerts) > 5 {
 			builder.WriteString(fmt.Sprintf("**发现 %d 个异常变化，请关注！**\n\n",
 				len(alerts)))
 		}
 
-		// 显示前5个最重要的告警
+		// Display the top 5 most important alerts
 		maxAlerts := 5
 		if len(alerts) < maxAlerts {
 			maxAlerts = len(alerts)
@@ -196,13 +196,13 @@ func (f *DefaultMessageFormatter) buildAlertsSection(builder *strings.Builder, a
 		}
 		builder.WriteString("\n")
 	} else {
-		// 没有异常时的提示
+		// Prompt when there are no exceptions
 		builder.WriteString("### ✅ 费用状态\n")
 		builder.WriteString("费用变化在正常范围内，无异常告警\n\n")
 	}
 }
 
-// buildFooterSection 构建页脚段落
+// buildFooterSection builds footer section
 func (f *DefaultMessageFormatter) buildFooterSection(builder *strings.Builder, generatedAt time.Time) {
 	builder.WriteString("\n---\n")
 	builder.WriteString(fmt.Sprintf("*⏰ 生成时间: %s*\n",
@@ -210,7 +210,7 @@ func (f *DefaultMessageFormatter) buildFooterSection(builder *strings.Builder, g
 	builder.WriteString("*💡 说明: 对比昨天与前天的费用数据*")
 }
 
-// getProviderIcon 获取服务商图标
+// getProviderIcon gets provider icon
 func (f *DefaultMessageFormatter) getProviderIcon(provider string) string {
 	switch strings.ToLower(provider) {
 	case "volcengine":
@@ -228,7 +228,7 @@ func (f *DefaultMessageFormatter) getProviderIcon(provider string) string {
 	}
 }
 
-// formatCostChange 格式化费用变化
+// formatCostChange formats cost change
 func (f *DefaultMessageFormatter) formatCostChange(total *CostChange) string {
 	if total.ChangeAmount != 0 {
 		changeIcon := total.GetChangeIcon()
@@ -243,65 +243,65 @@ func (f *DefaultMessageFormatter) formatCostChange(total *CostChange) string {
 	return "➡️ 无变化"
 }
 
-// formatProductChange 格式化产品费用变化
+// formatProductChange formats product cost change
 func (f *DefaultMessageFormatter) formatProductChange(product *CostChange) string {
 	if product.ChangeAmount != 0 {
 		if product.ChangePercent > 20 {
-			// 超过20%增长，使用加粗
+			// Over 20% growth, use bold
 			return fmt.Sprintf("**%+.1f%%**", product.ChangePercent)
 		} else if product.ChangePercent < -20 {
-			// 超过20%下降
+			// Over 20% decrease
 			return fmt.Sprintf("%.1f%%", product.ChangePercent)
 		} else {
-			// 正常变化
+			// Normal change
 			return fmt.Sprintf("%+.1f%%", product.ChangePercent)
 		}
 	}
 	return "无变化"
 }
 
-// FormatCostReportCard 格式化费用报告为模板卡片
+// FormatCostReportCard formats cost report as template card
 func (f *DefaultMessageFormatter) FormatCostReportCard(data *CostComparisonData) *TemplateCard {
 	card := &TemplateCard{
 		CardType: "text_notice",
 	}
 
-	// 设置来源信息
+	// Set source information
 	card.Source = &CardSource{
 		Desc:      "费用分析系统",
-		DescColor: 0, // 灰色
+		DescColor: 0, // Gray color
 	}
 
-	// 设置主标题
+	// Set main title
 	card.MainTitle = &CardMainTitle{
 		Title: "☁️ 云服务费用日报",
 		Desc:  fmt.Sprintf("📅 %s", data.Date),
 	}
 
-	// 设置关键数据（总费用变化）
+	// Set key data (total cost change)
 	if data.TotalCost != nil {
 		f.buildCardEmphasisContent(card, data.TotalCost)
 	}
 
-	// 设置二级标题
+	// Set secondary title
 	card.SubTitleText = "📊 各云服务商费用明细"
 
-	// 设置水平内容列表（各服务商费用）
+	// Set horizontal content list (provider costs)
 	card.HorizontalContentList = f.buildHorizontalContentList(data.Providers)
 
-	// 设置引用区域（异常提醒）
+	// Set quote area (exception alerts)
 	f.buildCardQuoteArea(card, data.Alerts)
 
-	// 添加跳转指引
+	// Add jump guide
 	f.buildCardJumpList(card)
 
-	// card_action是必需的，设置整体卡片跳转
+	// card_action is required, set overall card jump
 	f.buildCardAction(card)
 
 	return card
 }
 
-// buildCardEmphasisContent 构建卡片关键数据内容
+// buildCardEmphasisContent builds card key data content
 func (f *DefaultMessageFormatter) buildCardEmphasisContent(card *TemplateCard, total *CostChange) {
 	emphasisTitle := fmt.Sprintf("¥%.2f", total.TodayCost)
 
@@ -325,7 +325,7 @@ func (f *DefaultMessageFormatter) buildCardEmphasisContent(card *TemplateCard, t
 	}
 }
 
-// buildHorizontalContentList 构建水平内容列表
+// buildHorizontalContentList builds horizontal content list
 func (f *DefaultMessageFormatter) buildHorizontalContentList(providers []*ProviderCostData) []CardHorizontalContent {
 	var horizontalList []CardHorizontalContent
 
@@ -334,22 +334,22 @@ func (f *DefaultMessageFormatter) buildHorizontalContentList(providers []*Provid
 			continue
 		}
 
-		// 添加服务商总计
+		// Add provider total
 		f.addProviderContent(&horizontalList, provider)
 
-		// 添加主要产品明细（前3个）
+		// Add main product details (top 3)
 		f.addProductsContent(&horizontalList, provider.Products)
 	}
 
 	return horizontalList
 }
 
-// addProviderContent 添加服务商内容
+// addProviderContent adds provider content
 func (f *DefaultMessageFormatter) addProviderContent(horizontalList *[]CardHorizontalContent, provider *ProviderCostData) {
-	// 服务商图标
+	// Provider icon
 	icon := f.getProviderIcon(provider.Provider)
 
-	// 费用变化描述
+	// Cost change description
 	total := provider.TotalCost
 	changeDesc := f.formatCardCostChange(total)
 
@@ -361,7 +361,7 @@ func (f *DefaultMessageFormatter) addProviderContent(horizontalList *[]CardHoriz
 	})
 }
 
-// addProductsContent 添加产品内容
+// addProductsContent adds product content
 func (f *DefaultMessageFormatter) addProductsContent(horizontalList *[]CardHorizontalContent, products []*CostChange) {
 	maxProducts := 3
 	if len(products) < maxProducts {
@@ -389,7 +389,7 @@ func (f *DefaultMessageFormatter) addProductsContent(horizontalList *[]CardHoriz
 	}
 }
 
-// formatCardCostChange 格式化卡片费用变化
+// formatCardCostChange formats card cost change
 func (f *DefaultMessageFormatter) formatCardCostChange(total *CostChange) string {
 	if total.ChangeAmount != 0 {
 		if total.ChangeAmount > 0 {
@@ -401,7 +401,7 @@ func (f *DefaultMessageFormatter) formatCardCostChange(total *CostChange) string
 	return "➡️ 无变化"
 }
 
-// formatCardProductChange 格式化卡片产品变化
+// formatCardProductChange formats card product change
 func (f *DefaultMessageFormatter) formatCardProductChange(product *CostChange) string {
 	if product.ChangePercent > 20 {
 		return fmt.Sprintf("⚠️ +%.1f%%", product.ChangePercent)
@@ -413,7 +413,7 @@ func (f *DefaultMessageFormatter) formatCardProductChange(product *CostChange) s
 	return ""
 }
 
-// buildCardQuoteArea 构建卡片引用区域
+// buildCardQuoteArea builds card quote area
 func (f *DefaultMessageFormatter) buildCardQuoteArea(card *TemplateCard, alerts []string) {
 	if len(alerts) > 0 {
 		alertText := f.buildCardAlertText(alerts)
@@ -431,7 +431,7 @@ func (f *DefaultMessageFormatter) buildCardQuoteArea(card *TemplateCard, alerts 
 	}
 }
 
-// buildCardAlertText 构建卡片告警文本
+// buildCardAlertText builds card alert text
 func (f *DefaultMessageFormatter) buildCardAlertText(alerts []string) string {
 	alertText := ""
 	maxAlerts := 3
@@ -453,7 +453,7 @@ func (f *DefaultMessageFormatter) buildCardAlertText(alerts []string) string {
 	return alertText
 }
 
-// buildCardJumpList 构建卡片跳转列表
+// buildCardJumpList builds card jump list
 func (f *DefaultMessageFormatter) buildCardJumpList(card *TemplateCard) {
 	card.JumpList = []CardJump{
 		{
@@ -464,7 +464,7 @@ func (f *DefaultMessageFormatter) buildCardJumpList(card *TemplateCard) {
 	}
 }
 
-// buildCardAction 构建卡片动作
+// buildCardAction builds card action
 func (f *DefaultMessageFormatter) buildCardAction(card *TemplateCard) {
 	card.CardAction = &CardAction{
 		Type: 1,

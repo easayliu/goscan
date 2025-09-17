@@ -4,44 +4,45 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/config"
-	"log"
+	"goscan/pkg/logger"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"go.uber.org/zap"
 )
 
-// Client ClickHouse客户端，实现所有接口
+// Client ClickHouse client that implements all interfaces
 type Client struct {
-	// 组合各种管理器
+	// Composite of various managers
 	connManager      ConnectionManager
 	queryExecutor    QueryExecutor
 	batchManager     BatchManager
 	tableManager     TableManager
 	metricsCollector MetricsCollector
-	
-	// 原有字段保持向后兼容
+
+	// Legacy fields for backward compatibility
 	conn         driver.Conn
 	config       *config.ClickHouseConfig
 	nameResolver *TableNameResolver
 }
 
-// NewClient 创建ClickHouse客户端
+// NewClient creates a ClickHouse client
 func NewClient(cfg *config.ClickHouseConfig) (*Client, error) {
-	// 创建连接管理器
+	// Create connection manager
 	connManager, err := NewConnectionManager(cfg, nil)
 	if err != nil {
 		return nil, WrapConnectionError(err)
 	}
 
-	// 获取底层连接
+	// Get underlying connection
 	conn := connManager.GetConnection()
-	
-	// 创建表名解析器
+
+	// Create table name resolver
 	nameResolver := NewTableNameResolver(cfg)
-	
-	// 创建各种管理器
+
+	// Create various managers
 	queryExecutor := NewQueryExecutor(conn)
 	batchManager := NewBatchManager(conn, nameResolver)
 	tableManager := NewTableManager(queryExecutor, nameResolver, cfg)
@@ -53,7 +54,7 @@ func NewClient(cfg *config.ClickHouseConfig) (*Client, error) {
 		batchManager:     batchManager,
 		tableManager:     tableManager,
 		metricsCollector: metricsCollector,
-		// 保持向后兼容
+		// Maintain backward compatibility
 		conn:         conn,
 		config:       cfg,
 		nameResolver: nameResolver,
@@ -61,127 +62,135 @@ func NewClient(cfg *config.ClickHouseConfig) (*Client, error) {
 }
 
 // ============================================================================
-// ConnectionManager 接口实现
+// ConnectionManager interface implementation
 // ============================================================================
 
-// Close 关闭连接
+// Close closes the connection
 func (c *Client) Close() error {
 	return c.connManager.Close()
 }
 
-// Ping 检查连接状态
+// Ping checks connection status
 func (c *Client) Ping(ctx context.Context) error {
 	return c.connManager.Ping(ctx)
 }
 
-// GetConnection 获取底层连接
+// GetConnection returns the underlying connection
 func (c *Client) GetConnection() driver.Conn {
 	return c.connManager.GetConnection()
 }
 
 // ============================================================================
-// QueryExecutor 接口实现
+// QueryExecutor interface implementation
 // ============================================================================
 
-// Exec 执行SQL语句
+// Exec executes SQL statements
 func (c *Client) Exec(ctx context.Context, query string, args ...interface{}) error {
 	return c.queryExecutor.Exec(ctx, query, args...)
 }
 
-// Query 执行查询并返回结果集
+// Query executes query and returns result set
 func (c *Client) Query(ctx context.Context, query string, args ...interface{}) (driver.Rows, error) {
 	return c.queryExecutor.Query(ctx, query, args...)
 }
 
-// QueryRow 执行查询并返回单行结果
+// QueryRow executes query and returns single row result
 func (c *Client) QueryRow(ctx context.Context, query string, args ...interface{}) driver.Row {
 	return c.queryExecutor.QueryRow(ctx, query, args...)
 }
 
 // ============================================================================
-// BatchManager 接口实现
+// BatchManager interface implementation
 // ============================================================================
 
-// PrepareBatch 准备批量操作
+// PrepareBatch prepares batch operations
 func (c *Client) PrepareBatch(ctx context.Context, query string) (driver.Batch, error) {
 	return c.batchManager.PrepareBatch(ctx, query)
 }
 
-// InsertBatch 批量插入数据
+// InsertBatch inserts data in batches
 func (c *Client) InsertBatch(ctx context.Context, tableName string, data []map[string]interface{}) error {
+	// Pre-validate table before batch insert
+	if err := c.ValidateTableForInsert(ctx, tableName); err != nil {
+		logger.Error("Table validation failed before batch insert",
+			zap.String("table", tableName),
+			zap.Error(err))
+		// Don't return error immediately, let ClickHouse provide detailed error
+		// return err
+	}
 	return c.batchManager.InsertBatch(ctx, tableName, data)
 }
 
-// AsyncInsertBatch 异步批量插入数据
+// AsyncInsertBatch inserts data asynchronously in batches
 func (c *Client) AsyncInsertBatch(ctx context.Context, tableName string, data []map[string]interface{}) error {
 	return c.batchManager.AsyncInsertBatch(ctx, tableName, data)
 }
 
-// OptimizedBatchInsert 优化的批量插入方法
+// OptimizedBatchInsert optimized batch insert method
 func (c *Client) OptimizedBatchInsert(ctx context.Context, tableName string, data []map[string]interface{}, opts *BatchInsertOptions) (*BatchInsertResult, error) {
 	return c.batchManager.OptimizedBatchInsert(ctx, tableName, data, opts)
 }
 
 // ============================================================================
-// TableManager 接口实现
+// TableManager interface implementation
 // ============================================================================
 
-// CreateTable 创建表
+// CreateTable creates a table
 func (c *Client) CreateTable(ctx context.Context, tableName string, schema string) error {
 	return c.tableManager.CreateTable(ctx, tableName, schema)
 }
 
-// DropTable 删除表
+// DropTable drops a table
 func (c *Client) DropTable(ctx context.Context, tableName string) error {
 	return c.tableManager.DropTable(ctx, tableName)
 }
 
-// TruncateTable 清空表
+// TruncateTable truncates a table
 func (c *Client) TruncateTable(ctx context.Context, tableName string) error {
 	return c.tableManager.TruncateTable(ctx, tableName)
 }
 
-// TableExists 检查表是否存在
+// TableExists checks if table exists
 func (c *Client) TableExists(ctx context.Context, tableName string) (bool, error) {
 	return c.tableManager.TableExists(ctx, tableName)
 }
 
-// GetTableInfo 获取表信息
+// GetTableInfo retrieves table information
 func (c *Client) GetTableInfo(ctx context.Context, tableName string) (*TableInfo, error) {
 	return c.tableManager.GetTableInfo(ctx, tableName)
 }
 
-// ListTables 列出所有表
+// ListTables lists all tables
 func (c *Client) ListTables(ctx context.Context) ([]string, error) {
 	return c.tableManager.ListTables(ctx)
 }
 
 // ============================================================================
-// MetricsCollector 接口实现
+// MetricsCollector interface implementation
 // ============================================================================
 
-// GetTableSize 获取表大小信息
+// GetTableSize retrieves table size information
 func (c *Client) GetTableSize(ctx context.Context, tableName string) (map[string]interface{}, error) {
 	return c.metricsCollector.GetTableSize(ctx, tableName)
 }
 
-// CheckTableHealth 检查表健康状态
+// CheckTableHealth checks table health status
 func (c *Client) CheckTableHealth(ctx context.Context, tableName string) (map[string]interface{}, error) {
 	return c.metricsCollector.CheckTableHealth(ctx, tableName)
 }
 
-// GetTablesInfo 获取所有表的基本信息
+// GetTablesInfo retrieves basic information for all tables
 func (c *Client) GetTablesInfo(ctx context.Context) ([]map[string]interface{}, error) {
 	return c.metricsCollector.GetTablesInfo(ctx)
 }
 
 // ============================================================================
-// 单行插入和其他核心方法
+// Single row insert and other core methods
 // ============================================================================
 
-// Insert 插入单行数据
+// Insert inserts single row data
 func (c *Client) Insert(ctx context.Context, tableName string, data map[string]interface{}) error {
-	// 自动解析表名
+	// Automatically resolve table name
 	resolvedTableName := c.nameResolver.ResolveInsertTarget(tableName)
 
 	columns := ExtractColumnsFromData([]map[string]interface{}{data})
@@ -191,56 +200,90 @@ func (c *Client) Insert(ctx context.Context, tableName string, data map[string]i
 	return c.queryExecutor.Exec(ctx, query, values...)
 }
 
+// ValidateTableForInsert validates that table exists and is ready for insert
+func (c *Client) ValidateTableForInsert(ctx context.Context, tableName string) error {
+	// Resolve the actual target table name
+	targetTable := c.nameResolver.ResolveInsertTarget(tableName)
+
+	// Check if table exists
+	exists, err := c.TableExists(ctx, targetTable)
+	if err != nil {
+		return WrapTableError(targetTable, fmt.Errorf("failed to check table existence: %w", err))
+	}
+
+	if !exists {
+		return WrapTableError(targetTable, fmt.Errorf("target table does not exist"))
+	}
+
+	logger.Debug("Table validation successful",
+		zap.String("input_table", tableName),
+		zap.String("target_table", targetTable))
+
+	return nil
+}
+
 // ============================================================================
-// 分布式表相关方法
+// Distributed table related methods
 // ============================================================================
 
-// CreateDistributedTable 创建分布式表
+// CreateDistributedTable creates distributed table
 func (c *Client) CreateDistributedTable(ctx context.Context, localTableName, distributedTableName string, schema string) error {
 	if c.config.Cluster == "" {
 		return ErrClusterNotConfigured
 	}
 
-	// 步骤1: 使用ON CLUSTER在所有节点上创建本地表
-	log.Printf("[分布式表] 开始在集群 %s 上创建本地表 %s", c.config.Cluster, localTableName)
+	// Step 1: Use ON CLUSTER to create local table on all nodes
+	logger.Info("Starting to create local table for distributed table",
+		zap.String("cluster", c.config.Cluster),
+		zap.String("local_table", localTableName),
+		zap.String("distributed_table", distributedTableName))
 	createLocalQuery := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s",
 		localTableName, c.config.Cluster, schema)
 
+	logger.Debug("Creating local table SQL", zap.String("sql", createLocalQuery))
 	if err := c.Exec(ctx, createLocalQuery); err != nil {
 		return WrapTableError(localTableName, fmt.Errorf("failed to create local table on cluster: %w", err))
 	}
 
-	// 步骤2: 等待集群同步
+	// Step 2: Wait for cluster synchronization
 	time.Sleep(3 * time.Second)
 
-	// 步骤3: 创建分布式表
-	distributedSchema := fmt.Sprintf(`AS %s ENGINE = Distributed(%s, %s, %s, rand())`,
-		localTableName, c.config.Cluster, c.config.Database, localTableName)
+	// Step 3: Create distributed table with explicit column structure
+	// Important: Use explicit column definition instead of "AS localTable" to avoid field mismatch
+	distributedSchema := fmt.Sprintf("%s ENGINE = Distributed(%s, %s, %s, rand())",
+		schema, c.config.Cluster, c.config.Database, localTableName)
 
 	createDistributedQuery := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s",
 		distributedTableName, c.config.Cluster, distributedSchema)
 
+	logger.Debug("Creating distributed table SQL", zap.String("sql", createDistributedQuery))
 	if err := c.Exec(ctx, createDistributedQuery); err != nil {
 		return WrapTableError(distributedTableName, fmt.Errorf("failed to create distributed table: %w", err))
 	}
 
+	logger.Info("Successfully created distributed table structure",
+		zap.String("local_table", localTableName),
+		zap.String("distributed_table", distributedTableName),
+		zap.String("cluster", c.config.Cluster))
 	return nil
 }
 
-// DropDistributedTable 删除分布式表
+// DropDistributedTable drops distributed table
 func (c *Client) DropDistributedTable(ctx context.Context, localTableName, distributedTableName string) error {
 	if c.config.Cluster == "" {
 		return ErrClusterNotConfigured
 	}
 
-	// 先删除分布式表
+	// First drop the distributed table
 	if distributedTableName != "" {
 		if err := c.DropTable(ctx, distributedTableName); err != nil {
-			log.Printf("警告: 删除分布式表 %s 失败: %v", distributedTableName, err)
+			logger.Warn("Failed to drop distributed table",
+				zap.String("table", distributedTableName),
+				zap.Error(err))
 		}
 	}
 
-	// 然后删除所有节点上的本地表
+	// Then drop the local table on all nodes
 	if localTableName != "" {
 		if err := c.DropTableOnCluster(ctx, localTableName); err != nil {
 			return WrapTableError(localTableName, fmt.Errorf("failed to drop local table on cluster: %w", err))
@@ -250,7 +293,7 @@ func (c *Client) DropDistributedTable(ctx context.Context, localTableName, distr
 	return nil
 }
 
-// DropTableOnCluster 在集群上删除表
+// DropTableOnCluster drops table on cluster
 func (c *Client) DropTableOnCluster(ctx context.Context, tableName string) error {
 	if c.config.Cluster == "" {
 		return ErrClusterNotConfigured
@@ -260,7 +303,7 @@ func (c *Client) DropTableOnCluster(ctx context.Context, tableName string) error
 	return c.Exec(ctx, dropQuery)
 }
 
-// IsDistributedTable 检查表是否为分布式表
+// IsDistributedTable checks if table is distributed
 func (c *Client) IsDistributedTable(ctx context.Context, tableName string) (bool, error) {
 	query := "SELECT engine FROM system.tables WHERE database = ? AND name = ?"
 	row := c.QueryRow(ctx, query, c.config.Database, tableName)
@@ -274,7 +317,7 @@ func (c *Client) IsDistributedTable(ctx context.Context, tableName string) (bool
 	return engine == "Distributed", nil
 }
 
-// GetClusterInfo 获取集群信息
+// GetClusterInfo retrieves cluster information
 func (c *Client) GetClusterInfo(ctx context.Context) ([]map[string]interface{}, error) {
 	if c.config.Cluster == "" {
 		return nil, ErrClusterNotConfigured
@@ -308,10 +351,10 @@ func (c *Client) GetClusterInfo(ctx context.Context) ([]map[string]interface{}, 
 }
 
 // ============================================================================
-// 数据清理方法
+// Data cleanup methods
 // ============================================================================
 
-// DeleteByCondition 按条件删除数据
+// DeleteByCondition deletes data by condition
 func (c *Client) DeleteByCondition(ctx context.Context, tableName string, condition string, args ...interface{}) error {
 	if tm, ok := c.tableManager.(*tableManager); ok {
 		return tm.DeleteByCondition(ctx, tableName, condition, args...)
@@ -319,7 +362,7 @@ func (c *Client) DeleteByCondition(ctx context.Context, tableName string, condit
 	return fmt.Errorf("table manager not available")
 }
 
-// CleanTableData 清理表数据
+// CleanTableData cleans table data
 func (c *Client) CleanTableData(ctx context.Context, tableName string, condition string, args ...interface{}) error {
 	if tm, ok := c.tableManager.(*tableManager); ok {
 		return tm.CleanTableData(ctx, tableName, condition, args...)
@@ -327,12 +370,12 @@ func (c *Client) CleanTableData(ctx context.Context, tableName string, condition
 	return fmt.Errorf("table manager not available")
 }
 
-// EnhancedCleanTableData 增强的数据清理
+// EnhancedCleanTableData enhanced data cleanup
 func (c *Client) EnhancedCleanTableData(ctx context.Context, tableName string, opts *CleanupOptions) (*CleanupResult, error) {
 	return c.enhancedCleanTableDataImpl(ctx, tableName, opts)
 }
 
-// enhancedCleanTableDataImpl 增强数据清理的内部实现
+// enhancedCleanTableDataImpl internal implementation of enhanced data cleanup
 func (c *Client) enhancedCleanTableDataImpl(ctx context.Context, tableName string, opts *CleanupOptions) (*CleanupResult, error) {
 	if opts == nil {
 		opts = &CleanupOptions{}
@@ -348,17 +391,17 @@ func (c *Client) enhancedCleanTableDataImpl(ctx context.Context, tableName strin
 		result.Duration = time.Since(startTime)
 	}()
 
-	// 检查是否为分布式表
+	// Check if it's a distributed table
 	isDistributed, err := c.IsDistributedTable(ctx, tableName)
 	if err != nil {
-		log.Printf("无法检查表类型，按普通表处理: %v", err)
+		logger.Warn("Unable to check table type, treating as regular table", zap.Error(err))
 		isDistributed = false
 	}
 
-	// 如果没有条件，使用TRUNCATE
+	// If no condition, use TRUNCATE
 	if opts.Condition == "" {
 		if opts.DryRun {
-			// 预览模式：统计表中的总行数
+			// Preview mode: count total rows in table
 			countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s", tableName)
 			row := c.QueryRow(ctx, countQuery)
 			var count uint64
@@ -370,7 +413,7 @@ func (c *Client) enhancedCleanTableDataImpl(ctx context.Context, tableName strin
 			return result, nil
 		}
 
-		// 实际执行TRUNCATE
+		// Actually execute TRUNCATE
 		if err := c.TruncateTable(ctx, tableName); err != nil {
 			result.Error = err
 			return result, err
@@ -378,7 +421,7 @@ func (c *Client) enhancedCleanTableDataImpl(ctx context.Context, tableName strin
 		return result, nil
 	}
 
-	// 有条件的删除 - 只使用DROP PARTITION方式
+	// Conditional deletion - only use DROP PARTITION approach
 	if opts.DryRun {
 		countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", tableName, opts.Condition)
 		row := c.QueryRow(ctx, countQuery, opts.Args...)
@@ -391,30 +434,32 @@ func (c *Client) enhancedCleanTableDataImpl(ctx context.Context, tableName strin
 		return result, nil
 	}
 
-	// 提取分区信息
+	// Extract partition information
 	partition, canUsePartition := c.extractPartitionFromCondition(opts.Condition)
 	if !canUsePartition {
 		result.Error = ErrUnsupportedPartitionCondition
 		return result, result.Error
 	}
 
-	// 检查分区是否存在
+	// Check if partition exists
 	partitionExists, checkErr := c.checkPartitionExists(ctx, tableName, partition)
 	if checkErr != nil {
-		log.Printf("[警告] 无法检查分区存在性: %v，尝试直接删除", checkErr)
+		logger.Warn("Unable to check partition existence, attempting direct deletion",
+			zap.String("partition", partition),
+			zap.Error(checkErr))
 		partitionExists = true
 	}
 
 	if !partitionExists {
-		log.Printf("分区 %s 不存在，无需清理", partition)
+		logger.Debug("Partition does not exist, no cleanup needed", zap.String("partition", partition))
 		result.DeletedRows = 0
 		return result, nil
 	}
 
-	// 执行DROP PARTITION
+	// Execute DROP PARTITION
 	var dropQuery string
 	if c.config.Cluster != "" && isDistributed {
-		// 分布式表，获取本地表名
+		// Distributed table, get local table name
 		localTableName := c.getLocalTableName(tableName)
 		dropQuery = fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DROP PARTITION '%s'", localTableName, c.config.Cluster, partition)
 	} else if c.config.Cluster != "" {
@@ -428,11 +473,11 @@ func (c *Client) enhancedCleanTableDataImpl(ctx context.Context, tableName strin
 		return result, result.Error
 	}
 
-	log.Printf("分区 %s 已删除", partition)
+	logger.Debug("Partition deleted", zap.String("partition", partition))
 	return result, nil
 }
 
-// CleanTableByDateRange 按日期范围清理数据
+// CleanTableByDateRange cleans data by date range
 func (c *Client) CleanTableByDateRange(ctx context.Context, tableName string, dateColumn string, startDate, endDate time.Time, dryRun bool) (*CleanupResult, error) {
 	condition := fmt.Sprintf("%s >= ? AND %s <= ?", dateColumn, dateColumn)
 	args := []interface{}{startDate, endDate}
@@ -447,7 +492,7 @@ func (c *Client) CleanTableByDateRange(ctx context.Context, tableName string, da
 	return c.EnhancedCleanTableData(ctx, tableName, opts)
 }
 
-// CleanOldData 清理旧数据
+// CleanOldData cleans old data
 func (c *Client) CleanOldData(ctx context.Context, tableName string, dateColumn string, daysToKeep int, dryRun bool) (*CleanupResult, error) {
 	cutoffDate := time.Now().AddDate(0, 0, -daysToKeep)
 	condition := fmt.Sprintf("%s < ?", dateColumn)
@@ -465,10 +510,10 @@ func (c *Client) CleanOldData(ctx context.Context, tableName string, dateColumn 
 }
 
 // ============================================================================
-// 表维护方法
+// Table maintenance methods
 // ============================================================================
 
-// OptimizeTable 优化表
+// OptimizeTable optimizes table
 func (c *Client) OptimizeTable(ctx context.Context, tableName string, final bool) error {
 	var query string
 	if final {
@@ -478,110 +523,122 @@ func (c *Client) OptimizeTable(ctx context.Context, tableName string, final bool
 	}
 
 	if err := c.Exec(ctx, query); err != nil {
-		return WrapTableError(tableName, fmt.Errorf("优化表失败: %w", err))
+		return WrapTableError(tableName, fmt.Errorf("table optimization failed: %w", err))
 	}
 
-	log.Printf("表 %s 优化完成", tableName)
+	logger.Debug("Table optimization completed", zap.String("table", tableName))
 	return nil
 }
 
-// AnalyzeTable 分析表
+// AnalyzeTable analyzes table
 func (c *Client) AnalyzeTable(ctx context.Context, tableName string) error {
 	query := fmt.Sprintf("ANALYZE TABLE %s", tableName)
 	if err := c.Exec(ctx, query); err != nil {
-		return WrapTableError(tableName, fmt.Errorf("分析表失败: %w", err))
+		return WrapTableError(tableName, fmt.Errorf("table analysis failed: %w", err))
 	}
 
-	log.Printf("表 %s 分析完成", tableName)
+	logger.Debug("Table analysis completed", zap.String("table", tableName))
 	return nil
 }
 
-// BackupTable 备份表
+// BackupTable backs up table
 func (c *Client) BackupTable(ctx context.Context, sourceTable, backupTable string) error {
-	// 获取源表结构
+	// Get source table structure
 	query := "SHOW CREATE TABLE " + sourceTable
 	row := c.QueryRow(ctx, query)
 
 	var createStatement string
 	err := row.Scan(&createStatement)
 	if err != nil {
-		return WrapTableError(sourceTable, fmt.Errorf("获取源表结构失败: %w", err))
+		return WrapTableError(sourceTable, fmt.Errorf("failed to get source table structure: %w", err))
 	}
 
-	// 修改表名创建备份表
+	// Modify table name to create backup table
 	backupSchema := strings.Replace(createStatement, sourceTable, backupTable, 1)
 	if err := c.Exec(ctx, backupSchema); err != nil {
-		return WrapTableError(backupTable, fmt.Errorf("创建备份表失败: %w", err))
+		return WrapTableError(backupTable, fmt.Errorf("failed to create backup table: %w", err))
 	}
 
-	// 复制数据
+	// Copy data
 	copyQuery := fmt.Sprintf("INSERT INTO %s SELECT * FROM %s", backupTable, sourceTable)
 	if err := c.Exec(ctx, copyQuery); err != nil {
-		// 如果复制失败，删除备份表
+		// If copy fails, delete backup table
 		c.DropTable(ctx, backupTable)
-		return WrapTableError(sourceTable, fmt.Errorf("复制数据到备份表失败: %w", err))
+		return WrapTableError(sourceTable, fmt.Errorf("failed to copy data to backup table: %w", err))
 	}
 
-	log.Printf("表 %s 已备份到 %s", sourceTable, backupTable)
+	logger.Debug("Table backup completed",
+		zap.String("source_table", sourceTable),
+		zap.String("backup_table", backupTable))
 	return nil
 }
 
-// RenameTable 重命名表
+// RenameTable renames table
 func (c *Client) RenameTable(ctx context.Context, oldName, newName string) error {
 	query := fmt.Sprintf("RENAME TABLE %s TO %s", oldName, newName)
 	if err := c.Exec(ctx, query); err != nil {
-		return WrapTableError(oldName, fmt.Errorf("重命名表失败: %w", err))
+		return WrapTableError(oldName, fmt.Errorf("table rename failed: %w", err))
 	}
 
-	log.Printf("表 %s 已重命名为 %s", oldName, newName)
+	logger.Debug("Table rename completed",
+		zap.String("old_name", oldName),
+		zap.String("new_name", newName))
 	return nil
 }
 
 // ============================================================================
-// 便利方法和工具函数
+// Convenience methods and utility functions
 // ============================================================================
 
-// GetClusterName 获取集群名称
+// GetClusterName returns cluster name
 func (c *Client) GetClusterName() string {
 	return c.config.Cluster
 }
 
-// GetTableNameResolver 获取表名解析器
+// GetTableNameResolver returns table name resolver
 func (c *Client) GetTableNameResolver() *TableNameResolver {
 	return c.nameResolver
 }
 
-// extractPartitionFromCondition 从清理条件中提取分区信息
+// extractPartitionFromCondition extracts partition information from cleanup condition
 func (c *Client) extractPartitionFromCondition(condition string) (partition string, canUse bool) {
-	log.Printf("[分区检测] 分析清理条件: %s", condition)
+	logger.Debug("Partition detection: analyzing cleanup condition", zap.String("condition", condition))
 
-	// 处理按天账单的日期条件
+	// Handle daily billing date conditions
 	if matches := regexp.MustCompile(`billing_date\s*=\s*'(\d{4}-\d{2}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
 		date := matches[1]
 		yearMonthDay := strings.ReplaceAll(date, "-", "")
-		log.Printf("[分区检测] 提取天表分区: %s", yearMonthDay)
+		logger.Debug("Partition detection: extracted daily table partition", zap.String("partition", yearMonthDay))
 		return yearMonthDay, true
 	}
 
-	// 处理按月账单的账期条件
+	// Handle monthly billing cycle conditions
 	if matches := regexp.MustCompile(`billing_cycle\s*=\s*'(\d{4}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
 		cycle := matches[1]
 		yearMonth := strings.Replace(cycle, "-", "", 1)
-		log.Printf("[分区检测] 提取分区: %s", yearMonth)
+		logger.Debug("Partition detection: extracted partition", zap.String("partition", yearMonth))
 		return yearMonth, true
 	}
 
-	// 处理火山引擎相关条件
+	// Handle Volcengine related conditions
 	if matches := regexp.MustCompile(`ExpenseDate\s+LIKE\s+'(\d{4}-\d{2})%'`).FindStringSubmatch(condition); len(matches) > 1 {
 		cycle := matches[1]
 		yearMonth := strings.Replace(cycle, "-", "", 1)
 		return yearMonth, true
 	}
 
+	// Handle Volcengine BillPeriod conditions (format: YYYY-MM)
+	if matches := regexp.MustCompile(`BillPeriod\s*=\s*'(\d{4}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
+		cycle := matches[1]
+		yearMonth := strings.Replace(cycle, "-", "", 1)
+		logger.Debug("Partition detection: extracted BillPeriod partition", zap.String("partition", yearMonth))
+		return yearMonth, true
+	}
+
 	return "", false
 }
 
-// checkPartitionExists 检查分区是否存在
+// checkPartitionExists checks if partition exists
 func (c *Client) checkPartitionExists(ctx context.Context, tableName, partition string) (bool, error) {
 	query := `
 		SELECT COUNT(*) 
@@ -599,7 +656,7 @@ func (c *Client) checkPartitionExists(ctx context.Context, tableName, partition 
 	return count > 0, nil
 }
 
-// getLocalTableName 获取分布式表对应的本地表名
+// getLocalTableName gets local table name corresponding to distributed table
 func (c *Client) getLocalTableName(distributedTableName string) string {
 	if strings.Contains(distributedTableName, "_distributed") {
 		return strings.Replace(distributedTableName, "_distributed", "_local", 1)
@@ -608,30 +665,30 @@ func (c *Client) getLocalTableName(distributedTableName string) string {
 }
 
 // ============================================================================
-// 兼容性方法（保持向后兼容）
+// Compatibility methods (maintain backward compatibility)
 // ============================================================================
 
-// InsertToDistributed 分布式表插入（兼容性方法）
+// InsertToDistributed distributed table insert (compatibility method)
 func (c *Client) InsertToDistributed(ctx context.Context, distributedTableName string, data map[string]interface{}) error {
 	return c.Insert(ctx, distributedTableName, data)
 }
 
-// InsertBatchToDistributed 分布式表批量插入（兼容性方法）
+// InsertBatchToDistributed distributed table batch insert (compatibility method)
 func (c *Client) InsertBatchToDistributed(ctx context.Context, distributedTableName string, data []map[string]interface{}) error {
 	return c.InsertBatch(ctx, distributedTableName, data)
 }
 
-// AsyncInsertBatchToDistributed 异步分布式表批量插入（兼容性方法）
+// AsyncInsertBatchToDistributed asynchronous distributed table batch insert (compatibility method)
 func (c *Client) AsyncInsertBatchToDistributed(ctx context.Context, distributedTableName string, data []map[string]interface{}) error {
 	return c.AsyncInsertBatch(ctx, distributedTableName, data)
 }
 
-// OptimizedBatchInsertToDistributed 优化的分布式表批量插入（兼容性方法）
+// OptimizedBatchInsertToDistributed optimized distributed table batch insert (compatibility method)
 func (c *Client) OptimizedBatchInsertToDistributed(ctx context.Context, distributedTableName string, data []map[string]interface{}, opts *BatchInsertOptions) (*BatchInsertResult, error) {
 	return c.OptimizedBatchInsert(ctx, distributedTableName, data, opts)
 }
 
-// CreateDistributedTableWithResolver 创建完整的分布式表结构（兼容性方法）
+// CreateDistributedTableWithResolver creates complete distributed table structure (compatibility method)
 func (c *Client) CreateDistributedTableWithResolver(ctx context.Context, baseTableName string, localSchema string) error {
 	if c.config.Cluster == "" {
 		return ErrClusterNotConfigured
@@ -639,42 +696,59 @@ func (c *Client) CreateDistributedTableWithResolver(ctx context.Context, baseTab
 
 	distributedTableName, localTableName := c.nameResolver.GetTablePair(baseTableName)
 
-	// 先创建本地表
+	logger.Info("Creating distributed table structure with resolver",
+		zap.String("base_table", baseTableName),
+		zap.String("local_table", localTableName),
+		zap.String("distributed_table", distributedTableName),
+		zap.String("cluster", c.config.Cluster))
+
+	// First create local table
 	if err := c.CreateLocalTable(ctx, baseTableName, localSchema); err != nil {
 		return WrapTableError(localTableName, fmt.Errorf("failed to create local table: %w", err))
 	}
 
-	// 等待集群同步
+	// Wait for cluster synchronization
 	time.Sleep(2 * time.Second)
 
-	// 创建分布式表
-	distributedSchema := fmt.Sprintf(`AS %s ENGINE = Distributed(%s, %s, %s, rand())`,
-		localTableName, c.config.Cluster, c.config.Database, localTableName)
+	// Create distributed table with explicit schema to avoid field mismatch
+	// Important: Extract only the column definitions from local schema
+	// Remove ENGINE and everything after it, then add Distributed ENGINE
+	engineIndex := strings.Index(localSchema, "ENGINE")
+	if engineIndex == -1 {
+		return WrapTableError(distributedTableName, fmt.Errorf("invalid schema: no ENGINE clause found"))
+	}
+
+	// Extract only the column definitions part (before ENGINE)
+	columnDefinitions := strings.TrimSpace(localSchema[:engineIndex])
+	distributedSchema := fmt.Sprintf("%s ENGINE = Distributed(%s, %s, %s, rand())",
+		columnDefinitions, c.config.Cluster, c.config.Database, localTableName)
 
 	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s",
 		distributedTableName, c.config.Cluster, distributedSchema)
 
+	logger.Debug("Creating distributed table SQL", zap.String("sql", query))
 	if err := c.Exec(ctx, query); err != nil {
 		return WrapTableError(distributedTableName, fmt.Errorf("failed to create distributed table: %w", err))
 	}
 
-	log.Printf("[自动表名解析] 成功创建分布式表结构：本地表=%s，分布式表=%s",
-		localTableName, distributedTableName)
+	logger.Info("Automatic table name resolution: successfully created distributed table structure",
+		zap.String("local_table", localTableName),
+		zap.String("distributed_table", distributedTableName))
 
 	return nil
 }
 
-// CreateLocalTable 明确创建本地表（兼容性方法）
+// CreateLocalTable explicitly creates local table (compatibility method)
 func (c *Client) CreateLocalTable(ctx context.Context, baseTableName string, schema string) error {
 	localTableName := c.nameResolver.ResolveLocalTableName(baseTableName)
 
 	if c.nameResolver.IsClusterEnabled() {
-		// 在集群上创建本地表
+		// Create local table on cluster
 		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s ON CLUSTER %s %s",
 			localTableName, c.config.Cluster, schema)
 		return c.Exec(ctx, query)
 	} else {
-		// 单机模式
+		// Single node mode
 		query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", localTableName, schema)
 		return c.Exec(ctx, query)
 	}

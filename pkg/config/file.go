@@ -82,6 +82,3 @@ func (c *Config) GetWeChatConfig() *WeChatConfig {
 	}
 	return NewWeChatConfig()
 }
-
-
-

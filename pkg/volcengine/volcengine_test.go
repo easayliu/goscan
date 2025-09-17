@@ -7,7 +7,7 @@ import (
 )
 
 func TestValidatePeriod(t *testing.T) {
-	// 创建一个测试客户端
+	// Create a test client
 	cfg := &config.VolcEngineConfig{
 		AccessKey: "test-key",
 		SecretKey: "test-secret",
@@ -74,7 +74,7 @@ func TestValidatePeriod(t *testing.T) {
 }
 
 func TestCalculateSmartPeriod(t *testing.T) {
-	// 创建一个测试客户端
+	// Create a test client
 	cfg := &config.VolcEngineConfig{
 		AccessKey: "test-key",
 		SecretKey: "test-secret",
@@ -86,23 +86,23 @@ func TestCalculateSmartPeriod(t *testing.T) {
 	}
 
 	selectedPeriod, dateRange := client.CalculateSmartPeriod()
-	
-	// 验证返回的账期格式
+
+	// Verify returned period format
 	_, err = time.Parse("2006-01", selectedPeriod)
 	if err != nil {
 		t.Errorf("Invalid period format: %s", selectedPeriod)
 	}
-	
-	// 验证日期范围不为空
+
+	// Verify date range is not empty
 	if dateRange == "" {
 		t.Error("Date range should not be empty")
 	}
-	
-	// 验证账期是当前月或上个月
+
+	// Verify period is current month or last month
 	now := time.Now()
 	currentMonth := now.Format("2006-01")
 	lastMonth := now.AddDate(0, -1, 0).Format("2006-01")
-	
+
 	if selectedPeriod != currentMonth && selectedPeriod != lastMonth {
 		t.Errorf("Expected period to be %s or %s, got %s", currentMonth, lastMonth, selectedPeriod)
 	}
@@ -191,17 +191,17 @@ func TestListBillDetailRequest(t *testing.T) {
 	}
 }
 
-// 集成测试（需要真实的API凭证）
+// Integration test (requires real API credentials)
 func TestBillServiceIntegration(t *testing.T) {
-	// 跳过集成测试，除非设置了环境变量
+	// Skip integration test unless environment variable is set
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// 集成测试需要真实的凭证和ClickHouse实例
+	// Integration test requires real credentials and ClickHouse instance
 	t.Skip("Integration test requires real credentials and ClickHouse instance")
 
-	// 以下代码仅作为示例，实际运行需要真实环境
+	// The following code is for example only, actual execution requires real environment
 	/*
 		cfg := &config.VolcEngineConfig{
 			AccessKey: "your-access-key",
@@ -232,12 +232,12 @@ func TestBillServiceIntegration(t *testing.T) {
 
 		ctx := context.Background()
 
-		// 创建测试表
+		// Create test table
 		if err := billService.CreateBillTable(ctx); err != nil {
 			t.Fatalf("Failed to create bill table: %v", err)
 		}
 
-		// 测试同步数据
+		// Test data synchronization
 		req := &ListBillDetailRequest{
 			BillPeriod: "2023-01",
 			Limit:      10,

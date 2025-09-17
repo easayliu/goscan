@@ -8,7 +8,7 @@ import (
 )
 
 // sanitizeConfig removes sensitive information from config before returning
-// 清理配置信息，移除敏感数据后返回
+// Cleans configuration information by removing sensitive data before returning
 func (h *HandlerService) sanitizeConfig() map[string]interface{} {
 	cfg := h.config
 	sanitized := map[string]interface{}{
@@ -39,24 +39,24 @@ func (h *HandlerService) sanitizeConfig() map[string]interface{} {
 	return sanitized
 }
 
-// convertFlatToTaskRequest 将扁平格式的JSON转换为标准的TaskRequest格式
-// 这是一个向后兼容的辅助函数
+// convertFlatToTaskRequest converts flat format JSON to standard TaskRequest format
+// This is a backward compatible helper function
 func (h *HandlerService) convertFlatToTaskRequest(flatReq map[string]interface{}) tasks.TaskRequest {
-	// 提取provider
+	// Extract provider
 	provider := ""
 	if p, ok := flatReq["provider"].(string); ok {
 		provider = p
 	}
-	
-	// 设置默认type为sync
+
+	// Set default type to sync
 	taskType := tasks.TaskTypeSync
 	if t, ok := flatReq["type"].(string); ok {
 		taskType = tasks.TaskType(t)
 	}
-	
-	// 创建config，手动映射已知字段
+
+	// Create config, manually map known fields
 	config := tasks.TaskConfig{}
-	
+
 	if billPeriod, ok := flatReq["bill_period"].(string); ok {
 		config.BillPeriod = billPeriod
 	}
@@ -84,7 +84,7 @@ func (h *HandlerService) convertFlatToTaskRequest(flatReq map[string]interface{}
 	if limit, ok := flatReq["limit"].(float64); ok { // JSON numbers are float64
 		config.Limit = int(limit)
 	}
-	
+
 	return tasks.TaskRequest{
 		Type:     taskType,
 		Provider: provider,
@@ -92,42 +92,42 @@ func (h *HandlerService) convertFlatToTaskRequest(flatReq map[string]interface{}
 	}
 }
 
-// createNotificationExecutor 创建通知任务执行器
-// 这是一个辅助函数，用于创建企业微信通知执行器
+// createNotificationExecutor creates notification task executor
+// This is a helper function for creating WeChat Enterprise notification executor
 func (h *HandlerService) createNotificationExecutor() (*tasks.NotificationTaskExecutor, error) {
-	// 创建ClickHouse客户端（复用现有连接或创建新的）
+	// Create ClickHouse client (reuse existing connection or create new one)
 	chClient, err := clickhouse.NewClient(h.config.ClickHouse)
 	if err != nil {
-		return nil, fmt.Errorf("创建ClickHouse客户端失败: %w", err)
+		return nil, fmt.Errorf("failed to create ClickHouse client: %w", err)
 	}
 
-	// 创建通知任务执行器
+	// Create notification task executor
 	return tasks.NewNotificationTaskExecutor(chClient, h.config)
 }
 
-// maskWebhookURL 隐藏Webhook URL的敏感部分
-// 用于在API响应中安全地显示URL信息
+// maskWebhookURL masks sensitive parts of Webhook URL
+// Used for safely displaying URL information in API responses
 func maskWebhookURL(webhookURL string) string {
 	if webhookURL == "" {
 		return ""
 	}
 
-	// 简单的URL掩码处理，只显示前缀和后缀
+	// Simple URL masking, only show prefix and suffix
 	if len(webhookURL) > 20 {
 		return webhookURL[:10] + "***" + webhookURL[len(webhookURL)-7:]
 	}
 	return "***"
 }
 
-// getRecentNotificationHistory 获取最近的通知任务历史
-// 用于查询最近的通知任务执行记录
+// getRecentNotificationHistory gets recent notification task history
+// Used for querying recent notification task execution records
 func (h *HandlerService) getRecentNotificationHistory() []map[string]interface{} {
 	history := h.taskMgr.GetTaskHistory()
 
 	var notificationHistory []map[string]interface{}
 	count := 0
 
-	// 从最新的任务开始查找，最多返回10个通知任务
+	// Search from latest tasks, return at most 10 notification tasks
 	for i := len(history) - 1; i >= 0 && count < 10; i-- {
 		task := history[i]
 		if task.Type == tasks.TaskTypeNotification {
@@ -156,7 +156,7 @@ func (h *HandlerService) getRecentNotificationHistory() []map[string]interface{}
 	return notificationHistory
 }
 
-// formatDuration 格式化时间段为可读字符串
+// formatDuration formats duration to readable string
 func formatDuration(d time.Duration) string {
 	if d < time.Second {
 		return fmt.Sprintf("%.0fms", float64(d.Nanoseconds())/1e6)
@@ -170,12 +170,12 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%.1fh", d.Hours())
 }
 
-// getCurrentTimestamp 获取当前UTC时间戳
+// getCurrentTimestamp gets current UTC timestamp
 func getCurrentTimestamp() time.Time {
 	return time.Now().UTC()
 }
 
-// buildTaskResponse 构建标准的任务响应
+// buildTaskResponse builds standard task response
 func buildTaskResponse(taskID, status, message string) map[string]interface{} {
 	return map[string]interface{}{
 		"task_id":   taskID,
@@ -185,16 +185,16 @@ func buildTaskResponse(taskID, status, message string) map[string]interface{} {
 	}
 }
 
-// buildSuccessResponse 构建成功响应
+// buildSuccessResponse builds success response
 func buildSuccessResponse(data interface{}) map[string]interface{} {
 	response := map[string]interface{}{
 		"success":   true,
 		"timestamp": getCurrentTimestamp(),
 	}
-	
+
 	if data != nil {
 		response["data"] = data
 	}
-	
+
 	return response
 }

@@ -17,11 +17,11 @@ type VolcEngineConfig struct {
 	SecretKey   string `json:"secret_key" yaml:"secret_key"`
 	Region      string `json:"region" yaml:"region"`
 	Host        string `json:"host" yaml:"host"`
-	Timeout     int    `json:"timeout" yaml:"timeout"`         // seconds
-	BatchSize   int    `json:"batch_size" yaml:"batch_size"`   // API批量获取大小
-	MaxRetries  int    `json:"max_retries" yaml:"max_retries"` // 最大重试次数
-	RetryDelay  int    `json:"retry_delay" yaml:"retry_delay"` // 重试延迟(秒)
-	RateLimit   int    `json:"rate_limit" yaml:"rate_limit"`   // QPS 限制
+	Timeout     int    `json:"timeout" yaml:"timeout"`           // seconds
+	BatchSize   int    `json:"batch_size" yaml:"batch_size"`     // API批量获取大小
+	MaxRetries  int    `json:"max_retries" yaml:"max_retries"`   // 最大重试次数
+	RetryDelay  int    `json:"retry_delay" yaml:"retry_delay"`   // 重试延迟(秒)
+	RateLimit   int    `json:"rate_limit" yaml:"rate_limit"`     // QPS 限制
 	EnableDebug bool   `json:"enable_debug" yaml:"enable_debug"` // 启用调试模式
 
 	// === 历史数据同步配置 ===
@@ -89,10 +89,10 @@ type GCPConfig struct {
 // NewVolcEngineConfig 创建火山引擎配置，使用环境变量填充默认值
 func NewVolcEngineConfig() *VolcEngineConfig {
 	return &VolcEngineConfig{
-		AccessKey:  getEnv("VOLCENGINE_ACCESS_KEY", ""),
-		SecretKey:  getEnv("VOLCENGINE_SECRET_KEY", ""),
-		Region:     getEnv("VOLCENGINE_REGION", "cn-north-1"),
-		Host:       getEnv("VOLCENGINE_HOST", "billing.volcengineapi.com"),
+		AccessKey:   getEnv("VOLCENGINE_ACCESS_KEY", ""),
+		SecretKey:   getEnv("VOLCENGINE_SECRET_KEY", ""),
+		Region:      getEnv("VOLCENGINE_REGION", "cn-north-1"),
+		Host:        getEnv("VOLCENGINE_HOST", "billing.volcengineapi.com"),
 		Timeout:     getEnvInt("VOLCENGINE_TIMEOUT", 30),
 		BatchSize:   getEnvInt("VOLCENGINE_BATCH_SIZE", 50),
 		MaxRetries:  getEnvInt("VOLCENGINE_MAX_RETRIES", 5),
@@ -176,35 +176,35 @@ func (c *VolcEngineConfig) Validate() error {
 	if c.AccessKey == "" {
 		return ErrMissingRequired
 	}
-	
+
 	if c.SecretKey == "" {
 		return ErrMissingRequired
 	}
-	
+
 	if c.Region == "" {
 		return ErrMissingRequired
 	}
-	
+
 	if c.Timeout <= 0 {
 		c.Timeout = 30
 	}
-	
+
 	if c.MaxRetries < 0 {
 		c.MaxRetries = 5
 	}
-	
+
 	if c.RetryDelay <= 0 {
 		c.RetryDelay = 1
 	}
-	
+
 	if c.BatchSize <= 0 {
 		c.BatchSize = 50
 	}
-	
+
 	if c.RateLimit <= 0 {
 		c.RateLimit = 10
 	}
-	
+
 	return nil
 }
 
@@ -264,19 +264,19 @@ func mergeVolcEngineEnvVars(config *Config) {
 	ve := config.CloudProviders.VolcEngine
 
 	envMappings := map[string]interface{}{
-		"VOLCENGINE_ACCESS_KEY":   &ve.AccessKey,
-		"VOLCENGINE_SECRET_KEY":   &ve.SecretKey,
-		"VOLCENGINE_REGION":       &ve.Region,
-		"VOLCENGINE_HOST":         &ve.Host,
-		"VOLCENGINE_TIMEOUT":      &ve.Timeout,
-		"VOLCENGINE_BATCH_SIZE":   &ve.BatchSize,
-		"VOLCENGINE_MAX_RETRIES":  &ve.MaxRetries,
-		"VOLCENGINE_RETRY_DELAY":  &ve.RetryDelay,
-		"VOLCENGINE_RATE_LIMIT":   &ve.RateLimit,
-		"VOLCENGINE_DEFAULT_SYNC_MODE":         &ve.DefaultSyncMode,
-		"VOLCENGINE_MAX_HISTORICAL_MONTHS":     &ve.MaxHistoricalMonths,
-		"VOLCENGINE_DEFAULT_START_PERIOD":      &ve.DefaultStartPeriod,
-		"VOLCENGINE_DEFAULT_END_PERIOD":        &ve.DefaultEndPeriod,
+		"VOLCENGINE_ACCESS_KEY":            &ve.AccessKey,
+		"VOLCENGINE_SECRET_KEY":            &ve.SecretKey,
+		"VOLCENGINE_REGION":                &ve.Region,
+		"VOLCENGINE_HOST":                  &ve.Host,
+		"VOLCENGINE_TIMEOUT":               &ve.Timeout,
+		"VOLCENGINE_BATCH_SIZE":            &ve.BatchSize,
+		"VOLCENGINE_MAX_RETRIES":           &ve.MaxRetries,
+		"VOLCENGINE_RETRY_DELAY":           &ve.RetryDelay,
+		"VOLCENGINE_RATE_LIMIT":            &ve.RateLimit,
+		"VOLCENGINE_DEFAULT_SYNC_MODE":     &ve.DefaultSyncMode,
+		"VOLCENGINE_MAX_HISTORICAL_MONTHS": &ve.MaxHistoricalMonths,
+		"VOLCENGINE_DEFAULT_START_PERIOD":  &ve.DefaultStartPeriod,
+		"VOLCENGINE_DEFAULT_END_PERIOD":    &ve.DefaultEndPeriod,
 	}
 
 	applyEnvMappings(envMappings)
@@ -303,22 +303,22 @@ func mergeAliCloudEnvVars(config *Config) {
 	ac := config.CloudProviders.AliCloud
 
 	envMappings := map[string]interface{}{
-		"ALICLOUD_ACCESS_KEY_ID":           &ac.AccessKeyID,
-		"ALICLOUD_ACCESS_KEY_SECRET":       &ac.AccessKeySecret,
-		"ALICLOUD_REGION":                  &ac.Region,
-		"ALICLOUD_ENDPOINT":                &ac.Endpoint,
-		"ALICLOUD_TIMEOUT":                 &ac.Timeout,
-		"ALICLOUD_BATCH_SIZE":              &ac.BatchSize,
-		"ALICLOUD_MAX_RETRIES":             &ac.MaxRetries,
-		"ALICLOUD_RETRY_DELAY":             &ac.RetryDelay,
-		"ALICLOUD_DEFAULT_GRANULARITY":     &ac.DefaultGranularity,
-		"ALICLOUD_DAILY_SYNC_DAYS":         &ac.DailySyncDays,
-		"ALICLOUD_MONTHLY_TABLE":           &ac.MonthlyTable,
-		"ALICLOUD_DAILY_TABLE":             &ac.DailyTable,
-		"ALICLOUD_DEFAULT_SYNC_MODE":       &ac.DefaultSyncMode,
-		"ALICLOUD_MAX_HISTORICAL_MONTHS":   &ac.MaxHistoricalMonths,
-		"ALICLOUD_DEFAULT_START_PERIOD":    &ac.DefaultStartPeriod,
-		"ALICLOUD_DEFAULT_END_PERIOD":      &ac.DefaultEndPeriod,
+		"ALICLOUD_ACCESS_KEY_ID":         &ac.AccessKeyID,
+		"ALICLOUD_ACCESS_KEY_SECRET":     &ac.AccessKeySecret,
+		"ALICLOUD_REGION":                &ac.Region,
+		"ALICLOUD_ENDPOINT":              &ac.Endpoint,
+		"ALICLOUD_TIMEOUT":               &ac.Timeout,
+		"ALICLOUD_BATCH_SIZE":            &ac.BatchSize,
+		"ALICLOUD_MAX_RETRIES":           &ac.MaxRetries,
+		"ALICLOUD_RETRY_DELAY":           &ac.RetryDelay,
+		"ALICLOUD_DEFAULT_GRANULARITY":   &ac.DefaultGranularity,
+		"ALICLOUD_DAILY_SYNC_DAYS":       &ac.DailySyncDays,
+		"ALICLOUD_MONTHLY_TABLE":         &ac.MonthlyTable,
+		"ALICLOUD_DAILY_TABLE":           &ac.DailyTable,
+		"ALICLOUD_DEFAULT_SYNC_MODE":     &ac.DefaultSyncMode,
+		"ALICLOUD_MAX_HISTORICAL_MONTHS": &ac.MaxHistoricalMonths,
+		"ALICLOUD_DEFAULT_START_PERIOD":  &ac.DefaultStartPeriod,
+		"ALICLOUD_DEFAULT_END_PERIOD":    &ac.DefaultEndPeriod,
 	}
 
 	applyEnvMappings(envMappings)

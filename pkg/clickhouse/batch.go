@@ -3,24 +3,25 @@ package clickhouse
 import (
 	"context"
 	"fmt"
-	"log"
+	"goscan/pkg/logger"
 	"math"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"go.uber.org/zap"
 )
 
-// BatchInsertOptions 批量插入选项
+// BatchInsertOptions batch insert options
 type BatchInsertOptions struct {
-	BatchSize   int           // 每批次大小
-	MaxRetries  int           // 最大重试次数
-	RetryDelay  time.Duration // 重试延迟
-	EnableAsync bool          // 是否启用异步插入
-	Timeout     time.Duration // 超时时间
+	BatchSize   int           // Size per batch
+	MaxRetries  int           // Maximum retry attempts
+	RetryDelay  time.Duration // Retry delay
+	EnableAsync bool          // Whether to enable async insert
+	Timeout     time.Duration // Timeout duration
 }
 
-// DefaultBatchInsertOptions 返回默认的批量插入选项
+// DefaultBatchInsertOptions returns default batch insert options
 func DefaultBatchInsertOptions() *BatchInsertOptions {
 	return &BatchInsertOptions{
 		BatchSize:   500,
@@ -31,7 +32,7 @@ func DefaultBatchInsertOptions() *BatchInsertOptions {
 	}
 }
 
-// BatchInsertResult 批量插入结果
+// BatchInsertResult batch insert result
 type BatchInsertResult struct {
 	TotalRecords     int           `json:"total_records"`
 	ProcessedBatches int           `json:"processed_batches"`
@@ -39,17 +40,17 @@ type BatchInsertResult struct {
 	InsertedRecords  int           `json:"inserted_records"`
 	FailedRecords    int           `json:"failed_records"`
 	Duration         time.Duration `json:"duration"`
-	AverageSpeed     float64       `json:"average_speed"` // records per second
+	AverageSpeed     float64       `json:"average_speed"` // Records per second
 	Errors           []error       `json:"errors,omitempty"`
 }
 
-// batchManager 批量操作管理器
+// batchManager batch operations manager
 type batchManager struct {
 	conn         driver.Conn
 	nameResolver *TableNameResolver
 }
 
-// NewBatchManager 创建批量操作管理器
+// NewBatchManager creates batch operations manager
 func NewBatchManager(conn driver.Conn, nameResolver *TableNameResolver) BatchManager {
 	return &batchManager{
 		conn:         conn,
@@ -57,12 +58,12 @@ func NewBatchManager(conn driver.Conn, nameResolver *TableNameResolver) BatchMan
 	}
 }
 
-// PrepareBatch 准备批量操作
+// PrepareBatch prepares batch operations
 func (bm *batchManager) PrepareBatch(ctx context.Context, query string) (driver.Batch, error) {
 	if bm.conn == nil {
 		return nil, WrapConnectionError(fmt.Errorf("connection is nil"))
 	}
-	
+
 	batch, err := bm.conn.PrepareBatch(ctx, query)
 	if err != nil {
 		return nil, WrapError("prepare batch", "", err)
@@ -70,14 +71,20 @@ func (bm *batchManager) PrepareBatch(ctx context.Context, query string) (driver.
 	return batch, nil
 }
 
-// InsertBatch 批量插入数据
+// InsertBatch inserts data in batches
 func (bm *batchManager) InsertBatch(ctx context.Context, tableName string, data []map[string]interface{}) error {
 	if len(data) == 0 {
 		return ErrEmptyData
 	}
 
-	// 自动解析表名
+	// Automatically resolve table name
 	resolvedTableName := bm.nameResolver.ResolveInsertTarget(tableName)
+
+	logger.Debug("Batch insert table name resolution",
+		zap.String("input_table", tableName),
+		zap.String("resolved_table", resolvedTableName),
+		zap.Bool("cluster_enabled", bm.nameResolver.IsClusterEnabled()),
+		zap.Int("record_count", len(data)))
 
 	columns := ExtractColumnsFromData(data)
 	if len(columns) == 0 {
@@ -85,33 +92,47 @@ func (bm *batchManager) InsertBatch(ctx context.Context, tableName string, data 
 	}
 
 	query := BuildInsertQuery(resolvedTableName, columns)
-	
+	logger.Debug("Preparing batch insert query",
+		zap.String("query", query),
+		zap.Strings("columns", columns))
+
 	batch, err := bm.PrepareBatch(ctx, query)
 	if err != nil {
-		return WrapError("prepare batch", tableName, err)
+		return WrapError("prepare batch", resolvedTableName, err)
 	}
 
-	for _, row := range data {
+	for i, row := range data {
 		values := PrepareValues(row, columns)
 		if err := batch.Append(values...); err != nil {
-			return WrapError("append to batch", tableName, err)
+			logger.Error("Failed to append row to batch",
+				zap.Int("row_index", i),
+				zap.String("table", resolvedTableName),
+				zap.Error(err))
+			return WrapError("append to batch", resolvedTableName, err)
 		}
 	}
 
 	if err := batch.Send(); err != nil {
-		return WrapError("send batch", tableName, err)
+		logger.Error("Failed to send batch",
+			zap.String("table", resolvedTableName),
+			zap.Int("record_count", len(data)),
+			zap.Error(err))
+		return WrapError("send batch", resolvedTableName, err)
 	}
 
+	logger.Debug("Batch insert successful",
+		zap.String("table", resolvedTableName),
+		zap.Int("record_count", len(data)))
 	return nil
 }
 
-// AsyncInsertBatch 异步批量插入数据
+// AsyncInsertBatch inserts data asynchronously in batches
 func (bm *batchManager) AsyncInsertBatch(ctx context.Context, tableName string, data []map[string]interface{}) error {
 	if len(data) == 0 {
 		return ErrEmptyData
 	}
 
-	// 启用异步插入
+	// Enable async insert
 	ctxWithSettings := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{
 		"async_insert":                 1,
 		"wait_for_async_insert":        1,
@@ -122,7 +143,7 @@ func (bm *batchManager) AsyncInsertBatch(ctx context.Context, tableName string, 
 	return bm.InsertBatch(ctxWithSettings, tableName, data)
 }
 
-// OptimizedBatchInsert 优化的批量插入方法，支持分块、重试、性能监控
+// OptimizedBatchInsert optimized batch insert method supporting chunking, retry, and performance monitoring
 func (bm *batchManager) OptimizedBatchInsert(ctx context.Context, tableName string, data []map[string]interface{}, opts *BatchInsertOptions) (*BatchInsertResult, error) {
 	if opts == nil {
 		opts = DefaultBatchInsertOptions()
@@ -145,12 +166,12 @@ func (bm *batchManager) OptimizedBatchInsert(ctx context.Context, tableName stri
 		}
 	}()
 
-	// 验证批次大小
+	// Validate batch size
 	if opts.BatchSize <= 0 {
 		return result, WrapError("optimized batch insert", tableName, ErrInvalidBatchSize)
 	}
 
-	// 分块处理数据
+	// Process data in chunks
 	totalBatches := int(math.Ceil(float64(len(data)) / float64(opts.BatchSize)))
 
 	for i := 0; i < len(data); i += opts.BatchSize {
@@ -162,12 +183,15 @@ func (bm *batchManager) OptimizedBatchInsert(ctx context.Context, tableName stri
 		batch := data[i:end]
 		batchNum := (i / opts.BatchSize) + 1
 
-		log.Printf("处理批次 %d/%d, 记录数: %d", batchNum, totalBatches, len(batch))
+		logger.Debug("Processing batch",
+			zap.Int("batch_num", batchNum),
+			zap.Int("total_batches", totalBatches),
+			zap.Int("record_count", len(batch)))
 
-		// 重试机制
+		// Retry mechanism
 		var batchErr error
 		for retry := 0; retry <= opts.MaxRetries; retry++ {
-			// 创建带超时的上下文
+			// Create context with timeout
 			batchCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 
 			if opts.EnableAsync {
@@ -179,23 +203,30 @@ func (bm *batchManager) OptimizedBatchInsert(ctx context.Context, tableName stri
 			cancel()
 
 			if batchErr == nil {
-				// 成功
+				// Success
 				result.ProcessedBatches++
 				result.InsertedRecords += len(batch)
 				break
 			}
 
-			// 失败，记录错误
+			// Failed, log error
 			if retry == opts.MaxRetries {
-				// 最后一次重试也失败了
+				// Last retry also failed
 				result.FailedBatches++
 				result.FailedRecords += len(batch)
 				wrappedErr := WrapBatchError(batchNum, batchErr)
-				result.Errors = append(result.Errors, fmt.Errorf("批次失败（重试 %d 次后）: %w", opts.MaxRetries, wrappedErr))
-				log.Printf("批次 %d 最终失败: %v", batchNum, batchErr)
+				result.Errors = append(result.Errors, fmt.Errorf("batch failed after %d retries: %w", opts.MaxRetries, wrappedErr))
+				logger.Error("Batch finally failed",
+					zap.Int("batch_num", batchNum),
+					zap.Error(batchErr))
 			} else {
-				// 还有重试机会，等待后重试
-				log.Printf("批次 %d 失败，%v 后重试（第 %d/%d 次）: %v", batchNum, opts.RetryDelay, retry+1, opts.MaxRetries, batchErr)
+				// Still have retry chances, wait and retry
+				logger.Warn("Batch failed, preparing to retry",
+					zap.Int("batch_num", batchNum),
+					zap.Duration("retry_delay", opts.RetryDelay),
+					zap.Int("retry_attempt", retry+1),
+					zap.Int("max_retries", opts.MaxRetries),
+					zap.Error(batchErr))
 				time.Sleep(opts.RetryDelay)
 			}
 		}
@@ -204,17 +235,17 @@ func (bm *batchManager) OptimizedBatchInsert(ctx context.Context, tableName stri
 	return result, nil
 }
 
-// InsertBatchToDistributed 分布式表批量插入
+// InsertBatchToDistributed distributed table batch insert
 func (bm *batchManager) InsertBatchToDistributed(ctx context.Context, distributedTableName string, data []map[string]interface{}) error {
 	return bm.InsertBatch(ctx, distributedTableName, data)
 }
 
-// AsyncInsertBatchToDistributed 异步分布式表批量插入
+// AsyncInsertBatchToDistributed asynchronous distributed table batch insert
 func (bm *batchManager) AsyncInsertBatchToDistributed(ctx context.Context, distributedTableName string, data []map[string]interface{}) error {
 	return bm.AsyncInsertBatch(ctx, distributedTableName, data)
 }
 
-// OptimizedBatchInsertToDistributed 优化的分布式表批量插入
+// OptimizedBatchInsertToDistributed optimized distributed table batch insert
 func (bm *batchManager) OptimizedBatchInsertToDistributed(ctx context.Context, distributedTableName string, data []map[string]interface{}, opts *BatchInsertOptions) (*BatchInsertResult, error) {
 	if opts == nil {
 		opts = DefaultBatchInsertOptions()
@@ -237,12 +268,12 @@ func (bm *batchManager) OptimizedBatchInsertToDistributed(ctx context.Context, d
 		}
 	}()
 
-	// 验证批次大小
+	// Validate batch size
 	if opts.BatchSize <= 0 {
 		return result, WrapError("optimized distributed batch insert", distributedTableName, ErrInvalidBatchSize)
 	}
 
-	// 分块处理数据
+	// Process data in chunks
 	totalBatches := int(math.Ceil(float64(len(data)) / float64(opts.BatchSize)))
 
 	for i := 0; i < len(data); i += opts.BatchSize {
@@ -254,12 +285,15 @@ func (bm *batchManager) OptimizedBatchInsertToDistributed(ctx context.Context, d
 		batch := data[i:end]
 		batchNum := (i / opts.BatchSize) + 1
 
-		log.Printf("处理分布式表批次 %d/%d, 记录数: %d", batchNum, totalBatches, len(batch))
+		logger.Debug("Processing distributed table batch",
+			zap.Int("batch_num", batchNum),
+			zap.Int("total_batches", totalBatches),
+			zap.Int("record_count", len(batch)))
 
-		// 重试机制
+		// Retry mechanism
 		var batchErr error
 		for retry := 0; retry <= opts.MaxRetries; retry++ {
-			// 创建带超时的上下文
+			// Create context with timeout
 			batchCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 
 			if opts.EnableAsync {
@@ -271,23 +305,30 @@ func (bm *batchManager) OptimizedBatchInsertToDistributed(ctx context.Context, d
 			cancel()
 
 			if batchErr == nil {
-				// 成功
+				// Success
 				result.ProcessedBatches++
 				result.InsertedRecords += len(batch)
 				break
 			}
 
-			// 失败，记录错误
+			// Failed, log error
 			if retry == opts.MaxRetries {
-				// 最后一次重试也失败了
+				// Last retry also failed
 				result.FailedBatches++
 				result.FailedRecords += len(batch)
 				wrappedErr := WrapBatchError(batchNum, batchErr)
-				result.Errors = append(result.Errors, fmt.Errorf("分布式表批次失败（重试 %d 次后）: %w", opts.MaxRetries, wrappedErr))
-				log.Printf("分布式表批次 %d 最终失败: %v", batchNum, batchErr)
+				result.Errors = append(result.Errors, fmt.Errorf("distributed table batch failed after %d retries: %w", opts.MaxRetries, wrappedErr))
+				logger.Error("Distributed table batch finally failed",
+					zap.Int("batch_num", batchNum),
+					zap.Error(batchErr))
 			} else {
-				// 还有重试机会，等待后重试
-				log.Printf("分布式表批次 %d 失败，%v 后重试（第 %d/%d 次）: %v", batchNum, opts.RetryDelay, retry+1, opts.MaxRetries, batchErr)
+				// Still have retry chances, wait and retry
+				logger.Warn("Distributed table batch failed, preparing to retry",
+					zap.Int("batch_num", batchNum),
+					zap.Duration("retry_delay", opts.RetryDelay),
+					zap.Int("retry_attempt", retry+1),
+					zap.Int("max_retries", opts.MaxRetries),
+					zap.Error(batchErr))
 				time.Sleep(opts.RetryDelay)
 			}
 		}
@@ -296,13 +337,13 @@ func (bm *batchManager) OptimizedBatchInsertToDistributed(ctx context.Context, d
 	return result, nil
 }
 
-// ValidateBatchData 验证批量数据
+// ValidateBatchData validates batch data
 func ValidateBatchData(data []map[string]interface{}) error {
 	if len(data) == 0 {
 		return ErrEmptyData
 	}
 
-	// 检查所有行是否有相同的列
+	// Check if all rows have the same columns
 	firstRowColumns := make(map[string]bool)
 	for column := range data[0] {
 		firstRowColumns[column] = true
@@ -323,7 +364,7 @@ func ValidateBatchData(data []map[string]interface{}) error {
 	return nil
 }
 
-// String 返回批量插入结果的字符串表示
+// String returns string representation of batch insert result
 func (r *BatchInsertResult) String() string {
 	status := "SUCCESS"
 	if r.FailedBatches > 0 || r.FailedRecords > 0 {
@@ -339,12 +380,12 @@ func (r *BatchInsertResult) String() string {
 		r.ProcessedBatches, r.ProcessedBatches+r.FailedBatches, r.AverageSpeed)
 }
 
-// IsSuccess 检查是否全部成功
+// IsSuccess checks if all succeeded
 func (r *BatchInsertResult) IsSuccess() bool {
 	return r.FailedRecords == 0 && r.FailedBatches == 0
 }
 
-// GetSuccessRate 获取成功率
+// GetSuccessRate gets success rate
 func (r *BatchInsertResult) GetSuccessRate() float64 {
 	if r.TotalRecords == 0 {
 		return 0
@@ -352,12 +393,12 @@ func (r *BatchInsertResult) GetSuccessRate() float64 {
 	return float64(r.InsertedRecords) / float64(r.TotalRecords) * 100
 }
 
-// HasErrors 检查是否有错误
+// HasErrors checks if there are errors
 func (r *BatchInsertResult) HasErrors() bool {
 	return len(r.Errors) > 0
 }
 
-// GetErrorSummary 获取错误摘要
+// GetErrorSummary gets error summary
 func (r *BatchInsertResult) GetErrorSummary() string {
 	if !r.HasErrors() {
 		return "No errors"

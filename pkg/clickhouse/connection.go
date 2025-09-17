@@ -10,7 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
-// ConnectionConfig 连接配置结构
+// ConnectionConfig connection configuration structure
 type ConnectionConfig struct {
 	DialTimeout          time.Duration
 	MaxOpenConns         int
@@ -21,7 +21,7 @@ type ConnectionConfig struct {
 	MaxExecutionTime     int
 }
 
-// DefaultConnectionConfig 返回默认连接配置
+// DefaultConnectionConfig returns default connection configuration
 func DefaultConnectionConfig() *ConnectionConfig {
 	return &ConnectionConfig{
 		DialTimeout:          30 * time.Second,
@@ -34,13 +34,13 @@ func DefaultConnectionConfig() *ConnectionConfig {
 	}
 }
 
-// connectionManager 连接管理器
+// connectionManager connection manager
 type connectionManager struct {
 	conn   driver.Conn
 	config *config.ClickHouseConfig
 }
 
-// NewConnectionManager 创建连接管理器
+// NewConnectionManager creates connection manager
 func NewConnectionManager(cfg *config.ClickHouseConfig, connCfg *ConnectionConfig) (ConnectionManager, error) {
 	if connCfg == nil {
 		connCfg = DefaultConnectionConfig()
@@ -51,7 +51,7 @@ func NewConnectionManager(cfg *config.ClickHouseConfig, connCfg *ConnectionConfi
 		return nil, WrapConnectionError(err)
 	}
 
-	// 验证连接
+	// verify connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -66,7 +66,7 @@ func NewConnectionManager(cfg *config.ClickHouseConfig, connCfg *ConnectionConfi
 	}, nil
 }
 
-// createConnection 创建ClickHouse连接
+// createConnection creates ClickHouse connection
 func createConnection(cfg *config.ClickHouseConfig, connCfg *ConnectionConfig) (driver.Conn, error) {
 	opts := &clickhouse.Options{
 		Addr: cfg.GetAddresses(),
@@ -89,7 +89,7 @@ func createConnection(cfg *config.ClickHouseConfig, connCfg *ConnectionConfig) (
 		MaxCompressionBuffer: connCfg.MaxCompressionBuffer,
 	}
 
-	// 只有在 Native 协议时才设置压缩，HTTP 协议不支持 LZ4 压缩
+	// only set compression for Native protocol, HTTP protocol does not support LZ4 compression
 	if cfg.GetProtocol() == clickhouse.Native {
 		opts.Compression = &clickhouse.Compression{
 			Method: clickhouse.CompressionLZ4,
@@ -104,7 +104,7 @@ func createConnection(cfg *config.ClickHouseConfig, connCfg *ConnectionConfig) (
 	return conn, nil
 }
 
-// Close 关闭连接
+// Close closes the connection
 func (cm *connectionManager) Close() error {
 	if cm.conn == nil {
 		return nil
@@ -116,7 +116,7 @@ func (cm *connectionManager) Close() error {
 	return nil
 }
 
-// Ping 检查连接状态
+// Ping checks connection status
 func (cm *connectionManager) Ping(ctx context.Context) error {
 	if cm.conn == nil {
 		return WrapConnectionError(fmt.Errorf("connection is nil"))
@@ -128,24 +128,24 @@ func (cm *connectionManager) Ping(ctx context.Context) error {
 	return nil
 }
 
-// GetConnection 获取底层连接
+// GetConnection gets the underlying connection
 func (cm *connectionManager) GetConnection() driver.Conn {
 	return cm.conn
 }
 
-// HealthCheck 连接健康检查
+// HealthCheck connection health check
 func (cm *connectionManager) HealthCheck(ctx context.Context) error {
-	// 检查连接是否为nil
+	// check if connection is nil
 	if cm.conn == nil {
 		return WrapConnectionError(fmt.Errorf("connection is not initialized"))
 	}
 
-	// 执行ping检查
+	// execute ping check
 	if err := cm.Ping(ctx); err != nil {
 		return err
 	}
 
-	// 执行简单查询验证连接可用性
+	// execute simple query to verify connection availability
 	if err := cm.conn.Exec(ctx, "SELECT 1"); err != nil {
 		return WrapConnectionError(fmt.Errorf("test query failed: %w", err))
 	}
@@ -153,7 +153,7 @@ func (cm *connectionManager) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// GetConnectionStats 获取连接统计信息
+// GetConnectionStats gets connection statistics
 func (cm *connectionManager) GetConnectionStats() map[string]interface{} {
 	if cm.conn == nil {
 		return map[string]interface{}{
@@ -161,8 +161,8 @@ func (cm *connectionManager) GetConnectionStats() map[string]interface{} {
 		}
 	}
 
-	// 注意：clickhouse-go v2 可能不提供详细的连接统计信息
-	// 这里返回基本状态信息
+	// note: clickhouse-go v2 may not provide detailed connection statistics
+	// return basic status information here
 	return map[string]interface{}{
 		"status":   "connected",
 		"database": cm.config.Database,
@@ -171,34 +171,34 @@ func (cm *connectionManager) GetConnectionStats() map[string]interface{} {
 	}
 }
 
-// IsConnected 检查是否已连接
+// IsConnected checks if connected
 func (cm *connectionManager) IsConnected() bool {
 	if cm.conn == nil {
 		return false
 	}
 
-	// 使用短超时进行快速检查
+	// use short timeout for quick check
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	return cm.Ping(ctx) == nil
 }
 
-// Reconnect 重新连接
+// Reconnect reconnects
 func (cm *connectionManager) Reconnect() error {
-	// 关闭现有连接
+	// close existing connection
 	if cm.conn != nil {
 		cm.conn.Close()
 	}
 
-	// 创建新连接
+	// create new connection
 	connCfg := DefaultConnectionConfig()
 	conn, err := createConnection(cm.config, connCfg)
 	if err != nil {
 		return WrapConnectionError(err)
 	}
 
-	// 验证新连接
+	// verify new connection
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -211,14 +211,14 @@ func (cm *connectionManager) Reconnect() error {
 	return nil
 }
 
-// SetMaxOpenConns 设置最大打开连接数（这个方法在当前的clickhouse-go版本中可能不直接支持）
+// SetMaxOpenConns sets maximum open connections (this method may not be directly supported in current clickhouse-go version)
 func (cm *connectionManager) SetMaxOpenConns(n int) {
-	// 注意：clickhouse-go v2 的连接池配置在创建时设置，无法动态修改
-	// 这个方法可能需要重新创建连接来实现
+	// note: clickhouse-go v2 connection pool configuration is set at creation time and cannot be modified dynamically
+	// this method may need to recreate connection to implement
 }
 
-// SetMaxIdleConns 设置最大空闲连接数（这个方法在当前的clickhouse-go版本中可能不直接支持）
+// SetMaxIdleConns sets maximum idle connections (this method may not be directly supported in current clickhouse-go version)
 func (cm *connectionManager) SetMaxIdleConns(n int) {
-	// 注意：clickhouse-go v2 的连接池配置在创建时设置，无法动态修改
-	// 这个方法可能需要重新创建连接来实现
+	// note: clickhouse-go v2 connection pool configuration is set at creation time and cannot be modified dynamically
+	// this method may need to recreate connection to implement
 }

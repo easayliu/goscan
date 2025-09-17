@@ -2,20 +2,21 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
-	"log/slog"
 	"net/http"
 	"time"
 
-	"goscan/pkg/response"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"goscan/pkg/logger"
+	_ "goscan/pkg/models"
 	"goscan/pkg/tasks"
 )
 
-// TriggerWeChatNotification 手动触发企业微信通知
-// @Summary 手动触发企业微信通知
-// @Description 手动触发企业微信费用报告通知，支持指定分析日期、云服务商列表和告警阈值。可用于定时任务外的临时通知需求。
+// TriggerWeChatNotification manually triggers WeChat Enterprise notification
+// @Summary Manually trigger WeChat Enterprise notification
+// @Description Manually trigger WeChat Enterprise cost report notification, supports specifying analysis date, cloud provider list and alert threshold. Can be used for temporary notification needs outside of scheduled tasks.
 // @Description
-// @Description **请求示例：**
+// @Description **Request Example:**
 // @Description ```json
 // @Description {
 // @Description   "date": "2025-09-12",
@@ -26,21 +27,21 @@ import (
 // @Description }
 // @Description ```
 // @Description
-// @Description **字段说明：**
-// @Description - `date`: 分析日期，格式YYYY-MM-DD，不填则使用当前日期
-// @Description - `providers`: 云服务商列表，支持volcengine/alicloud/aws/azure/gcp
-// @Description - `alert_threshold`: 费用变化告警阈值（百分比），0-100范围
-// @Description - `force_notify`: 是否强制发送，true时忽略告警阈值限制
-// @Description - `test_mode`: 测试模式，true时仅测试连接不发送实际报告
-// @Tags Notifications
+// @Description **Field Descriptions:**
+// @Description - `date`: Analysis date, format YYYY-MM-DD, uses current date if not provided
+// @Description - `providers`: Cloud provider list, supports volcengine/alicloud/aws/azure/gcp
+// @Description - `alert_threshold`: Cost change alert threshold (percentage), range 0-100
+// @Description - `force_notify`: Whether to force send, ignores alert threshold when true
+// @Description - `test_mode`: Test mode, only tests connection without sending actual report when true
+// @Tags Notification Management
 // @Accept json
 // @Produce json
-// @Param request body models.WeChatNotificationRequest true "微信通知触发请求参数"
-// @Success 200 {object} models.MessageResponse "触发成功"
-// @Failure 400 {object} models.ErrorResponse "请求参数错误或微信通知未启用"
-// @Failure 500 {object} models.ErrorResponse "服务内部错误"
-// @Router /notifications/wechat/trigger [post]
-func (h *HandlerService) TriggerWeChatNotification(w http.ResponseWriter, r *http.Request) {
+// @Param request body models.WeChatNotificationRequest true "WeChat notification trigger request parameters"
+// @Success 200 {object} models.MessageResponse "Triggered successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid request parameters or WeChat notification not enabled"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Router /notifications/wechat [post]
+func (h *HandlerService) TriggerWeChatNotification(c *gin.Context) {
 	var req struct {
 		Date               string   `json:"date,omitempty"`
 		Providers          []string `json:"providers,omitempty"`
@@ -50,52 +51,68 @@ func (h *HandlerService) TriggerWeChatNotification(w http.ResponseWriter, r *htt
 		NotificationFormat string   `json:"notification_format,omitempty"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		apiError := NewBadRequestError("请求参数解析失败", err)
-		HandleError(w, apiError)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Request parameter parsing failed",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	slog.Info("接收到企业微信通知请求，原始参数",
-		"raw_date", req.Date,
-		"raw_providers", req.Providers,
-		"raw_alert_threshold", req.AlertThreshold,
-		"raw_force_notify", req.ForceNotify,
-		"raw_test_mode", req.TestMode)
+	logger.Info("Received WeChat notification request",
+		zap.String("date", req.Date),
+		zap.Strings("providers", req.Providers),
+		zap.Float64("alert_threshold", req.AlertThreshold),
+		zap.Bool("force_notify", req.ForceNotify),
+		zap.Bool("test_mode", req.TestMode))
 
-	// 验证和设置默认值
+	// Validate and set default values
 	if err := h.validateWeChatRequest(&req); err != nil {
-		apiError := NewBadRequestError("请求参数验证失败", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Request parameter validation failed",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// 检查微信通知配置
+	// Check WeChat notification configuration
 	if err := h.validateWeChatConfig(); err != nil {
-		apiError := NewBadRequestError("微信通知配置错误", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "WeChat notification configuration error",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// 测试模式处理
+	// Handle test mode
 	if req.TestMode {
-		if err := h.handleTestMode(w, r); err != nil {
-			HandleError(w, err)
+		if err := h.handleTestModeGin(c); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   true,
+				"message": "Test mode processing failed",
+				"details": err.Error(),
+			})
 			return
 		}
 		return
 	}
 
-	// 执行通知任务
+	// Execute notification task
 	taskID, err := h.executeWeChatNotification(&req)
 	if err != nil {
-		apiError := NewInternalServerError("通知任务执行失败", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   true,
+			"message": "Notification task execution failed",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
-		"message":         "企业微信通知任务已启动",
+	c.JSON(http.StatusOK, gin.H{
+		"message":         "WeChat notification task started",
 		"task_id":         taskID,
 		"providers":       req.Providers,
 		"date":            req.Date,
@@ -105,7 +122,7 @@ func (h *HandlerService) TriggerWeChatNotification(w http.ResponseWriter, r *htt
 	})
 }
 
-// validateWeChatRequest 验证微信通知请求参数
+// validateWeChatRequest validates WeChat notification request parameters
 func (h *HandlerService) validateWeChatRequest(req *struct {
 	Date               string   `json:"date,omitempty"`
 	Providers          []string `json:"providers,omitempty"`
@@ -114,56 +131,47 @@ func (h *HandlerService) validateWeChatRequest(req *struct {
 	TestMode           bool     `json:"test_mode,omitempty"`
 	NotificationFormat string   `json:"notification_format,omitempty"`
 }) error {
-	if req.Date == "" {
-		slog.Info("未指定日期，将使用默认日期（昨天）")
-	}
-
+	// Set default values
 	if req.Providers == nil || len(req.Providers) == 0 {
 		req.Providers = []string{"volcengine", "alicloud"}
-		slog.Info("使用默认云服务商列表", "providers", req.Providers)
-	} else {
-		slog.Info("使用用户指定的云服务商列表", "providers", req.Providers)
 	}
 
 	if req.AlertThreshold <= 0 {
 		wechatConfig := h.config.GetWeChatConfig()
 		req.AlertThreshold = wechatConfig.AlertThreshold
-		slog.Info("使用配置文件中的告警阈值", "alert_threshold", req.AlertThreshold)
-	} else {
-		slog.Info("使用用户指定的告警阈值", "alert_threshold", req.AlertThreshold)
 	}
 
 	return nil
 }
 
-// validateWeChatConfig 验证微信配置
+// validateWeChatConfig validates WeChat configuration
 func (h *HandlerService) validateWeChatConfig() error {
 	wechatConfig := h.config.GetWeChatConfig()
 	if !wechatConfig.Enabled {
-		return NewBadRequestError("企业微信通知功能未启用", nil)
+		return NewBadRequestError("WeChat notification is not enabled", nil)
 	}
 
 	if wechatConfig.WebhookURL == "" {
-		return NewBadRequestError("企业微信Webhook URL未配置", nil)
+		return NewBadRequestError("WeChat Webhook URL is not configured", nil)
 	}
 
 	return nil
 }
 
-// handleTestMode 处理测试模式请求
-func (h *HandlerService) handleTestMode(w http.ResponseWriter, r *http.Request) error {
+// handleTestModeGin handles test mode request (Gin version)
+func (h *HandlerService) handleTestModeGin(c *gin.Context) error {
 	notificationExecutor, err := h.createNotificationExecutor()
 	if err != nil {
-		return NewInternalServerError("通知执行器创建失败", err)
+		return err
 	}
 
-	if err := notificationExecutor.TestWebhook(r.Context()); err != nil {
-		return NewInternalServerError("企业微信连接测试失败", err)
+	if err := notificationExecutor.TestWebhook(c.Request.Context()); err != nil {
+		return err
 	}
 
 	wechatConfig := h.config.GetWeChatConfig()
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
-		"message":     "企业微信连接测试成功",
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "WeChat connection test successful",
 		"webhook_url": maskWebhookURL(wechatConfig.WebhookURL),
 		"test_time":   getCurrentTimestamp(),
 	})
@@ -171,7 +179,7 @@ func (h *HandlerService) handleTestMode(w http.ResponseWriter, r *http.Request) 
 	return nil
 }
 
-// executeWeChatNotification 执行微信通知任务
+// executeWeChatNotification executes WeChat notification task
 func (h *HandlerService) executeWeChatNotification(req *struct {
 	Date               string   `json:"date,omitempty"`
 	Providers          []string `json:"providers,omitempty"`
@@ -180,49 +188,49 @@ func (h *HandlerService) executeWeChatNotification(req *struct {
 	TestMode           bool     `json:"test_mode,omitempty"`
 	NotificationFormat string   `json:"notification_format,omitempty"`
 }) (string, error) {
-	// 创建通知任务请求
+	// Create notification task request
 	taskReq := &tasks.TaskRequest{
 		Type:     tasks.TaskTypeNotification,
 		Provider: "wechat",
 		Config:   tasks.TaskConfig{},
 	}
 
-	// 创建通知执行器并直接执行
+	// Create notification executor and execute directly
 	notificationExecutor, err := h.createNotificationExecutor()
 	if err != nil {
-		return "", WrapError(err, "通知执行器创建失败")
+		return "", WrapError(err, "Failed to create notification executor")
 	}
 
-	// 创建通知参数
+	// Create notification parameters
 	params := &tasks.NotificationParams{
 		Providers:      req.Providers,
 		AlertThreshold: req.AlertThreshold,
 		ForceNotify:    req.ForceNotify,
 	}
 
-	// 只有当用户提供了日期时才解析和设置
+	// Only parse and set when user provides date
 	if req.Date != "" {
 		analysisDate, err := time.Parse("2006-01-02", req.Date)
 		if err != nil {
-			slog.Warn("日期解析失败，将使用默认日期", "input", req.Date, "error", err)
+			logger.Warn("Date parsing failed, using default date",
+				zap.String("input", req.Date),
+				zap.Error(err))
 		} else {
 			params.Date = analysisDate
 		}
 	}
 
-	slog.Info("触发企业微信通知，请求参数",
-		"date", req.Date,
-		"providers", req.Providers,
-		"alert_threshold", req.AlertThreshold,
-		"force_notify", req.ForceNotify)
+	logger.Info("Triggering WeChat notification",
+		zap.Strings("providers", req.Providers),
+		zap.Bool("force_notify", req.ForceNotify))
 
-	// 异步执行通知任务
+	// Execute notification task asynchronously
 	go h.executeNotificationAsync(notificationExecutor, params, req)
 
 	return taskReq.ID, nil
 }
 
-// executeNotificationAsync 异步执行通知任务
+// executeNotificationAsync executes notification task asynchronously
 func (h *HandlerService) executeNotificationAsync(
 	executor *tasks.NotificationTaskExecutor,
 	params *tasks.NotificationParams,
@@ -235,37 +243,37 @@ func (h *HandlerService) executeNotificationAsync(
 		NotificationFormat string   `json:"notification_format,omitempty"`
 	},
 ) {
-	// 创建一个新的带超时的 context，避免任务无限执行
+	// Create a new context with timeout to avoid infinite task execution
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	result, err := executor.ExecuteCostReportWithParams(ctx, params)
 	if err != nil {
-		LogErrorWithContext(err, "手动触发的企业微信通知失败",
+		LogErrorWithContext(err, "Manual WeChat Enterprise notification failed",
 			"providers", req.Providers,
 			"date", req.Date,
 			"alert_threshold", req.AlertThreshold)
 	} else if result != nil {
-		slog.Info("手动触发的企业微信通知成功",
-			"providers", req.Providers,
-			"date", req.Date,
-			"alert_threshold", req.AlertThreshold,
-			"duration", result.Duration,
-			"message", result.Message)
+		logger.Info("Manual WeChat notification triggered successfully",
+			zap.Strings("providers", req.Providers),
+			zap.String("date", req.Date),
+			zap.Float64("alert_threshold", req.AlertThreshold),
+			zap.Duration("duration", result.Duration),
+			zap.String("message", result.Message))
 	}
 }
 
-// GetWeChatNotificationStatus 获取企业微信通知状态
-// @Summary 获取企业微信通知状态
-// @Description 返回企业微信通知功能的配置状态、连接状态、最近的通知历史等详细信息
-// @Tags Notifications
+// GetWeChatNotificationStatus gets WeChat Enterprise notification status
+// @Summary Get WeChat Enterprise notification status
+// @Description Returns detailed information about WeChat Enterprise notification feature configuration status, connection status, recent notification history, etc.
+// @Tags Notification Management
 // @Accept json
 // @Produce json
-// @Param history_limit query int false "历史记录数量限制" minimum(1) maximum(50) default(10)
-// @Param include_config query bool false "是否包含详细配置" default(true)
-// @Success 200 {object} models.WeChatNotificationStatusResponse "状态信息获取成功"
+// @Param history_limit query int false "History record count limit" minimum(1) maximum(50) default(10)
+// @Param include_config query bool false "Whether to include detailed configuration" default(true)
+// @Success 200 {object} models.WeChatNotificationStatusResponse "Status information retrieved successfully"
 // @Router /notifications/wechat/status [get]
-func (h *HandlerService) GetWeChatNotificationStatus(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetWeChatNotificationStatus(c *gin.Context) {
 	wechatConfig := h.config.GetWeChatConfig()
 
 	status := map[string]interface{}{
@@ -279,7 +287,7 @@ func (h *HandlerService) GetWeChatNotificationStatus(w http.ResponseWriter, r *h
 		"timestamp":          getCurrentTimestamp(),
 	}
 
-	// 检查通知执行器状态
+	// Check notification executor status
 	notificationExecutor, err := h.createNotificationExecutor()
 	if err != nil {
 		status["executor_status"] = "error"
@@ -289,67 +297,79 @@ func (h *HandlerService) GetWeChatNotificationStatus(w http.ResponseWriter, r *h
 		status["executor_enabled"] = notificationExecutor.IsEnabled()
 	}
 
-	// 获取最近的通知任务历史
+	// Get recent notification task history
 	notificationHistory := h.getRecentNotificationHistory()
 	status["recent_history"] = notificationHistory
 	status["history_count"] = len(notificationHistory)
 
-	response.WriteJSONResponse(w, http.StatusOK, status)
+	c.JSON(http.StatusOK, status)
 }
 
-// TestWeChatWebhook 测试企业微信Webhook连接
-// @Summary 测试企业微信Webhook连接
-// @Description 发送测试消息到企业微信群，验证Webhook URL配置的正确性和连通性，不会发送实际的费用报告
-// @Tags Notifications
+// TestWeChatWebhook tests WeChat Enterprise Webhook connection
+// @Summary Test WeChat Enterprise Webhook connection
+// @Description Send test message to WeChat Enterprise group to verify correctness and connectivity of Webhook URL configuration, will not send actual cost reports
+// @Tags Notification Management
 // @Accept json
 // @Produce json
-// @Param request body models.WeChatTestRequest false "测试请求参数（可选）"
-// @Success 200 {object} models.MessageResponse "连接测试成功"
-// @Failure 400 {object} models.ErrorResponse "微信通知未启用或Webhook URL未配置"
-// @Failure 500 {object} models.ErrorResponse "连接测试失败或服务内部错误"
+// @Param request body models.WeChatTestRequest false "Test request parameters (optional)"
+// @Success 200 {object} models.MessageResponse "Connection test successful"
+// @Failure 400 {object} models.ErrorResponse "WeChat notification not enabled or Webhook URL not configured"
+// @Failure 500 {object} models.ErrorResponse "Connection test failed or internal server error"
 // @Router /notifications/wechat/test [post]
-func (h *HandlerService) TestWeChatWebhook(w http.ResponseWriter, r *http.Request) {
-	// 解析可选的测试参数
+func (h *HandlerService) TestWeChatWebhook(c *gin.Context) {
+	// Parse optional test parameters
 	var testReq struct {
 		CustomMessage string `json:"custom_message,omitempty"`
 		Timeout       int    `json:"timeout,omitempty"`
 	}
 
-	// 解析请求体（如果有的话）
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&testReq); err != nil {
-			apiError := NewBadRequestError("请求参数解析失败", err)
-			HandleError(w, apiError)
+	// Parse request body (if any)
+	if c.Request.ContentLength > 0 {
+		if err := c.ShouldBindJSON(&testReq); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   true,
+				"message": "Request parameter parsing failed",
+				"details": err.Error(),
+			})
 			return
 		}
 	}
 
-	// 验证微信配置
+	// Validate WeChat configuration
 	if err := h.validateWeChatConfig(); err != nil {
-		HandleError(w, err)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": err.Error(),
+		})
 		return
 	}
 
-	// 创建通知执行器
+	// Create notification executor
 	notificationExecutor, err := h.createNotificationExecutor()
 	if err != nil {
-		apiError := NewInternalServerError("通知执行器创建失败", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   true,
+			"message": "Failed to create notification executor",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// 测试连接
+	// Test connection
 	testStart := time.Now()
-	if err := notificationExecutor.TestWebhook(r.Context()); err != nil {
-		apiError := NewInternalServerError("企业微信连接测试失败", err)
-		HandleError(w, apiError)
+	if err := notificationExecutor.TestWebhook(c.Request.Context()); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   true,
+			"message": "WeChat connection test failed",
+			"details": err.Error(),
+		})
 		return
 	}
 	testDuration := time.Since(testStart)
 
 	wechatConfig := h.config.GetWeChatConfig()
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
-		"message":     "企业微信连接测试成功",
+	c.JSON(http.StatusOK, gin.H{
+		"message":     "WeChat connection test successful",
 		"webhook_url": maskWebhookURL(wechatConfig.WebhookURL),
 		"test_time":   testStart.UTC(),
 		"duration":    formatDuration(testDuration),

@@ -9,10 +9,10 @@ import (
 type BillProvider interface {
 	// ListBillDetail 获取账单明细
 	ListBillDetail(ctx context.Context, req *ListBillDetailRequest) (*ListBillDetailResponse, error)
-	
+
 	// ValidatePeriod 验证账期格式
 	ValidatePeriod(billPeriod string) error
-	
+
 	// CalculateSmartPeriod 计算智能账期
 	CalculateSmartPeriod() (string, string)
 }
@@ -21,10 +21,10 @@ type BillProvider interface {
 type DataProcessor interface {
 	// Process 处理账单数据
 	Process(ctx context.Context, data []BillDetail) error
-	
+
 	// ProcessWithResult 处理数据并返回结果
 	ProcessWithResult(ctx context.Context, data []BillDetail) (*ProcessResult, error)
-	
+
 	// SetBatchSize 设置批处理大小
 	SetBatchSize(size int)
 }
@@ -33,19 +33,25 @@ type DataProcessor interface {
 type BillService interface {
 	// CreateBillTable 创建账单表
 	CreateBillTable(ctx context.Context) error
-	
+
 	// SyncBillData 同步账单数据
 	SyncBillData(ctx context.Context, req *ListBillDetailRequest) (*SyncResult, error)
-	
+
 	// SmartSyncAllData 智能同步所有数据
 	SmartSyncAllData(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error)
+
+	// GetAPIDataCount 获取API数据总数
+	GetAPIDataCount(ctx context.Context, billPeriod string) (int32, error)
+
+	// CheckMonthlyDataExists 检查月度数据是否存在及数量
+	CheckMonthlyDataExists(ctx context.Context, tableName, billPeriod string) (bool, int64, error)
 }
 
 // Paginator 分页器接口
 type Paginator interface {
 	// PaginateBillDetails 分页处理账单明细
 	PaginateBillDetails(ctx context.Context, req *ListBillDetailRequest) (*PaginateResult, error)
-	
+
 	// SetProgressCallback 设置进度回调
 	SetProgressCallback(callback ProgressCallback)
 }
@@ -54,13 +60,13 @@ type Paginator interface {
 type RateLimiter interface {
 	// Wait 等待直到可以发送下一个请求
 	Wait(ctx context.Context) error
-	
+
 	// OnSuccess 记录成功的请求
 	OnSuccess()
-	
+
 	// OnRateLimit 记录被限流的请求
 	OnRateLimit()
-	
+
 	// OnError 记录错误
 	OnError(err error)
 }
@@ -97,10 +103,10 @@ type ErrorHandler func(err error) bool // 返回 true 表示继续，false 表�
 type RetryPolicy interface {
 	// ShouldRetry 判断是否应该重试
 	ShouldRetry(err error, attempt int) bool
-	
+
 	// GetDelay 获取重试延迟
 	GetDelay(attempt int) time.Duration
-	
+
 	// MaxAttempts 最大尝试次数
 	MaxAttempts() int
 }

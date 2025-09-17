@@ -40,7 +40,7 @@ func (resp *DescribeInstanceBillResponse) GetError() error {
 	if resp.IsSuccess() {
 		return nil
 	}
-	
+
 	return NewAPIError(resp.Code, resp.Message, "", 0)
 }
 
@@ -70,7 +70,7 @@ func (resp *DescribeInstanceBillResponse) String() string {
 	if resp.HasError() {
 		status = fmt.Sprintf("Error(%s)", resp.Code)
 	}
-	
+
 	return fmt.Sprintf("DescribeInstanceBillResponse{Status: %s, Items: %d, TotalCount: %d, HasMore: %v}",
 		status, resp.GetPageSize(), resp.GetTotalCount(), resp.HasMorePages())
 }
@@ -89,7 +89,7 @@ type DataComparisonResult struct {
 // String 返回比较结果的字符串表示
 func (dcr *DataComparisonResult) String() string {
 	return fmt.Sprintf("DataComparison{%s %s: API=%d, DB=%d, Sync=%v, Cleanup=%v, Reason=%s}",
-		dcr.Granularity, dcr.Period, dcr.APICount, dcr.DatabaseCount, 
+		dcr.Granularity, dcr.Period, dcr.APICount, dcr.DatabaseCount,
 		dcr.NeedSync, dcr.NeedCleanup, dcr.Reason)
 }
 
@@ -246,8 +246,8 @@ func (btr *BatchTransformationResult) String() string {
 
 // ResponseCache 响应缓存
 type ResponseCache struct {
-	responses map[string]*DescribeInstanceBillResponse
-	ttl       time.Duration
+	responses  map[string]*DescribeInstanceBillResponse
+	ttl        time.Duration
 	timestamps map[string]time.Time
 }
 
@@ -266,14 +266,14 @@ func (rc *ResponseCache) Get(key string) (*DescribeInstanceBillResponse, bool) {
 	if !exists {
 		return nil, false
 	}
-	
+
 	// 检查是否过期
 	if time.Since(timestamp) > rc.ttl {
 		delete(rc.responses, key)
 		delete(rc.timestamps, key)
 		return nil, false
 	}
-	
+
 	response, exists := rc.responses[key]
 	return response, exists
 }
@@ -311,30 +311,30 @@ type ResponseMetrics struct {
 // RecordRequest 记录请求
 func (rm *ResponseMetrics) RecordRequest(latency time.Duration, success bool, recordCount int) {
 	now := time.Now()
-	
+
 	rm.TotalRequests++
 	rm.TotalRecords += int64(recordCount)
 	rm.LastRequestTime = now
-	
+
 	if rm.FirstRequestTime.IsZero() {
 		rm.FirstRequestTime = now
 	}
-	
+
 	if success {
 		rm.SuccessRequests++
 	} else {
 		rm.ErrorRequests++
 	}
-	
+
 	// 更新延迟统计
 	if rm.MaxLatency < latency {
 		rm.MaxLatency = latency
 	}
-	
+
 	if rm.MinLatency == 0 || rm.MinLatency > latency {
 		rm.MinLatency = latency
 	}
-	
+
 	// 计算平均延迟（简单移动平均）
 	if rm.TotalRequests == 1 {
 		rm.AverageLatency = latency

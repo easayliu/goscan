@@ -5,81 +5,81 @@ import (
 	"fmt"
 )
 
-// 定义 sentinel errors，使用 errors.New 创建不可变的错误实例
+// Define sentinel errors using errors.New to create immutable error instances
 var (
-	// ErrWebhookURLEmpty webhook URL为空
-	ErrWebhookURLEmpty = errors.New("企业微信webhook URL未配置")
-	
-	// ErrInvalidConfig 配置无效
-	ErrInvalidConfig = errors.New("配置参数无效")
-	
-	// ErrMarshalMessage 序列化消息失败
-	ErrMarshalMessage = errors.New("序列化消息失败")
-	
-	// ErrCreateRequest 创建HTTP请求失败
-	ErrCreateRequest = errors.New("创建HTTP请求失败")
-	
-	// ErrSendRequest 发送HTTP请求失败
-	ErrSendRequest = errors.New("发送HTTP请求失败")
-	
-	// ErrReadResponse 读取响应失败
-	ErrReadResponse = errors.New("读取响应失败")
-	
-	// ErrUnmarshalResponse 解析响应失败
-	ErrUnmarshalResponse = errors.New("解析响应失败")
-	
-	// ErrAPIError 企业微信API错误
-	ErrAPIError = errors.New("企业微信API错误")
-	
-	// ErrHTTPStatusError HTTP状态码错误
-	ErrHTTPStatusError = errors.New("HTTP请求失败")
-	
-	// ErrRetryExceeded 重试次数超限
-	ErrRetryExceeded = errors.New("发送企业微信消息失败，已重试")
+	// ErrWebhookURLEmpty indicates webhook URL is empty
+	ErrWebhookURLEmpty = errors.New("wechat work webhook URL not configured")
+
+	// ErrInvalidConfig indicates invalid configuration
+	ErrInvalidConfig = errors.New("invalid configuration parameters")
+
+	// ErrMarshalMessage indicates message serialization failed
+	ErrMarshalMessage = errors.New("failed to serialize message")
+
+	// ErrCreateRequest indicates HTTP request creation failed
+	ErrCreateRequest = errors.New("failed to create HTTP request")
+
+	// ErrSendRequest indicates HTTP request sending failed
+	ErrSendRequest = errors.New("failed to send HTTP request")
+
+	// ErrReadResponse indicates response reading failed
+	ErrReadResponse = errors.New("failed to read response")
+
+	// ErrUnmarshalResponse indicates response parsing failed
+	ErrUnmarshalResponse = errors.New("failed to parse response")
+
+	// ErrAPIError indicates WeChat Work API error
+	ErrAPIError = errors.New("wechat work API error")
+
+	// ErrHTTPStatusError indicates HTTP status code error
+	ErrHTTPStatusError = errors.New("HTTP request failed")
+
+	// ErrRetryExceeded indicates retry attempts exceeded
+	ErrRetryExceeded = errors.New("failed to send wechat work message after retries")
 )
 
-// APIError 企业微信API错误类型
+// APIError represents WeChat Work API error type
 type APIError struct {
 	Code    int    `json:"errcode"`
 	Message string `json:"errmsg"`
 }
 
-// Error 实现 error 接口
+// Error implements the error interface
 func (e *APIError) Error() string {
-	return fmt.Sprintf("企业微信API错误: %d %s", e.Code, e.Message)
+	return fmt.Sprintf("wechat work API error: %d %s", e.Code, e.Message)
 }
 
-// HTTPError HTTP错误类型
+// HTTPError represents HTTP error type
 type HTTPError struct {
 	StatusCode int
 	Status     string
 	Body       string
 }
 
-// Error 实现 error 接口
+// Error implements the error interface
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("HTTP请求失败: %d %s, 响应: %s", 
+	return fmt.Sprintf("HTTP request failed: %d %s, response: %s",
 		e.StatusCode, e.Status, e.Body)
 }
 
-// RetryError 重试错误类型
+// RetryError represents retry error type
 type RetryError struct {
 	Attempts int
 	LastErr  error
 }
 
-// Error 实现 error 接口
+// Error implements the error interface
 func (e *RetryError) Error() string {
-	return fmt.Sprintf("发送企业微信消息失败，已重试 %d 次: %v", 
+	return fmt.Sprintf("failed to send wechat work message after %d retries: %v",
 		e.Attempts, e.LastErr)
 }
 
-// Unwrap 支持 errors.Unwrap
+// Unwrap supports errors.Unwrap
 func (e *RetryError) Unwrap() error {
 	return e.LastErr
 }
 
-// NewAPIError 创建API错误
+// NewAPIError creates an API error
 func NewAPIError(code int, message string) *APIError {
 	return &APIError{
 		Code:    code,
@@ -87,7 +87,7 @@ func NewAPIError(code int, message string) *APIError {
 	}
 }
 
-// NewHTTPError 创建HTTP错误
+// NewHTTPError creates an HTTP error
 func NewHTTPError(statusCode int, status, body string) *HTTPError {
 	return &HTTPError{
 		StatusCode: statusCode,
@@ -96,7 +96,7 @@ func NewHTTPError(statusCode int, status, body string) *HTTPError {
 	}
 }
 
-// NewRetryError 创建重试错误
+// NewRetryError creates a retry error
 func NewRetryError(attempts int, lastErr error) *RetryError {
 	return &RetryError{
 		Attempts: attempts,

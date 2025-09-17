@@ -77,20 +77,20 @@ type TaskResult struct {
 
 // SmartTimeSelection represents smart time selection for sync-optimal mode
 type SmartTimeSelection struct {
-	YesterdayPeriod string `json:"yesterday_period"` // Format: 2006-01-02 for daily
+	YesterdayPeriod string `json:"yesterday_period"`  // Format: 2006-01-02 for daily
 	LastMonthPeriod string `json:"last_month_period"` // Format: 2006-01 for monthly
 }
 
 // DataComparisonResult holds data comparison results
 type DataComparisonResult struct {
-	TotalRecords    int     `json:"total_records"`
-	NewRecords      int     `json:"new_records"`
-	UpdatedRecords  int     `json:"updated_records"`
-	UnchangedRecords int    `json:"unchanged_records"`
-	ErrorRecords    int     `json:"error_records"`
-	SuccessRate     float64 `json:"success_rate"`
-	ComparisonTime  time.Time `json:"comparison_time"`
-	Details         string  `json:"details"`
+	TotalRecords     int       `json:"total_records"`
+	NewRecords       int       `json:"new_records"`
+	UpdatedRecords   int       `json:"updated_records"`
+	UnchangedRecords int       `json:"unchanged_records"`
+	ErrorRecords     int       `json:"error_records"`
+	SuccessRate      float64   `json:"success_rate"`
+	ComparisonTime   time.Time `json:"comparison_time"`
+	Details          string    `json:"details"`
 }
 
 // PreSyncCheckResult holds pre-sync check results
@@ -120,32 +120,32 @@ type SyncConfig struct {
 
 // TableConfig holds table creation configuration
 type TableConfig struct {
-	UseDistributed        bool
-	LocalTableName        string
-	DistributedTableName  string
-	ClusterName           string
+	UseDistributed       bool
+	LocalTableName       string
+	DistributedTableName string
+	ClusterName          string
 }
 
 // SyncResult holds synchronization results
 type SyncResult struct {
-	Success          bool          `json:"success"`
-	RecordsProcessed int           `json:"records_processed"`
-	RecordsFetched   int           `json:"records_fetched"`
-	Duration         time.Duration `json:"duration"`
-	Message          string        `json:"message"`
-	Error            string        `json:"error,omitempty"`
-	StartedAt        time.Time     `json:"started_at"`
-	CompletedAt      time.Time     `json:"completed_at"`
+	Success          bool                   `json:"success"`
+	RecordsProcessed int                    `json:"records_processed"`
+	RecordsFetched   int                    `json:"records_fetched"`
+	Duration         time.Duration          `json:"duration"`
+	Message          string                 `json:"message"`
+	Error            string                 `json:"error,omitempty"`
+	StartedAt        time.Time              `json:"started_at"`
+	CompletedAt      time.Time              `json:"completed_at"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // DataCheckResult holds data check results
 type DataCheckResult struct {
-	Success       bool                   `json:"success"`
-	TotalRecords  int                    `json:"total_records"`
-	ChecksPassed  int                    `json:"checks_passed"`
-	ChecksFailed  int                    `json:"checks_failed"`
-	Issues        []string               `json:"issues,omitempty"`
-	CheckTime     time.Time              `json:"check_time"`
-	Details       map[string]interface{} `json:"details,omitempty"`
+	Success      bool                   `json:"success"`
+	TotalRecords int                    `json:"total_records"`
+	ChecksPassed int                    `json:"checks_passed"`
+	ChecksFailed int                    `json:"checks_failed"`
+	Issues       []string               `json:"issues,omitempty"`
+	CheckTime    time.Time              `json:"check_time"`
+	Details      map[string]interface{} `json:"details,omitempty"`
 }

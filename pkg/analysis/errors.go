@@ -5,40 +5,40 @@ import (
 	"fmt"
 )
 
-// Sentinel errors - 使用 sentinel error 模式
+// Sentinel errors - using sentinel error pattern
 var (
-	// ErrInvalidConfig 配置无效错误
-	ErrInvalidConfig = errors.New("配置无效")
-	
-	// ErrConnectionNotInitialized 连接未初始化错误
-	ErrConnectionNotInitialized = errors.New("连接未初始化")
-	
-	// ErrDirectConnectionFailed 直接连接失败错误
-	ErrDirectConnectionFailed = errors.New("直接连接失败")
-	
-	// ErrQueryTimeout 查询超时错误
-	ErrQueryTimeout = errors.New("查询超时")
-	
-	// ErrNoDataFound 未找到数据错误
-	ErrNoDataFound = errors.New("未找到数据")
-	
-	// ErrInvalidTableInfo 表信息无效错误
-	ErrInvalidTableInfo = errors.New("表信息无效")
-	
-	// ErrQueryExecutionFailed 查询执行失败错误
-	ErrQueryExecutionFailed = errors.New("查询执行失败")
-	
-	// ErrDataScanFailed 数据扫描失败错误
-	ErrDataScanFailed = errors.New("数据扫描失败")
-	
-	// ErrCacheOperationFailed 缓存操作失败错误
-	ErrCacheOperationFailed = errors.New("缓存操作失败")
-	
-	// ErrResourceCleanupFailed 资源清理失败错误
-	ErrResourceCleanupFailed = errors.New("资源清理失败")
+	// ErrInvalidConfig invalid configuration error
+	ErrInvalidConfig = errors.New("invalid configuration")
+
+	// ErrConnectionNotInitialized connection not initialized error
+	ErrConnectionNotInitialized = errors.New("connection not initialized")
+
+	// ErrDirectConnectionFailed direct connection failed error
+	ErrDirectConnectionFailed = errors.New("direct connection failed")
+
+	// ErrQueryTimeout query timeout error
+	ErrQueryTimeout = errors.New("query timeout")
+
+	// ErrNoDataFound no data found error
+	ErrNoDataFound = errors.New("no data found")
+
+	// ErrInvalidTableInfo invalid table info error
+	ErrInvalidTableInfo = errors.New("invalid table info")
+
+	// ErrQueryExecutionFailed query execution failed error
+	ErrQueryExecutionFailed = errors.New("query execution failed")
+
+	// ErrDataScanFailed data scan failed error
+	ErrDataScanFailed = errors.New("data scan failed")
+
+	// ErrCacheOperationFailed cache operation failed error
+	ErrCacheOperationFailed = errors.New("cache operation failed")
+
+	// ErrResourceCleanupFailed resource cleanup failed error
+	ErrResourceCleanupFailed = errors.New("resource cleanup failed")
 )
 
-// ConfigError 配置相关错误
+// ConfigError configuration related error
 type ConfigError struct {
 	Field   string
 	Message string
@@ -47,16 +47,16 @@ type ConfigError struct {
 
 func (e *ConfigError) Error() string {
 	if e.Err != nil {
-		return fmt.Sprintf("配置错误 [%s]: %s: %v", e.Field, e.Message, e.Err)
+		return fmt.Sprintf("configuration error [%s]: %s: %v", e.Field, e.Message, e.Err)
 	}
-	return fmt.Sprintf("配置错误 [%s]: %s", e.Field, e.Message)
+	return fmt.Sprintf("configuration error [%s]: %s", e.Field, e.Message)
 }
 
 func (e *ConfigError) Unwrap() error {
 	return e.Err
 }
 
-// NewConfigError 创建配置错误
+// NewConfigError creates configuration error
 func NewConfigError(field, message string, err error) *ConfigError {
 	return &ConfigError{
 		Field:   field,
@@ -65,7 +65,7 @@ func NewConfigError(field, message string, err error) *ConfigError {
 	}
 }
 
-// QueryError 查询相关错误
+// QueryError query related error
 type QueryError struct {
 	Table   string
 	Query   string
@@ -75,16 +75,16 @@ type QueryError struct {
 
 func (e *QueryError) Error() string {
 	if e.Err != nil {
-		return fmt.Sprintf("查询错误 [表: %s]: %s: %v", e.Table, e.Message, e.Err)
+		return fmt.Sprintf("query error [table: %s]: %s: %v", e.Table, e.Message, e.Err)
 	}
-	return fmt.Sprintf("查询错误 [表: %s]: %s", e.Table, e.Message)
+	return fmt.Sprintf("query error [table: %s]: %s", e.Table, e.Message)
 }
 
 func (e *QueryError) Unwrap() error {
 	return e.Err
 }
 
-// NewQueryError 创建查询错误
+// NewQueryError creates query error
 func NewQueryError(table, query, message string, err error) *QueryError {
 	return &QueryError{
 		Table:   table,
@@ -94,7 +94,7 @@ func NewQueryError(table, query, message string, err error) *QueryError {
 	}
 }
 
-// ConnectionError 连接相关错误
+// ConnectionError connection related error
 type ConnectionError struct {
 	Type    string // "direct", "legacy", "pool"
 	Address string
@@ -104,16 +104,16 @@ type ConnectionError struct {
 
 func (e *ConnectionError) Error() string {
 	if e.Err != nil {
-		return fmt.Sprintf("连接错误 [%s:%s]: %s: %v", e.Type, e.Address, e.Message, e.Err)
+		return fmt.Sprintf("connection error [%s:%s]: %s: %v", e.Type, e.Address, e.Message, e.Err)
 	}
-	return fmt.Sprintf("连接错误 [%s:%s]: %s", e.Type, e.Address, e.Message)
+	return fmt.Sprintf("connection error [%s:%s]: %s", e.Type, e.Address, e.Message)
 }
 
 func (e *ConnectionError) Unwrap() error {
 	return e.Err
 }
 
-// NewConnectionError 创建连接错误
+// NewConnectionError creates connection error
 func NewConnectionError(connType, address, message string, err error) *ConnectionError {
 	return &ConnectionError{
 		Type:    connType,
@@ -123,7 +123,7 @@ func NewConnectionError(connType, address, message string, err error) *Connectio
 	}
 }
 
-// ValidationError 验证相关错误
+// ValidationError validation related error
 type ValidationError struct {
 	Field   string
 	Value   interface{}
@@ -131,10 +131,10 @@ type ValidationError struct {
 }
 
 func (e *ValidationError) Error() string {
-	return fmt.Sprintf("验证错误 [%s=%v]: %s", e.Field, e.Value, e.Message)
+	return fmt.Sprintf("validation error [%s=%v]: %s", e.Field, e.Value, e.Message)
 }
 
-// NewValidationError 创建验证错误
+// NewValidationError creates validation error
 func NewValidationError(field string, value interface{}, message string) *ValidationError {
 	return &ValidationError{
 		Field:   field,
@@ -143,30 +143,30 @@ func NewValidationError(field string, value interface{}, message string) *Valida
 	}
 }
 
-// wrapError 包装错误，添加上下文信息
+// wrapError wraps error with context information
 func wrapError(err error, message string, args ...interface{}) error {
 	if err == nil {
 		return nil
 	}
-	
+
 	if len(args) > 0 {
 		message = fmt.Sprintf(message, args...)
 	}
-	
+
 	return fmt.Errorf("%s: %w", message, err)
 }
 
-// isTemporaryError 判断是否为临时性错误
+// isTemporaryError determines if error is temporary
 func isTemporaryError(err error) bool {
 	type temporary interface {
 		Temporary() bool
 	}
-	
+
 	if te, ok := err.(temporary); ok && te.Temporary() {
 		return true
 	}
-	
-	// 检查常见的临时性错误
+
+	// Check common temporary errors
 	switch {
 	case errors.Is(err, ErrQueryTimeout):
 		return true
@@ -177,22 +177,22 @@ func isTemporaryError(err error) bool {
 	}
 }
 
-// isRetryableError 判断是否为可重试错误
+// isRetryableError determines if error is retryable
 func isRetryableError(err error) bool {
 	if isTemporaryError(err) {
 		return true
 	}
-	
-	// 检查可重试的错误类型
+
+	// Check retryable error types
 	var queryErr *QueryError
 	var connErr *ConnectionError
-	
+
 	switch {
 	case errors.As(err, &queryErr):
-		// 查询超时等情况可以重试
+		// Query timeout and similar situations can be retried
 		return errors.Is(queryErr.Err, ErrQueryTimeout)
 	case errors.As(err, &connErr):
-		// 连接失败可以重试
+		// Connection failures can be retried
 		return true
 	default:
 		return false

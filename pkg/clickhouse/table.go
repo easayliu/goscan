@@ -5,13 +5,15 @@ import (
 	"database/sql"
 	"fmt"
 	"goscan/pkg/config"
-	"log"
+	"goscan/pkg/logger"
 	"regexp"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
-// TableInfo 表信息
+// TableInfo table information
 type TableInfo struct {
 	Name         string            `json:"name"`
 	Database     string            `json:"database"`
@@ -29,7 +31,7 @@ type TableInfo struct {
 	Properties   map[string]string `json:"properties,omitempty"`
 }
 
-// ColumnInfo 列信息
+// ColumnInfo column information
 type ColumnInfo struct {
 	Name         string `json:"name"`
 	Type         string `json:"type"`
@@ -39,7 +41,7 @@ type ColumnInfo struct {
 	IsNullable   bool   `json:"is_nullable"`
 }
 
-// PartitionInfo 分区信息
+// PartitionInfo partition information
 type PartitionInfo struct {
 	Partition string    `json:"partition"`
 	Name      string    `json:"name"`
@@ -51,35 +53,35 @@ type PartitionInfo struct {
 	Path      string    `json:"path"`
 }
 
-// CleanupOptions 数据清理选项
+// CleanupOptions data cleanup options
 type CleanupOptions struct {
-	Condition     string        // 清理条件
-	Args          []interface{} // 条件参数
-	DryRun        bool          // 是否只是预览而不实际删除
-	BatchSize     int           // 分批删除的大小（用于大数据量）
-	MaxRows       int           // 最大删除行数限制
-	ConfirmDelete bool          // 是否需要确认删除
-	ProgressLog   bool          // 是否显示删除进度
+	Condition     string        // Cleanup condition
+	Args          []interface{} // Condition parameters
+	DryRun        bool          // Whether to only preview without actual deletion
+	BatchSize     int           // Size for batch deletion (for large datasets)
+	MaxRows       int           // Maximum deletion row limit
+	ConfirmDelete bool          // Whether confirmation is required for deletion
+	ProgressLog   bool          // Whether to show deletion progress
 }
 
-// CleanupResult 清理结果
+// CleanupResult cleanup result
 type CleanupResult struct {
 	DeletedRows    int64         `json:"deleted_rows"`
 	AffectedTables []string      `json:"affected_tables"`
 	Duration       time.Duration `json:"duration"`
 	DryRun         bool          `json:"dry_run"`
-	PreviewRows    int64         `json:"preview_rows,omitempty"` // 仅在DryRun模式下有效
+	PreviewRows    int64         `json:"preview_rows,omitempty"` // Only valid in DryRun mode
 	Error          error         `json:"error,omitempty"`
 }
 
-// tableManager 表管理器
+// tableManager table manager
 type tableManager struct {
 	queryExecutor QueryExecutor
 	nameResolver  *TableNameResolver
 	config        *config.ClickHouseConfig
 }
 
-// NewTableManager 创建表管理器
+// NewTableManager creates table manager
 func NewTableManager(queryExecutor QueryExecutor, nameResolver *TableNameResolver, config *config.ClickHouseConfig) TableManager {
 	return &tableManager{
 		queryExecutor: queryExecutor,
@@ -88,10 +90,10 @@ func NewTableManager(queryExecutor QueryExecutor, nameResolver *TableNameResolve
 	}
 }
 
-// CreateTable 创建表
+// CreateTable creates a table
 func (tm *tableManager) CreateTable(ctx context.Context, tableName string, schema string) error {
-	// 对于CreateTable，我们需要明确是创建分布式表还是本地表
-	// 默认情况下，如果配置了集群，创建分布式表
+	// For CreateTable, we need to explicitly specify whether to create distributed or local table
+	// By default, if cluster is configured, create distributed table
 	resolvedTableName := tm.nameResolver.ResolveCreateTableTarget(tableName, true)
 
 	query := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s %s", resolvedTableName, schema)
@@ -101,9 +103,9 @@ func (tm *tableManager) CreateTable(ctx context.Context, tableName string, schem
 	return nil
 }
 
-// DropTable 删除表
+// DropTable drops a table
 func (tm *tableManager) DropTable(ctx context.Context, tableName string) error {
-	// 自动解析表名用于删除操作
+	// Automatically resolve table name for delete operation
 	resolvedTableName := tm.nameResolver.ResolveQueryTarget(tableName)
 	query := fmt.Sprintf("DROP TABLE IF EXISTS %s", resolvedTableName)
 	if err := tm.queryExecutor.Exec(ctx, query); err != nil {
@@ -112,7 +114,7 @@ func (tm *tableManager) DropTable(ctx context.Context, tableName string) error {
 	return nil
 }
 
-// TruncateTable 清空表
+// TruncateTable truncates a table
 func (tm *tableManager) TruncateTable(ctx context.Context, tableName string) error {
 	query := fmt.Sprintf("TRUNCATE TABLE %s", tableName)
 	if err := tm.queryExecutor.Exec(ctx, query); err != nil {
@@ -121,17 +123,17 @@ func (tm *tableManager) TruncateTable(ctx context.Context, tableName string) err
 	return nil
 }
 
-// TableExists 检查表是否存在
+// TableExists checks if table exists
 func (tm *tableManager) TableExists(ctx context.Context, tableName string) (bool, error) {
-	// 自动解析表名
+	// Automatically resolve table name
 	resolvedTableName := tm.nameResolver.ResolveQueryTarget(tableName)
 
-	// 如果配置了集群，使用集群查询
+	// If cluster is configured, use cluster query
 	if tm.config.Cluster != "" {
 		return tm.tableExistsInCluster(ctx, resolvedTableName)
 	}
 
-	// 单机查询
+	// Single node query
 	query := "SELECT 1 FROM system.tables WHERE database = ? AND name = ?"
 	row := tm.queryExecutor.QueryRow(ctx, query, tm.config.Database, resolvedTableName)
 
@@ -147,9 +149,9 @@ func (tm *tableManager) TableExists(ctx context.Context, tableName string) (bool
 	return exists == 1, nil
 }
 
-// tableExistsInCluster 检查表在集群中是否存在
+// tableExistsInCluster checks if table exists in cluster
 func (tm *tableManager) tableExistsInCluster(ctx context.Context, tableName string) (bool, error) {
-	// 查询集群中所有节点的表状态
+	// Query table status on all nodes in cluster
 	query := fmt.Sprintf(`
 		SELECT 
 			hostName() as host,
@@ -162,8 +164,8 @@ func (tm *tableManager) tableExistsInCluster(ctx context.Context, tableName stri
 
 	rows, err := tm.queryExecutor.Query(ctx, query)
 	if err != nil {
-		// 如果集群查询失败，回退到简单查询
-		log.Printf("[集群表检查] 集群查询失败，回退到简单查询: %v", err)
+		// If cluster query fails, fall back to simple query
+		logger.Warn("Cluster table check: cluster query failed, falling back to simple query", zap.Error(err))
 		return tm.simpleTableExists(ctx, tableName)
 	}
 	defer rows.Close()
@@ -186,23 +188,26 @@ func (tm *tableManager) tableExistsInCluster(ctx context.Context, tableName stri
 	}
 
 	if nodeCount == 0 {
-		// 没有节点响应，尝试简单查询
+		// No nodes responded, try simple query
 		return tm.simpleTableExists(ctx, tableName)
 	}
 
-	// 如果所有节点都有表，则认为表存在
-	// 如果部分节点有表，记录警告但认为表存在（可能是创建过程中）
+	// If all nodes have the table, consider the table exists
+	// If partial nodes have the table, log warning but consider table exists (might be during creation)
 	if nodesWithTable == nodeCount {
 		return true, nil
 	} else if nodesWithTable > 0 {
-		log.Printf("[集群表检查] 警告：表 %s 在 %d/%d 个节点上存在", tableName, nodesWithTable, nodeCount)
+		logger.Warn("Cluster table check: table exists on partial nodes",
+			zap.String("table", tableName),
+			zap.Int("nodes_with_table", nodesWithTable),
+			zap.Int("total_nodes", nodeCount))
 		return true, nil
 	}
 
 	return false, nil
 }
 
-// simpleTableExists 简单的表存在性检查（回退方法）
+// simpleTableExists simple table existence check (fallback method)
 func (tm *tableManager) simpleTableExists(ctx context.Context, tableName string) (bool, error) {
 	query := "SELECT 1 FROM system.tables WHERE database = ? AND name = ?"
 	row := tm.queryExecutor.QueryRow(ctx, query, tm.config.Database, tableName)
@@ -218,7 +223,7 @@ func (tm *tableManager) simpleTableExists(ctx context.Context, tableName string)
 	return exists == 1, nil
 }
 
-// GetTableInfo 获取表的详细信息
+// GetTableInfo retrieves detailed table information
 func (tm *tableManager) GetTableInfo(ctx context.Context, tableName string) (*TableInfo, error) {
 	info := &TableInfo{
 		Name:       tableName,
@@ -227,7 +232,7 @@ func (tm *tableManager) GetTableInfo(ctx context.Context, tableName string) (*Ta
 		Properties: make(map[string]string),
 	}
 
-	// 获取表基本信息
+	// Get basic table information
 	basicQuery := `
 		SELECT 
 			engine, 
@@ -255,31 +260,33 @@ func (tm *tableManager) GetTableInfo(ctx context.Context, tableName string) (*Ta
 		&metadataTime,
 	)
 	if err != nil {
-		return nil, WrapTableError(tableName, fmt.Errorf("获取表基本信息失败: %w", err))
+		return nil, WrapTableError(tableName, fmt.Errorf("failed to get basic table info: %w", err))
 	}
 
-	// 解析时间
+	// Parse time
 	if t, err := time.Parse("2006-01-02 15:04:05", metadataTime); err == nil {
 		info.LastModified = t
 	}
 
-	// 获取列信息
+	// Get column information
 	if err := tm.loadTableColumns(ctx, info); err != nil {
 		return nil, err
 	}
 
-	// 获取分区信息（如果是分区表）
+	// Get partition information (if it's a partitioned table)
 	if info.PartitionKey != "" {
 		if err := tm.loadTablePartitions(ctx, info); err != nil {
-			// 分区信息获取失败不影响整体结果，只记录日志
-			log.Printf("获取表 %s 分区信息失败: %v", tableName, err)
+			// Partition information retrieval failure doesn't affect overall result, only log
+			logger.Error("Failed to get table partition info",
+				zap.String("table", tableName),
+				zap.Error(err))
 		}
 	}
 
 	return info, nil
 }
 
-// loadTableColumns 加载表的列信息
+// loadTableColumns loads table column information
 func (tm *tableManager) loadTableColumns(ctx context.Context, info *TableInfo) error {
 	columnsQuery := `
 		SELECT 
@@ -296,7 +303,7 @@ func (tm *tableManager) loadTableColumns(ctx context.Context, info *TableInfo) e
 
 	rows, err := tm.queryExecutor.Query(ctx, columnsQuery, tm.config.Database, info.Name)
 	if err != nil {
-		return WrapTableError(info.Name, fmt.Errorf("获取列信息失败: %w", err))
+		return WrapTableError(info.Name, fmt.Errorf("failed to get column info: %w", err))
 	}
 	defer rows.Close()
 
@@ -314,7 +321,7 @@ func (tm *tableManager) loadTableColumns(ctx context.Context, info *TableInfo) e
 			&isInPrimaryKey,
 		)
 		if err != nil {
-			return WrapTableError(info.Name, fmt.Errorf("扫描列信息失败: %w", err))
+			return WrapTableError(info.Name, fmt.Errorf("failed to scan column info: %w", err))
 		}
 
 		col.DefaultValue = defaultExpr
@@ -327,7 +334,7 @@ func (tm *tableManager) loadTableColumns(ctx context.Context, info *TableInfo) e
 	return rows.Err()
 }
 
-// loadTablePartitions 加载表的分区信息
+// loadTablePartitions loads table partition information
 func (tm *tableManager) loadTablePartitions(ctx context.Context, info *TableInfo) error {
 	partitionsQuery := `
 		SELECT 
@@ -382,12 +389,12 @@ func (tm *tableManager) loadTablePartitions(ctx context.Context, info *TableInfo
 	return partRows.Err()
 }
 
-// ListTables 列出数据库中的所有表
+// ListTables lists all tables in the database
 func (tm *tableManager) ListTables(ctx context.Context) ([]string, error) {
 	query := "SELECT name FROM system.tables WHERE database = ? ORDER BY name"
 	rows, err := tm.queryExecutor.Query(ctx, query, tm.config.Database)
 	if err != nil {
-		return nil, fmt.Errorf("列出表失败: %w", err)
+		return nil, fmt.Errorf("failed to list tables: %w", err)
 	}
 	defer rows.Close()
 
@@ -395,7 +402,7 @@ func (tm *tableManager) ListTables(ctx context.Context) ([]string, error) {
 	for rows.Next() {
 		var tableName string
 		if err := rows.Scan(&tableName); err != nil {
-			return nil, fmt.Errorf("扫描表名失败: %w", err)
+			return nil, fmt.Errorf("failed to scan table name: %w", err)
 		}
 		tables = append(tables, tableName)
 	}
@@ -403,7 +410,7 @@ func (tm *tableManager) ListTables(ctx context.Context) ([]string, error) {
 	return tables, rows.Err()
 }
 
-// DropTableOnCluster 在集群上删除表
+// DropTableOnCluster drops table on cluster
 func (tm *tableManager) DropTableOnCluster(ctx context.Context, tableName string) error {
 	if tm.config.Cluster == "" {
 		return ErrClusterNotConfigured
@@ -416,34 +423,36 @@ func (tm *tableManager) DropTableOnCluster(ctx context.Context, tableName string
 	return nil
 }
 
-// DropTableSafely 安全删除表（带确认）
+// DropTableSafely safely drops table (with confirmation)
 func (tm *tableManager) DropTableSafely(ctx context.Context, tableName string, confirmation string) error {
 	if confirmation != "YES" {
 		return ErrInvalidConfirmation
 	}
 
-	// 检查表是否存在
+	// Check if table exists
 	exists, err := tm.TableExists(ctx, tableName)
 	if err != nil {
-		return WrapTableError(tableName, fmt.Errorf("检查表是否存在时出错: %w", err))
+		return WrapTableError(tableName, fmt.Errorf("error checking if table exists: %w", err))
 	}
 
 	if !exists {
-		log.Printf("表 %s 不存在，跳过删除", tableName)
+		logger.Debug("Table does not exist, skipping deletion", zap.String("table", tableName))
 		return nil
 	}
 
-	// 获取表信息用于日志记录
+	// Get table information for logging
 	info, err := tm.GetTableInfo(ctx, tableName)
 	if err == nil {
-		log.Printf("即将删除表: %s, 记录数: %d, 大小: %s",
-			tableName, info.TotalRows, FormatBytesHumanReadable(uint64(info.TotalBytes)))
+		logger.Debug("About to delete table",
+			zap.String("table", tableName),
+			zap.Int64("total_rows", info.TotalRows),
+			zap.String("size", FormatBytesHumanReadable(uint64(info.TotalBytes))))
 	}
 
 	return tm.DropTable(ctx, tableName)
 }
 
-// DeleteByCondition 按条件删除数据
+// DeleteByCondition deletes data by condition
 func (tm *tableManager) DeleteByCondition(ctx context.Context, tableName string, condition string, args ...interface{}) error {
 	query := fmt.Sprintf("DELETE FROM %s WHERE %s", tableName, condition)
 	if err := tm.queryExecutor.Exec(ctx, query, args...); err != nil {
@@ -452,7 +461,7 @@ func (tm *tableManager) DeleteByCondition(ctx context.Context, tableName string,
 	return nil
 }
 
-// CleanTableData 清理表数据
+// CleanTableData cleans table data
 func (tm *tableManager) CleanTableData(ctx context.Context, tableName string, condition string, args ...interface{}) error {
 	if condition == "" {
 		return tm.TruncateTable(ctx, tableName)
@@ -460,69 +469,69 @@ func (tm *tableManager) CleanTableData(ctx context.Context, tableName string, co
 	return tm.DeleteByCondition(ctx, tableName, condition, args...)
 }
 
-// extractPartitionFromCondition 从清理条件中提取分区信息
+// extractPartitionFromCondition extracts partition information from cleanup condition
 func (tm *tableManager) extractPartitionFromCondition(condition string) (partition string, canUse bool) {
-	log.Printf("[分区检测] 分析清理条件: %s", condition)
+	logger.Debug("Partition detection: analyzing cleanup condition", zap.String("condition", condition))
 
-	// 处理按天账单的日期条件：billing_date = '2024-09-09' -> 分区 20240909 (toYYYYMMDD格式)
+	// Handle daily billing date conditions: billing_date = '2024-09-09' -> partition 20240909 (toYYYYMMDD format)
 	if matches := regexp.MustCompile(`billing_date\s*=\s*'(\d{4}-\d{2}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
 		date := matches[1]
-		log.Printf("[分区检测] 匹配到按天条件，日期: %s", date)
-		if len(date) == 10 { // YYYY-MM-DD格式
-			yearMonthDay := strings.ReplaceAll(date, "-", "") // 去掉所有-，得到YYYYMMDD格式
-			log.Printf("[分区检测] 提取天表分区: %s", yearMonthDay)
+		logger.Debug("Partition detection: matched daily condition", zap.String("date", date))
+		if len(date) == 10 { // YYYY-MM-DD format
+			yearMonthDay := strings.ReplaceAll(date, "-", "") // Remove all -, get YYYYMMDD format
+			logger.Debug("Partition detection: extracted daily table partition", zap.String("partition", yearMonthDay))
 			return yearMonthDay, true
 		}
 	}
 
-	// 处理按月账单的账期条件：billing_cycle = '2024-09' -> 分区 202409
+	// Handle monthly billing cycle conditions: billing_cycle = '2024-09' -> partition 202409
 	if matches := regexp.MustCompile(`billing_cycle\s*=\s*'(\d{4}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
 		cycle := matches[1]
-		log.Printf("[分区检测] 匹配到按月条件（阿里云），账期: %s", cycle)
-		if len(cycle) == 7 { // YYYY-MM格式
-			yearMonth := strings.Replace(cycle, "-", "", 1) // 去掉-
-			log.Printf("[分区检测] 提取分区: %s", yearMonth)
+		logger.Debug("Partition detection: matched monthly condition (Alibaba Cloud)", zap.String("cycle", cycle))
+		if len(cycle) == 7 { // YYYY-MM format
+			yearMonth := strings.Replace(cycle, "-", "", 1) // Remove -
+			logger.Debug("Partition detection: extracted partition", zap.String("partition", yearMonth))
 			return yearMonth, true
 		}
 	}
 
-	// 处理火山引擎的ExpenseDate条件：ExpenseDate分区
+	// Handle Volcengine ExpenseDate conditions: ExpenseDate partition
 	if matches := regexp.MustCompile(`ExpenseDate\s+LIKE\s+'(\d{4}-\d{2})%'`).FindStringSubmatch(condition); len(matches) > 1 {
 		cycle := matches[1]
-		log.Printf("[分区检测] 匹配到ExpenseDate条件（火山引擎），月份: %s", cycle)
-		if len(cycle) == 7 { // YYYY-MM格式
-			yearMonth := strings.Replace(cycle, "-", "", 1) // 去掉-
-			log.Printf("[分区检测] 提取分区: %s", yearMonth)
+		logger.Debug("Partition detection: matched ExpenseDate condition (Volcengine)", zap.String("cycle", cycle))
+		if len(cycle) == 7 { // YYYY-MM format
+			yearMonth := strings.Replace(cycle, "-", "", 1) // Remove -
+			logger.Debug("Partition detection: extracted partition", zap.String("partition", yearMonth))
 			return yearMonth, true
 		}
 	}
 
-	// 处理火山引擎的toYYYYMM(toDate(ExpenseDate))条件
+	// Handle Volcengine toYYYYMM(toDate(ExpenseDate)) conditions
 	if matches := regexp.MustCompile(`toYYYYMM\(toDate\(ExpenseDate\)\)\s*=\s*(\d{6})`).FindStringSubmatch(condition); len(matches) > 1 {
 		partition := matches[1]
-		log.Printf("[分区检测] 匹配到ExpenseDate函数条件（火山引擎），分区: %s", partition)
-		if len(partition) == 6 { // YYYYMM格式
+		logger.Debug("Partition detection: matched ExpenseDate function condition (Volcengine)", zap.String("partition", partition))
+		if len(partition) == 6 { // YYYYMM format
 			return partition, true
 		}
 	}
 
-	// 处理包含月份范围的条件：toYYYYMM(billing_date) = 202409
+	// Handle conditions containing month range: toYYYYMM(billing_date) = 202409
 	if matches := regexp.MustCompile(`toYYYYMM\([^)]+\)\s*=\s*(\d{6})`).FindStringSubmatch(condition); len(matches) > 1 {
 		partition := matches[1]
-		log.Printf("[分区检测] 匹配到函数条件，分区: %s", partition)
-		if len(partition) == 6 { // YYYYMM格式
+		logger.Debug("Partition detection: matched function condition", zap.String("partition", partition))
+		if len(partition) == 6 { // YYYYMM format
 			return partition, true
 		}
 	}
 
-	// 处理复杂的月表清理条件：toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01')) = toYYYYMM(now())
+	// Handle complex monthly table cleanup conditions: toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01')) = toYYYYMM(now())
 	if regexp.MustCompile(`toYYYYMM\(parseDateTimeBestEffort\(billing_cycle\s*\|\|\s*'-01'\)\)\s*=\s*toYYYYMM\(now\(\)\)`).MatchString(condition) {
-		currentMonth := time.Now().Format("200601") // YYYYMM格式
-		log.Printf("[分区检测] 匹配到复杂月表条件，当前月分区: %s", currentMonth)
+		currentMonth := time.Now().Format("200601") // YYYYMM format
+		logger.Debug("Partition detection: matched complex monthly table condition", zap.String("current_month", currentMonth))
 		return currentMonth, true
 	}
 
-	log.Printf("[分区检测] 无法提取分区信息，将使用DELETE")
+	logger.Debug("Partition detection: unable to extract partition info, will use DELETE")
 	return "", false
 }
 
@@ -544,13 +553,13 @@ func (tm *tableManager) checkPartitionExists(ctx context.Context, tableName, par
 	return count > 0, nil
 }
 
-// String 返回表信息的字符串表示
+// String returns string representation of table information
 func (ti *TableInfo) String() string {
 	return fmt.Sprintf("Table{Name: %s, Engine: %s, Rows: %d, Size: %d bytes, Columns: %d}",
 		ti.Name, ti.Engine, ti.TotalRows, ti.TotalBytes, len(ti.Columns))
 }
 
-// String 返回清理结果的字符串表示
+// String returns string representation of cleanup result
 func (r *CleanupResult) String() string {
 	if r.DryRun {
 		return fmt.Sprintf("CleanupResult{DryRun: true, PreviewRows: %d, Duration: %v, Tables: %v}",

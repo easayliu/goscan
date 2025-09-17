@@ -1,94 +1,88 @@
 package handlers
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
-	"log"
-	"log/slog"
 	"net/http"
 
-	"goscan/pkg/response"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"goscan/pkg/logger"
+	_ "goscan/pkg/models"
 	"goscan/pkg/tasks"
 )
 
 // GetTasks returns all tasks
-// @Summary 获取任务列表
-// @Description 返回所有任务的详细信息
-// @Tags Tasks
+// @Summary Get all task list
+// @Description Returns detailed information of all tasks in the system, including running, completed and failed tasks
+// @Tags Task Management
 // @Accept json
 // @Produce json
-// @Success 200 {object} models.TaskListResponse
+// @Success 200 {object} models.TaskListResponse "Task list retrieved successfully"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /tasks [get]
-func (h *HandlerService) GetTasks(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetTasks(c *gin.Context) {
 	tasks := h.taskMgr.GetTasks()
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"tasks": tasks,
 		"count": len(tasks),
 	})
 }
 
 // CreateTask creates a new task
-// @Summary 创建新任务
-// @Description 创建并异步执行一个新的同步任务
-// @Tags Tasks
+// @Summary Create new sync task
+// @Description Create and asynchronously execute a new cloud provider billing data sync task. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.
+// @Tags Task Management
 // @Accept json
 // @Produce json
-// @Param task body models.TaskRequest true "任务请求参数"
-// @Success 201 {object} models.MessageResponse
-// @Failure 400 {object} models.ErrorResponse
+// @Param task body models.TaskRequest true "Task request parameters including task type, cloud provider, sync configuration, etc."
+// @Success 201 {object} models.MessageResponse "Task created successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid request parameters"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /tasks [post]
-func (h *HandlerService) CreateTask(w http.ResponseWriter, r *http.Request) {
-	// 读取完整的body内容
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		apiError := NewBadRequestError("Failed to read request body", err)
-		HandleError(w, apiError)
-		return
-	}
-	r.Body.Close()
-	
-	// 先尝试解析为扁平格式（用户当前使用的格式）
+func (h *HandlerService) CreateTask(c *gin.Context) {
 	var flatReq map[string]interface{}
-	if err := json.Unmarshal(bodyBytes, &flatReq); err != nil {
-		apiError := NewBadRequestError("Invalid JSON format", err)
-		HandleError(w, apiError)
+	if err := c.ShouldBindJSON(&flatReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid JSON format",
+			"details": err.Error(),
+		})
 		return
 	}
-	
-	log.Printf("🔍 [Handler] 接收到的原始请求: %+v", flatReq)
-	
-	// 检查是否是扁平格式（没有config字段但有provider字段）
+
+	// Check if it's flat format (no config field but has provider field)
 	var taskReq tasks.TaskRequest
 	if _, hasConfig := flatReq["config"]; !hasConfig && flatReq["provider"] != nil {
-		// 扁平格式，进行转换
+		// Flat format, perform conversion
 		taskReq = h.convertFlatToTaskRequest(flatReq)
-		log.Printf("🔄 [Handler] 已转换扁平格式到标准格式")
 	} else {
-		// 标准格式，直接解析
-		if err := json.Unmarshal(bodyBytes, &taskReq); err != nil {
-			apiError := NewBadRequestError("Invalid TaskRequest format", err)
-			HandleError(w, apiError)
+		// Standard format, parse directly
+		if err := c.ShouldBindJSON(&taskReq); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   true,
+				"message": "Invalid TaskRequest format",
+				"details": err.Error(),
+			})
 			return
 		}
-		log.Printf("🔍 [Handler] 使用标准格式解析")
 	}
-	
-	// 添加调试信息
-	log.Printf("🔍 [Handler] 最终TaskRequest - Type: '%s', Provider: '%s', Config.BillPeriod: '%s' (长度: %d)", 
-		taskReq.Type, taskReq.Provider, taskReq.Config.BillPeriod, len(taskReq.Config.BillPeriod))
+
+	logger.Info("Creating task",
+		zap.String("task_id", taskReq.ID),
+		zap.String("type", string(taskReq.Type)),
+		zap.String("provider", taskReq.Provider))
 
 	// Execute task asynchronously
 	go h.executeTaskAsync(&taskReq)
 
-	response.WriteJSONResponse(w, http.StatusCreated, buildTaskResponse(
+	c.JSON(http.StatusCreated, buildTaskResponse(
 		taskReq.ID,
 		"started",
 		"Task started successfully",
 	))
 }
 
-// executeTaskAsync 异步执行任务
+// executeTaskAsync executes task asynchronously
 func (h *HandlerService) executeTaskAsync(taskReq *tasks.TaskRequest) {
 	result, err := h.taskMgr.ExecuteTask(h.ctx, taskReq)
 	if err != nil {
@@ -97,72 +91,80 @@ func (h *HandlerService) executeTaskAsync(taskReq *tasks.TaskRequest) {
 			"provider", taskReq.Provider,
 			"type", taskReq.Type)
 	} else if result != nil {
-		slog.Info("Task completed successfully",
-			"task_id", taskReq.ID,
-			"provider", taskReq.Provider,
-			"duration", result.Duration)
+		logger.Info("Task completed successfully",
+			zap.String("task_id", taskReq.ID),
+			zap.String("provider", taskReq.Provider),
+			zap.Duration("duration", result.Duration))
 	} else {
-		slog.Info("Task completed successfully",
-			"task_id", taskReq.ID,
-			"provider", taskReq.Provider)
+		logger.Info("Task completed successfully",
+			zap.String("task_id", taskReq.ID),
+			zap.String("provider", taskReq.Provider))
 	}
 }
 
 // GetTask returns a specific task
-// @Summary 获取指定任务
-// @Description 根据任务ID返回任务的详细信息
-// @Tags Tasks
+// @Summary Get specific task details
+// @Description Get detailed information of a specific task by task ID, including task status, execution progress, error information, etc.
+// @Tags Task Management
 // @Accept json
 // @Produce json
-// @Param id path string true "任务ID"
-// @Success 200 {object} models.TaskResponse
-// @Failure 400 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
+// @Param id path string true "Unique task identifier ID" example:"task_123456789"
+// @Success 200 {object} models.TaskResponse "Task details retrieved successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid task ID"
+// @Failure 404 {object} models.ErrorResponse "Task not found"
 // @Router /tasks/{id} [get]
-func (h *HandlerService) GetTask(w http.ResponseWriter, r *http.Request) {
-	taskID, err := response.ParseStringParam(r, "id")
-	if err != nil {
-		apiError := NewBadRequestError("Invalid task ID", err)
-		HandleError(w, apiError)
+func (h *HandlerService) GetTask(c *gin.Context) {
+	taskID := c.Param("id")
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid task ID",
+		})
 		return
 	}
 
 	task, err := h.taskMgr.GetTask(taskID)
 	if err != nil {
-		apiError := NewNotFoundError("Task not found", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   true,
+			"message": "Task not found",
+		})
 		return
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, task)
+	c.JSON(http.StatusOK, task)
 }
 
 // DeleteTask cancels/removes a task
-// @Summary 删除任务
-// @Description 取消或删除指定的任务
-// @Tags Tasks
+// @Summary Cancel or delete task
+// @Description Cancel running tasks or delete completed task records. Running tasks will be forcibly stopped.
+// @Tags Task Management
 // @Accept json
 // @Produce json
-// @Param id path string true "任务ID"
-// @Success 200 {object} models.MessageResponse
-// @Failure 400 {object} models.ErrorResponse
-// @Failure 404 {object} models.ErrorResponse
+// @Param id path string true "Unique task identifier ID" example:"task_123456789"
+// @Success 200 {object} models.MessageResponse "Task cancelled/deleted successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid task ID"
+// @Failure 404 {object} models.ErrorResponse "Task not found or cannot be cancelled"
 // @Router /tasks/{id} [delete]
-func (h *HandlerService) DeleteTask(w http.ResponseWriter, r *http.Request) {
-	taskID, err := response.ParseStringParam(r, "id")
-	if err != nil {
-		apiError := NewBadRequestError("Invalid task ID", err)
-		HandleError(w, apiError)
+func (h *HandlerService) DeleteTask(c *gin.Context) {
+	taskID := c.Param("id")
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid task ID",
+		})
 		return
 	}
 
 	if err := h.taskMgr.CancelTask(taskID); err != nil {
-		apiError := NewNotFoundError("Task not found or cannot be cancelled", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   true,
+			"message": "Task not found or cannot be cancelled",
+		})
 		return
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, buildTaskResponse(
+	c.JSON(http.StatusOK, buildTaskResponse(
 		taskID,
 		"cancelled",
 		"Task cancelled successfully",
@@ -170,16 +172,18 @@ func (h *HandlerService) DeleteTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // TriggerSync manually triggers a sync operation
-// @Summary 手动触发数据同步
-// @Description 手动触发指定云服务商的账单数据同步操作
-// @Tags Sync
+// @Summary Manually trigger billing data sync
+// @Description Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.
+// @Description Supports configuring sync mode, time range, granularity and other parameters.
+// @Tags Data Sync
 // @Accept json
 // @Produce json
-// @Param sync body models.SyncTriggerRequest true "同步请求参数"
-// @Success 200 {object} models.MessageResponse
-// @Failure 400 {object} models.ErrorResponse
-// @Router /sync/trigger [post]
-func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
+// @Param sync body models.SyncTriggerRequest true "Sync request parameters including cloud provider, sync mode, billing period range and other configurations"
+// @Success 200 {object} models.MessageResponse "Sync task triggered successfully"
+// @Failure 400 {object} models.ErrorResponse "Invalid request parameters or missing cloud provider configuration"
+// @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Router /sync [post]
+func (h *HandlerService) TriggerSync(c *gin.Context) {
 	var syncReq struct {
 		Provider       string `json:"provider"`
 		SyncMode       string `json:"sync_mode"`
@@ -193,22 +197,27 @@ func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
 		Limit          int    `json:"limit,omitempty"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&syncReq); err != nil {
-		apiError := NewBadRequestError("Invalid request body", err)
-		HandleError(w, apiError)
+	if err := c.ShouldBindJSON(&syncReq); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid request body",
+			"details": err.Error(),
+		})
 		return
 	}
 
 	// Validate provider
-	if err := ValidateRequired(syncReq.Provider, "provider"); err != nil {
-		apiError := NewBadRequestError("Provider validation failed", err)
-		HandleError(w, apiError)
+	if syncReq.Provider == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Provider is required",
+		})
 		return
 	}
 
-	// 添加调试信息
-	log.Printf("🔍 [TriggerSync] 接收到的请求 - Provider: '%s', BillPeriod: '%s' (长度: %d)", 
-		syncReq.Provider, syncReq.BillPeriod, len(syncReq.BillPeriod))
+	logger.Info("Triggering sync",
+		zap.String("provider", syncReq.Provider),
+		zap.String("sync_mode", syncReq.SyncMode))
 
 	// Create task request
 	taskReq := &tasks.TaskRequest{
@@ -230,7 +239,7 @@ func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
 	// Execute task asynchronously
 	go h.executeSyncTaskAsync(taskReq, syncReq.Provider)
 
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"task_id":   taskReq.ID,
 		"status":    "started",
 		"message":   fmt.Sprintf("Sync triggered for provider %s", syncReq.Provider),
@@ -239,7 +248,7 @@ func (h *HandlerService) TriggerSync(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// executeSyncTaskAsync 异步执行同步任务
+// executeSyncTaskAsync executes sync task asynchronously
 func (h *HandlerService) executeSyncTaskAsync(taskReq *tasks.TaskRequest, provider string) {
 	result, err := h.taskMgr.ExecuteTask(h.ctx, taskReq)
 	if err != nil {
@@ -247,27 +256,27 @@ func (h *HandlerService) executeSyncTaskAsync(taskReq *tasks.TaskRequest, provid
 			"task_id", taskReq.ID,
 			"provider", provider)
 	} else if result != nil {
-		slog.Info("Manual sync completed",
-			"task_id", taskReq.ID,
-			"provider", provider,
-			"duration", result.Duration)
+		logger.Info("Manual sync completed",
+			zap.String("task_id", taskReq.ID),
+			zap.String("provider", provider),
+			zap.Duration("duration", result.Duration))
 	} else {
-		slog.Info("Manual sync completed",
-			"task_id", taskReq.ID,
-			"provider", provider)
+		logger.Info("Manual sync completed",
+			zap.String("task_id", taskReq.ID),
+			zap.String("provider", provider))
 	}
 }
 
 // GetSyncStatus returns current sync status
-// @Summary 获取同步状态
-// @Description 返回当前数据同步任务的状态信息
-// @Tags Sync
+// @Summary Get data sync status
+// @Description Returns summary status information of all current data sync tasks, including running task count, total task count and other statistics
+// @Tags Data Sync
 // @Accept json
 // @Produce json
-// @Success 200 {object} models.SyncStatusResponse
-// @Router /sync/status [get]
-func (h *HandlerService) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
-	status := map[string]interface{}{
+// @Success 200 {object} models.SyncStatusResponse "Sync status retrieved successfully"
+// @Router /sync [get]
+func (h *HandlerService) GetSyncStatus(c *gin.Context) {
+	status := gin.H{
 		"running_tasks": h.taskMgr.GetRunningTaskCount(),
 		"total_tasks":   h.taskMgr.GetTotalTaskCount(),
 		"timestamp":     getCurrentTimestamp(),
@@ -275,29 +284,31 @@ func (h *HandlerService) GetSyncStatus(w http.ResponseWriter, r *http.Request) {
 		"status":        "active",
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, status)
+	c.JSON(http.StatusOK, status)
 }
 
 // GetSyncHistory returns sync history
-// @Summary 获取同步历史
-// @Description 返回历史同步任务的执行记录
-// @Tags Sync
+// @Summary Get sync history records
+// @Description Returns execution records of historical sync tasks, including successful and failed tasks, as well as detailed information of each sync
+// @Tags Data Sync
 // @Accept json
 // @Produce json
-// @Success 200 {object} models.SyncHistoryResponse
+// @Param limit query int false "Limit of returned records" default(100) minimum(1) maximum(1000)
+// @Param provider query string false "Filter records by specified cloud provider" Enums(volcengine,alicloud,aws,azure,gcp)
+// @Success 200 {object} models.SyncHistoryResponse "History records retrieved successfully"
 // @Router /sync/history [get]
-func (h *HandlerService) GetSyncHistory(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetSyncHistory(c *gin.Context) {
 	history := h.taskMgr.GetTaskHistory()
-	
-	// 过滤出同步相关的任务历史
+
+	// Filter out sync-related task history
 	var syncHistory []interface{}
 	for _, task := range history {
 		if task.Type == tasks.TaskTypeSync {
 			syncHistory = append(syncHistory, task)
 		}
 	}
-	
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+
+	c.JSON(http.StatusOK, gin.H{
 		"history":   syncHistory,
 		"count":     len(syncHistory),
 		"timestamp": getCurrentTimestamp(),

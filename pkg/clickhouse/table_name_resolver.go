@@ -139,7 +139,7 @@ func (r *TableNameResolver) ValidateTableName(tableName string) error {
 	return nil
 }
 
-// GetTableInfo 获取表名信息（用于调试和日志）
+// GetTableInfo returns table naming metadata (for debugging and logging)
 func (r *TableNameResolver) GetTableInfo(baseTableName string) map[string]string {
 	distributedTable, localTable := r.GetTablePair(baseTableName)
 

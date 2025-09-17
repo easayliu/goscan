@@ -4,17 +4,18 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/config"
-	"log"
+	"goscan/pkg/logger"
 	"time"
 
 	"github.com/volcengine/volcengine-go-sdk/service/billing"
 	"github.com/volcengine/volcengine-go-sdk/volcengine"
 	"github.com/volcengine/volcengine-go-sdk/volcengine/credentials"
 	"github.com/volcengine/volcengine-go-sdk/volcengine/session"
+	"go.uber.org/zap"
 	"golang.org/x/time/rate"
 )
 
-// Client 火山引擎客户端
+// Client VolcEngine client
 type Client struct {
 	config         *config.VolcEngineConfig
 	billingService *billing.BILLING
@@ -22,18 +23,18 @@ type Client struct {
 	retryPolicy    RetryPolicy
 }
 
-// NewClient 创建火山引擎客户端
+// NewClient creates a VolcEngine client
 func NewClient(cfg *config.VolcEngineConfig) (*Client, error) {
 	if cfg == nil {
 		cfg = config.NewVolcEngineConfig()
 	}
 
-	// 验证配置
+	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, WrapError(err, "invalid config")
 	}
 
-	// 创建 SDK 会话
+	// Create SDK session
 	sdkConfig := volcengine.NewConfig().
 		WithRegion(cfg.Region).
 		WithCredentials(credentials.NewStaticCredentials(cfg.AccessKey, cfg.SecretKey, ""))
@@ -43,10 +44,10 @@ func NewClient(cfg *config.VolcEngineConfig) (*Client, error) {
 		return nil, WrapError(err, "create session failed")
 	}
 
-	// 创建限流器
+	// Create rate limiter
 	qps := cfg.RateLimit
 	if qps <= 0 {
-		qps = 10 // 默认 QPS
+		qps = 10 // Default QPS
 	}
 	rateLimiter := rate.NewLimiter(rate.Limit(qps), 1)
 
@@ -58,46 +59,51 @@ func NewClient(cfg *config.VolcEngineConfig) (*Client, error) {
 	}, nil
 }
 
-// ListBillDetail 获取账单明细
+// ListBillDetail retrieves bill details
 func (c *Client) ListBillDetail(ctx context.Context, req *ListBillDetailRequest) (*ListBillDetailResponse, error) {
 	if req == nil {
 		req = &ListBillDetailRequest{}
 	}
 
-	// 处理账期
+	// Handle billing period
 	if req.BillPeriod == "" {
 		req.BillPeriod, _ = c.CalculateSmartPeriod()
 		if c.config.EnableDebug {
-			log.Printf("[DEBUG] 使用智能账期: %s", req.BillPeriod)
+			logger.Debug("Volcengine using intelligent period",
+				zap.String("provider", "volcengine"),
+				zap.String("period", req.BillPeriod))
 		}
 	}
 
-	// 验证账期
+	// Validate billing period
 	if err := c.ValidatePeriod(req.BillPeriod); err != nil {
 		return nil, WrapError(err, "validate period failed")
 	}
 
-	// 设置默认值并验证
+	// Set default values and validate
 	req.SetDefaults()
 	if err := req.Validate(); err != nil {
 		return nil, WrapError(err, "validate request failed")
 	}
 
-	// 构建 SDK 输入
+	// Build SDK input
 	input := c.buildSDKInput(req)
 
 	if c.config.EnableDebug {
-		log.Printf("[DEBUG] API请求 - Period: %s, Limit: %d, Offset: %d",
-			req.BillPeriod, req.Limit, req.Offset)
+		logger.Debug("Volcengine API request",
+			zap.String("provider", "volcengine"),
+			zap.String("period", req.BillPeriod),
+			zap.Int32("limit", req.Limit),
+			zap.Int32("offset", req.Offset))
 	}
 
-	// 调用 API
+	// Call API
 	output, err := c.callAPIWithRetry(ctx, input)
 	if err != nil {
 		return nil, WrapError(err, "api call failed")
 	}
 
-	// 检查响应错误
+	// Check response error
 	if output.Metadata.Error != nil {
 		return nil, NewAPIError(
 			output.Metadata.Error.Code,
@@ -105,32 +111,37 @@ func (c *Client) ListBillDetail(ctx context.Context, req *ListBillDetailRequest)
 		)
 	}
 
-	// 转换响应
+	// Convert response
 	response := c.convertSDKResponse(output)
 
 	if c.config.EnableDebug {
-		log.Printf("[DEBUG] 获取 %d 条记录，总计: %d",
-			len(response.Result.List), response.Result.Total)
+		logger.Debug("Volcengine API response",
+			zap.String("provider", "volcengine"),
+			zap.Int("record_count", len(response.Result.List)),
+			zap.Int32("total", response.Result.Total))
 	}
 
 	return response, nil
 }
 
-// callAPIWithRetry 使用重试策略调用 API
+// callAPIWithRetry calls API with retry strategy
 func (c *Client) callAPIWithRetry(ctx context.Context, input *billing.ListBillDetailInput) (*billing.ListBillDetailOutput, error) {
 	var lastErr error
 
 	for attempt := 0; attempt < c.retryPolicy.MaxAttempts(); attempt++ {
-		// 限流控制
+		// Rate limiting control
 		if err := c.rateLimiter.Wait(ctx); err != nil {
 			return nil, WrapError(err, "rate limit wait failed")
 		}
 
 		if attempt > 0 && c.config.EnableDebug {
-			log.Printf("[DEBUG] 重试 %d/%d", attempt, c.retryPolicy.MaxAttempts())
+			logger.Debug("Volcengine API retry",
+				zap.String("provider", "volcengine"),
+				zap.Int("attempt", attempt),
+				zap.Int("max_attempts", c.retryPolicy.MaxAttempts()))
 		}
 
-		// 调用 API
+		// Call API
 		output, err := c.billingService.ListBillDetailWithContext(ctx, input)
 		if err == nil {
 			return output, nil
@@ -138,12 +149,12 @@ func (c *Client) callAPIWithRetry(ctx context.Context, input *billing.ListBillDe
 
 		lastErr = err
 
-		// 检查是否应该重试
+		// Check if should retry
 		if !c.retryPolicy.ShouldRetry(err, attempt) {
 			break
 		}
 
-		// 等待重试
+		// Wait for retry
 		delay := c.retryPolicy.GetDelay(attempt)
 		select {
 		case <-time.After(delay):
@@ -155,28 +166,28 @@ func (c *Client) callAPIWithRetry(ctx context.Context, input *billing.ListBillDe
 	return nil, WrapError(lastErr, "all retry attempts failed")
 }
 
-// ValidatePeriod 验证账期格式
+// ValidatePeriod validates billing period format
 func (c *Client) ValidatePeriod(billPeriod string) error {
 	if billPeriod == "" {
 		return ErrEmptyBillPeriod
 	}
 
-	// 检查格式（YYYY-MM）
+	// Check format (YYYY-MM)
 	parsedTime, err := time.Parse("2006-01", billPeriod)
 	if err != nil {
 		return ErrInvalidBillPeriod
 	}
 
-	// 检查是否为未来月份
+	// Check if it's a future month
 	now := time.Now()
 	nextMonth := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, now.Location())
 	billMonth := time.Date(parsedTime.Year(), parsedTime.Month(), 1, 0, 0, 0, 0, parsedTime.Location())
-	
+
 	if billMonth.After(nextMonth) || billMonth.Equal(nextMonth) {
 		return ErrFutureBillPeriod
 	}
-	
-	// 检查是否太过久远
+
+	// Check if it's too old
 	earliestAllowed := time.Date(2018, 1, 1, 0, 0, 0, 0, time.UTC)
 	if billMonth.Before(earliestAllowed) {
 		return ErrTooOldBillPeriod
@@ -185,60 +196,60 @@ func (c *Client) ValidatePeriod(billPeriod string) error {
 	return nil
 }
 
-// CalculateSmartPeriod 计算智能账期
+// CalculateSmartPeriod calculates intelligent billing period
 func (c *Client) CalculateSmartPeriod() (string, string) {
 	now := time.Now()
 	yesterday := now.AddDate(0, 0, -1)
-	
-	// 计算上个月第一天
+
+	// Calculate the first day of last month
 	firstDayOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	firstDayOfLastMonth := firstDayOfThisMonth.AddDate(0, -1, 0)
-	
+
 	startDate := firstDayOfLastMonth
 	endDate := yesterday
-	
-	// 分析时间跨度
+
+	// Analyze time span
 	lastMonthPeriod := startDate.Format("2006-01")
 	currentMonthPeriod := now.Format("2006-01")
-	
-	// 计算各账期覆盖的天数
+
+	// Calculate days covered by each billing period
 	lastMonthDays := 0
 	currentMonthDays := 0
-	
+
 	lastMonthEnd := firstDayOfThisMonth.AddDate(0, 0, -1)
 	if endDate.Before(lastMonthEnd) {
 		lastMonthDays = int(endDate.Sub(startDate).Hours()/24) + 1
 	} else {
 		lastMonthDays = int(lastMonthEnd.Sub(startDate).Hours()/24) + 1
 	}
-	
+
 	if endDate.After(firstDayOfThisMonth) || endDate.Equal(firstDayOfThisMonth) {
 		currentMonthDays = int(endDate.Sub(firstDayOfThisMonth).Hours()/24) + 1
 	}
-	
+
 	var selectedPeriod string
 	var reason string
-	
+
 	if lastMonthDays > currentMonthDays {
 		selectedPeriod = lastMonthPeriod
-		reason = fmt.Sprintf("上个月占主导(%d天 vs %d天)", lastMonthDays, currentMonthDays)
+		reason = fmt.Sprintf("last month dominates (%d days vs %d days)", lastMonthDays, currentMonthDays)
 	} else if currentMonthDays > lastMonthDays {
-		selectedPeriod = currentMonthPeriod  
-		reason = fmt.Sprintf("当前月占主导(%d天 vs %d天)", currentMonthDays, lastMonthDays)
+		selectedPeriod = currentMonthPeriod
+		reason = fmt.Sprintf("current month dominates (%d days vs %d days)", currentMonthDays, lastMonthDays)
 	} else {
 		selectedPeriod = lastMonthPeriod
-		reason = "默认选择上个月（数据更稳定）"
+		reason = "default to last month (data is more stable)"
 	}
-	
-	dateRange := fmt.Sprintf("%s至%s, %s", 
-		startDate.Format("2006-01-02"), 
+
+	dateRange := fmt.Sprintf("%s to %s, %s",
+		startDate.Format("2006-01-02"),
 		endDate.Format("2006-01-02"),
 		reason)
-	
+
 	return selectedPeriod, dateRange
 }
 
-// convertSDKResponse 转换 SDK 响应为内部格式
+// convertSDKResponse converts SDK response to internal format
 func (c *Client) convertSDKResponse(output *billing.ListBillDetailOutput) *ListBillDetailResponse {
 	response := &ListBillDetailResponse{
 		ResponseMetadata: ResponseMetadata{
@@ -255,7 +266,7 @@ func (c *Client) convertSDKResponse(output *billing.ListBillDetailOutput) *ListB
 		},
 	}
 
-	// 转换账单详情列表
+	// Convert bill detail list
 	if output.List != nil {
 		response.Result.List = make([]BillDetail, 0, len(output.List))
 		for _, item := range output.List {
@@ -266,15 +277,15 @@ func (c *Client) convertSDKResponse(output *billing.ListBillDetailOutput) *ListB
 	return response
 }
 
-// convertBillDetail 转换单个账单详情
+// convertBillDetail converts a single bill detail
 func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) BillDetail {
 	return BillDetail{
-		// 核心标识字段
+		// Core identification fields
 		BillDetailID: getStringValue(item.BillDetailId),
 		BillID:       getStringValue(item.BillID),
 		InstanceNo:   getStringValue(item.InstanceNo),
 
-		// 账期和时间字段
+		// Billing period and time fields
 		BillPeriod:       getStringValue(item.BillPeriod),
 		BusiPeriod:       getStringValue(item.BusiPeriod),
 		ExpenseDate:      getStringValue(item.ExpenseDate),
@@ -282,7 +293,7 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		ExpenseEndTime:   getStringValue(item.ExpenseEndTime),
 		TradeTime:        getStringValue(item.TradeTime),
 
-		// 产品和服务信息
+		// Product and service information
 		Product:     getStringValue(item.Product),
 		ProductZh:   getStringValue(item.ProductZh),
 		SolutionZh:  getStringValue(item.SolutionZh),
@@ -291,19 +302,19 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		Factor:      getStringValue(item.Factor),
 		FactorCode:  getStringValue(item.FactorCode),
 
-		// 配置信息
+		// Configuration information
 		ConfigName:        getStringValue(item.ConfigName),
 		ConfigurationCode: getStringValue(item.ConfigurationCode),
 		InstanceName:      getStringValue(item.InstanceName),
 
-		// 地域信息
+		// Region information
 		Region:        getStringValue(item.Region),
 		RegionCode:    getStringValue(item.RegionCode),
 		Zone:          getStringValue(item.Zone),
 		ZoneCode:      getStringValue(item.ZoneCode),
 		CountryRegion: getStringValue(item.CountryRegion),
 
-		// 用量和计费信息
+		// Usage and billing information
 		Count:                getStringValue(item.Count),
 		Unit:                 getStringValue(item.Unit),
 		UseDuration:          getStringValue(item.UseDuration),
@@ -311,7 +322,7 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		DeductionCount:       getStringValue(item.DeductionCount),
 		DeductionUseDuration: getStringValue(item.DeductionUseDuration),
 
-		// 价格信息
+		// Price information
 		Price:           getStringValue(item.Price),
 		PriceUnit:       getStringValue(item.PriceUnit),
 		PriceInterval:   getStringValue(item.PriceInterval),
@@ -319,25 +330,25 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		Formula:         getStringValue(item.Formula),
 		MeasureInterval: getStringValue(item.MeasureInterval),
 
-		// 金额信息
+		// Amount information
 		OriginalBillAmount:     getStringValue(item.OriginalBillAmount),
 		PreferentialBillAmount: getStringValue(item.PreferentialBillAmount),
 		DiscountBillAmount:     getStringValue(item.DiscountBillAmount),
 		RoundAmount:            getFloat64Value(item.RoundAmount),
 
-		// 实际价值和结算信息
+		// Actual value and settlement information
 		RealValue:             getStringValue(item.RealValue),
 		PretaxRealValue:       getStringValue(item.PretaxRealValue),
 		SettleRealValue:       getStringValue(item.SettleRealValue),
 		SettlePretaxRealValue: getStringValue(item.SettlePretaxRealValue),
 
-		// 应付金额信息
+		// Payable amount information
 		PayableAmount:             getStringValue(item.PayableAmount),
 		PreTaxPayableAmount:       getStringValue(item.PreTaxPayableAmount),
 		SettlePayableAmount:       getStringValue(item.SettlePayableAmount),
 		SettlePreTaxPayableAmount: getStringValue(item.SettlePreTaxPayableAmount),
 
-		// 税费信息
+		// Tax information
 		PretaxAmount:        getStringValue(item.PretaxAmount),
 		PosttaxAmount:       getStringValue(item.PosttaxAmount),
 		SettlePretaxAmount:  getStringValue(item.SettlePretaxAmount),
@@ -346,12 +357,12 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		SettleTax:           getStringValue(item.SettleTax),
 		TaxRate:             getStringValue(item.TaxRate),
 
-		// 付款信息
+		// Payment information
 		PaidAmount:          getStringValue(item.PaidAmount),
 		UnpaidAmount:        getStringValue(item.UnpaidAmount),
 		CreditCarriedAmount: getStringValue(item.CreditCarriedAmount),
 
-		// 优惠和抵扣信息
+		// Discount and deduction information
 		CouponAmount:                      getStringValue(item.CouponAmount),
 		DiscountInfo:                      getStringValue(item.DiscountInfo),
 		SavingPlanDeductionDiscountAmount: getStringValue(item.SavingPlanDeductionDiscountAmount),
@@ -359,12 +370,12 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		SavingPlanOriginalAmount:          getStringValue(item.SavingPlanOriginalAmount),
 		ReservationInstance:               getStringValue(item.ReservationInstance),
 
-		// 货币信息
+		// Currency information
 		Currency:           getStringValue(item.Currency),
 		CurrencySettlement: getStringValue(item.CurrencySettlement),
 		ExchangeRate:       getStringValue(item.ExchangeRate),
 
-		// 计费模式信息
+		// Billing mode information
 		BillingMode:       getStringValue(item.BillingMode),
 		BillingMethodCode: getStringValue(item.BillingMethodCode),
 		BillingFunction:   getStringValue(item.BillingFunction),
@@ -372,13 +383,13 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		SellingMode:       getStringValue(item.SellingMode),
 		SettlementType:    getStringValue(item.SettlementType),
 
-		// 折扣相关业务信息
+		// Discount related business information
 		DiscountBizBillingFunction:   getStringValue(item.DiscountBizBillingFunction),
 		DiscountBizMeasureInterval:   getStringValue(item.DiscountBizMeasureInterval),
 		DiscountBizUnitPrice:         getStringValue(item.DiscountBizUnitPrice),
 		DiscountBizUnitPriceInterval: getStringValue(item.DiscountBizUnitPriceInterval),
 
-		// 用户和组织信息
+		// User and organization information
 		OwnerID:            getStringValue(item.OwnerID),
 		OwnerUserName:      getStringValue(item.OwnerUserName),
 		OwnerCustomerName:  getStringValue(item.OwnerCustomerName),
@@ -389,22 +400,20 @@ func (c *Client) convertBillDetail(item *billing.ListForListBillDetailOutput) Bi
 		SellerUserName:     getStringValue(item.SellerUserName),
 		SellerCustomerName: getStringValue(item.SellerCustomerName),
 
-		// 项目和分类信息
+		// Project and category information
 		Project:            getStringValue(item.Project),
 		ProjectDisplayName: getStringValue(item.ProjectDisplayName),
 		BillCategory:       getStringValue(item.BillCategory),
 		SubjectName:        getStringValue(item.SubjectName),
 		Tag:                getStringValue(item.Tag),
 
-		// 其他业务信息
+		// Other business information
 		MainContractNumber: getStringValue(item.MainContractNumber),
 		OriginalOrderNo:    getStringValue(item.OriginalOrderNo),
 		EffectiveFactor:    getStringValue(item.EffectiveFactor),
 		ExpandField:        getStringValue(item.ExpandField),
 	}
 }
-
-
 
 func getStringValue(ptr *string) string {
 	if ptr == nil {
@@ -427,54 +436,53 @@ func getFloat64Value(ptr *float64) float64 {
 	return *ptr
 }
 
-
-// buildSDKInput 构造SDK输入参数（完全重构版本）
-// 严格按照 github.com/volcengine/volcengine-go-sdk/service/billing.ListBillDetailInput 结构映射
+// buildSDKInput constructs SDK input parameters (fully refactored version)
+// Strictly mapped according to github.com/volcengine/volcengine-go-sdk/service/billing.ListBillDetailInput structure
 func (c *Client) buildSDKInput(req *ListBillDetailRequest) *billing.ListBillDetailInput {
 	input := &billing.ListBillDetailInput{}
 
-	// === 设置必需参数 ===
+	// === Set required parameters ===
 	input.BillPeriod = &req.BillPeriod
 	input.Limit = &req.Limit
 
-	// === 设置可选参数（完全按照SDK字段映射）===
+	// === Set optional parameters (fully mapped according to SDK fields) ===
 
-	// Offset - 默认为0
+	// Offset - defaults to 0
 	if req.Offset > 0 {
 		input.Offset = &req.Offset
 	}
 
-	// NeedRecordNum - 是否需要总记录数
+	// NeedRecordNum - whether total record count is needed
 	if req.NeedRecordNum > 0 {
 		input.NeedRecordNum = &req.NeedRecordNum
 	}
 
-	// IgnoreZero - 是否忽略零元账单
+	// IgnoreZero - whether to ignore zero amount bills
 	if req.IgnoreZero > 0 {
 		input.IgnoreZero = &req.IgnoreZero
 	}
 
-	// GroupPeriod - 分组周期
+	// GroupPeriod - grouping period
 	if req.GroupPeriod > 0 {
 		input.GroupPeriod = &req.GroupPeriod
 	}
 
-	// GroupTerm - 分组条件
+	// GroupTerm - grouping condition
 	if req.GroupTerm > 0 {
 		input.GroupTerm = &req.GroupTerm
 	}
 
-	// ExpenseDate - 费用日期
+	// ExpenseDate - expense date
 	if req.ExpenseDate != "" {
 		input.ExpenseDate = &req.ExpenseDate
 	}
 
-	// InstanceNo - 实例编号
+	// InstanceNo - instance number
 	if req.InstanceNo != "" {
 		input.InstanceNo = &req.InstanceNo
 	}
 
-	// BillCategory - 账单分类列表
+	// BillCategory - bill category list
 	if len(req.BillCategory) > 0 {
 		input.BillCategory = make([]*string, len(req.BillCategory))
 		for i, category := range req.BillCategory {
@@ -482,7 +490,7 @@ func (c *Client) buildSDKInput(req *ListBillDetailRequest) *billing.ListBillDeta
 		}
 	}
 
-	// BillingMode - 计费模式列表
+	// BillingMode - billing mode list
 	if len(req.BillingMode) > 0 {
 		input.BillingMode = make([]*string, len(req.BillingMode))
 		for i, mode := range req.BillingMode {
@@ -490,7 +498,7 @@ func (c *Client) buildSDKInput(req *ListBillDetailRequest) *billing.ListBillDeta
 		}
 	}
 
-	// Product - 产品名称列表
+	// Product - product name list
 	if len(req.Product) > 0 {
 		input.Product = make([]*string, len(req.Product))
 		for i, product := range req.Product {
@@ -498,7 +506,7 @@ func (c *Client) buildSDKInput(req *ListBillDetailRequest) *billing.ListBillDeta
 		}
 	}
 
-	// OwnerID - 所有者ID列表
+	// OwnerID - owner ID list
 	if len(req.OwnerID) > 0 {
 		input.OwnerID = make([]*int64, len(req.OwnerID))
 		for i, ownerID := range req.OwnerID {
@@ -506,7 +514,7 @@ func (c *Client) buildSDKInput(req *ListBillDetailRequest) *billing.ListBillDeta
 		}
 	}
 
-	// PayerID - 付款方ID列表
+	// PayerID - payer ID list
 	if len(req.PayerID) > 0 {
 		input.PayerID = make([]*int64, len(req.PayerID))
 		for i, payerID := range req.PayerID {
@@ -515,14 +523,11 @@ func (c *Client) buildSDKInput(req *ListBillDetailRequest) *billing.ListBillDeta
 	}
 
 	if c.config.EnableDebug {
-		log.Printf("[SDK映射] 成功构造输入参数: BillPeriod=%s, Limit=%d",
-			req.BillPeriod, req.Limit)
+		logger.Debug("Volcengine SDK mapping successful",
+			zap.String("provider", "volcengine"),
+			zap.String("bill_period", req.BillPeriod),
+			zap.Int32("limit", req.Limit))
 	}
 
 	return input
 }
-
-
-
-
-

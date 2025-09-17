@@ -1,52 +1,57 @@
 package handlers
 
 import (
-	"encoding/json"
-	"log/slog"
 	"net/http"
 
-	"goscan/pkg/response"
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+	"goscan/pkg/logger"
+	_ "goscan/pkg/models"
 	"goscan/pkg/scheduler"
 )
 
 // GetSchedulerStatus returns scheduler status
-// @Summary 获取调度器状态
-// @Description 返回任务调度器的运行状态信息
-// @Tags Scheduler
+// @Summary Get scheduler status
+// @Description Returns running status information of the task scheduler
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
 // @Success 200 {object} models.SchedulerStatus
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/status [get]
-func (h *HandlerService) GetSchedulerStatus(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetSchedulerStatus(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
 	status := h.scheduler.GetStatus()
-	response.WriteJSONResponse(w, http.StatusOK, status)
+	c.JSON(http.StatusOK, status)
 }
 
 // GetScheduledJobs returns all scheduled jobs
-// @Summary 获取定时任务列表
-// @Description 返回所有已配置的定时任务信息
-// @Tags Scheduler
+// @Summary Get scheduled job list
+// @Description Returns information of all configured scheduled jobs
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
 // @Success 200 {object} models.JobListResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/jobs [get]
-func (h *HandlerService) GetScheduledJobs(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetScheduledJobs(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
 	jobs := h.scheduler.GetJobs()
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"jobs":      jobs,
 		"count":     len(jobs),
 		"timestamp": getCurrentTimestamp(),
@@ -54,44 +59,55 @@ func (h *HandlerService) GetScheduledJobs(w http.ResponseWriter, r *http.Request
 }
 
 // CreateScheduledJob creates a new scheduled job
-// @Summary 创建定时任务
-// @Description 创建一个新的定时同步任务
-// @Tags Scheduler
+// @Summary Create scheduled job
+// @Description Create a new scheduled sync job
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
-// @Param job body models.JobRequest true "定时任务请求参数"
+// @Param job body models.JobRequest true "Scheduled job request parameters"
 // @Success 201 {object} models.MessageResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/jobs [post]
-func (h *HandlerService) CreateScheduledJob(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) CreateScheduledJob(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
 	var job scheduler.ScheduledJob
-	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		apiError := NewBadRequestError("Invalid request body", err)
-		HandleError(w, apiError)
+	if err := c.ShouldBindJSON(&job); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid request body",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// 验证必需字段
+	// Validate required fields
 	if err := h.validateScheduledJob(&job); err != nil {
-		apiError := NewBadRequestError("Job validation failed", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Job validation failed",
+			"details": err.Error(),
+		})
 		return
 	}
 
 	if err := h.scheduler.AddJob(&job); err != nil {
-		apiError := NewBadRequestError("Failed to create scheduled job", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Failed to create scheduled job",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	response.WriteJSONResponse(w, http.StatusCreated, map[string]interface{}{
+	c.JSON(http.StatusCreated, gin.H{
 		"job_id":    job.ID,
 		"status":    "created",
 		"message":   "Scheduled job created successfully",
@@ -102,7 +118,7 @@ func (h *HandlerService) CreateScheduledJob(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// validateScheduledJob 验证定时任务参数
+// validateScheduledJob validates scheduled job parameters
 func (h *HandlerService) validateScheduledJob(job *scheduler.ScheduledJob) error {
 	if err := ValidateRequired(job.Name, "name"); err != nil {
 		return err
@@ -120,63 +136,79 @@ func (h *HandlerService) validateScheduledJob(job *scheduler.ScheduledJob) error
 }
 
 // UpdateScheduledJob updates an existing scheduled job
-// @Summary 更新定时任务
-// @Description 更新指定ID的定时任务配置
-// @Tags Scheduler
+// @Summary Update scheduled job
+// @Description Update scheduled job configuration for specified ID
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
-// @Param id path string true "任务ID"
-// @Param job body models.JobRequest true "定时任务更新参数"
+// @Param id path string true "Job ID"
+// @Param job body models.JobRequest true "Scheduled job update parameters"
 // @Success 200 {object} models.MessageResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/jobs/{id} [put]
-func (h *HandlerService) UpdateScheduledJob(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) UpdateScheduledJob(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
-	jobID, err := response.ParseStringParam(r, "id")
-	if err != nil {
-		apiError := NewBadRequestError("Invalid job ID", err)
-		HandleError(w, apiError)
+	jobID := c.Param("id")
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid job ID",
+		})
 		return
 	}
 
 	var job scheduler.ScheduledJob
-	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		apiError := NewBadRequestError("Invalid request body", err)
-		HandleError(w, apiError)
+	if err := c.ShouldBindJSON(&job); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid request body",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// 设置任务ID
+	// Set job ID
 	job.ID = jobID
 
-	// 验证必需字段
+	// Validate required fields
 	if err := h.validateScheduledJob(&job); err != nil {
-		apiError := NewBadRequestError("Job validation failed", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Job validation failed",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	// 先删除旧任务，再添加新任务
+	// Remove old job first, then add new job
 	if err := h.scheduler.RemoveJob(jobID); err != nil {
-		apiError := NewNotFoundError("Job not found", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   true,
+			"message": "Job not found",
+			"details": err.Error(),
+		})
 		return
 	}
 
 	if err := h.scheduler.AddJob(&job); err != nil {
-		apiError := NewInternalServerError("Failed to update scheduled job", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   true,
+			"message": "Failed to update scheduled job",
+			"details": err.Error(),
+		})
 		return
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"job_id":    jobID,
 		"status":    "updated",
 		"message":   "Scheduled job updated successfully",
@@ -188,76 +220,88 @@ func (h *HandlerService) UpdateScheduledJob(w http.ResponseWriter, r *http.Reque
 }
 
 // GetScheduledJob returns a specific scheduled job
-// @Summary 获取指定定时任务
-// @Description 根据任务ID返回定时任务的详细信息
-// @Tags Scheduler
+// @Summary Get specific scheduled job
+// @Description Returns detailed information of scheduled job by job ID
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
-// @Param id path string true "任务ID"
+// @Param id path string true "Job ID"
 // @Success 200 {object} models.JobResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/jobs/{id} [get]
-func (h *HandlerService) GetScheduledJob(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetScheduledJob(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
-	jobID, err := response.ParseStringParam(r, "id")
-	if err != nil {
-		apiError := NewBadRequestError("Invalid job ID", err)
-		HandleError(w, apiError)
+	jobID := c.Param("id")
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid job ID",
+		})
 		return
 	}
 
 	jobs := h.scheduler.GetJobs()
 	for _, job := range jobs {
 		if job.ID == jobID {
-			response.WriteJSONResponse(w, http.StatusOK, job)
+			c.JSON(http.StatusOK, job)
 			return
 		}
 	}
 
-	apiError := NewNotFoundError("Job not found", nil)
-	HandleError(w, apiError)
+	c.JSON(http.StatusNotFound, gin.H{
+		"error":   true,
+		"message": "Job not found",
+	})
 }
 
 // DeleteScheduledJob removes a scheduled job
-// @Summary 删除定时任务
-// @Description 删除指定的定时任务
-// @Tags Scheduler
+// @Summary Delete scheduled job
+// @Description Delete specified scheduled job
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
-// @Param id path string true "任务ID"
+// @Param id path string true "Job ID"
 // @Success 200 {object} models.MessageResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/jobs/{id} [delete]
-func (h *HandlerService) DeleteScheduledJob(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) DeleteScheduledJob(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
-	jobID, err := response.ParseStringParam(r, "id")
-	if err != nil {
-		apiError := NewBadRequestError("Invalid job ID", err)
-		HandleError(w, apiError)
+	jobID := c.Param("id")
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid job ID",
+		})
 		return
 	}
 
 	if err := h.scheduler.RemoveJob(jobID); err != nil {
-		apiError := NewNotFoundError("Job not found", err)
-		HandleError(w, apiError)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   true,
+			"message": "Job not found",
+		})
 		return
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"job_id":    jobID,
 		"status":    "deleted",
 		"message":   "Scheduled job deleted successfully",
@@ -266,32 +310,36 @@ func (h *HandlerService) DeleteScheduledJob(w http.ResponseWriter, r *http.Reque
 }
 
 // TriggerScheduledJob manually triggers a scheduled job
-// @Summary 手动触发定时任务
-// @Description 立即执行指定的定时任务，不等待下次调度时间
-// @Tags Scheduler
+// @Summary Manually trigger scheduled job
+// @Description Immediately execute specified scheduled job without waiting for next scheduled time
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
-// @Param id path string true "任务ID"
+// @Param id path string true "Job ID"
 // @Success 200 {object} models.MessageResponse
 // @Failure 400 {object} models.ErrorResponse
 // @Failure 404 {object} models.ErrorResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/jobs/{id}/trigger [post]
-func (h *HandlerService) TriggerScheduledJob(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) TriggerScheduledJob(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
-	jobID, err := response.ParseStringParam(r, "id")
-	if err != nil {
-		apiError := NewBadRequestError("Invalid job ID", err)
-		HandleError(w, apiError)
+	jobID := c.Param("id")
+	if jobID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   true,
+			"message": "Invalid job ID",
+		})
 		return
 	}
 
-	// 查找任务
+	// Find job
 	jobs := h.scheduler.GetJobs()
 	var targetJob *scheduler.ScheduledJob
 	for _, job := range jobs {
@@ -302,16 +350,20 @@ func (h *HandlerService) TriggerScheduledJob(w http.ResponseWriter, r *http.Requ
 	}
 
 	if targetJob == nil {
-		apiError := NewNotFoundError("Job not found", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusNotFound, gin.H{
+			"error":   true,
+			"message": "Job not found",
+		})
 		return
 	}
 
-	// 手动触发任务（暂不支持直接触发，此功能需要scheduler扩展）
-	// TODO: 实现scheduler的手动触发功能
-	slog.Info("Manual job trigger requested", "job_id", jobID, "job_name", targetJob.Name)
+	// Manual job trigger (direct trigger not supported yet, this feature needs scheduler extension)
+	// TODO: Implement manual trigger functionality for scheduler
+	logger.Info("Manual job trigger requested",
+		zap.String("job_id", jobID),
+		zap.String("job_name", targetJob.Name))
 
-	response.WriteJSONResponse(w, http.StatusOK, map[string]interface{}{
+	c.JSON(http.StatusOK, gin.H{
 		"job_id":    jobID,
 		"status":    "triggered",
 		"message":   "Scheduled job triggered successfully",
@@ -322,25 +374,27 @@ func (h *HandlerService) TriggerScheduledJob(w http.ResponseWriter, r *http.Requ
 }
 
 // GetSchedulerMetrics returns scheduler performance metrics
-// @Summary 获取调度器性能指标
-// @Description 返回调度器的性能指标信息，包括任务执行统计、成功率等
-// @Tags Scheduler
+// @Summary Get scheduler performance metrics
+// @Description Returns performance metrics information of scheduler, including task execution statistics, success rate, etc.
+// @Tags Schedule Management
 // @Accept json
 // @Produce json
 // @Success 200 {object} models.SchedulerMetricsResponse
 // @Failure 503 {object} models.ErrorResponse
 // @Router /scheduler/metrics [get]
-func (h *HandlerService) GetSchedulerMetrics(w http.ResponseWriter, r *http.Request) {
+func (h *HandlerService) GetSchedulerMetrics(c *gin.Context) {
 	if !h.IsSchedulerAvailable() {
-		apiError := NewServiceUnavailableError("Scheduler not available", nil)
-		HandleError(w, apiError)
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"error":   true,
+			"message": "Scheduler not available",
+		})
 		return
 	}
 
 	status := h.scheduler.GetStatus()
 	jobs := h.scheduler.GetJobs()
 
-	metrics := map[string]interface{}{
+	metrics := gin.H{
 		"scheduler_status": status,
 		"total_jobs":       len(jobs),
 		"active_jobs":      h.countActiveJobs(jobs),
@@ -349,14 +403,14 @@ func (h *HandlerService) GetSchedulerMetrics(w http.ResponseWriter, r *http.Requ
 		"uptime":           h.getSchedulerUptime(),
 	}
 
-	response.WriteJSONResponse(w, http.StatusOK, metrics)
+	c.JSON(http.StatusOK, metrics)
 }
 
-// countActiveJobs 统计活跃任务数量
+// countActiveJobs counts number of active jobs
 func (h *HandlerService) countActiveJobs(jobs []*scheduler.ScheduledJob) int {
 	count := 0
 	for _, job := range jobs {
-		// 根据状态判断是否活跃，而不是使用Enabled字段
+		// Determine if active based on status, not using Enabled field
 		if job.Status == "active" || job.Status == "running" {
 			count++
 		}
@@ -364,11 +418,11 @@ func (h *HandlerService) countActiveJobs(jobs []*scheduler.ScheduledJob) int {
 	return count
 }
 
-// countInactiveJobs 统计非活跃任务数量
+// countInactiveJobs counts number of inactive jobs
 func (h *HandlerService) countInactiveJobs(jobs []*scheduler.ScheduledJob) int {
 	count := 0
 	for _, job := range jobs {
-		// 根据状态判断是否非活跃
+		// Determine if inactive based on status
 		if job.Status == "inactive" || job.Status == "disabled" {
 			count++
 		}
@@ -376,9 +430,9 @@ func (h *HandlerService) countInactiveJobs(jobs []*scheduler.ScheduledJob) int {
 	return count
 }
 
-// getSchedulerUptime 获取调度器运行时间
+// getSchedulerUptime gets scheduler uptime
 func (h *HandlerService) getSchedulerUptime() string {
-	// 这里应该从scheduler获取实际的启动时间
-	// 简化处理，返回占位符
+	// Should get actual startup time from scheduler
+	// Simplified handling, return placeholder
 	return "calculating..."
 }

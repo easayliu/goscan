@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
-	"log"
+	"goscan/pkg/logger"
 	"sort"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // billServiceImpl 实现 BillService 接口
@@ -45,7 +47,9 @@ func (s *billServiceImpl) CreateBillTable(ctx context.Context) error {
 	}
 
 	if exists {
-		log.Printf("[火山云账单表] 表 %s 已存在，跳过创建", actualTableName)
+		logger.Info("Volcengine bill table already exists, skipping creation",
+			zap.String("provider", "volcengine"),
+			zap.String("table_name", actualTableName))
 		return nil
 	}
 
@@ -53,10 +57,14 @@ func (s *billServiceImpl) CreateBillTable(ctx context.Context) error {
 
 	// 使用自动表名解析机制创建表
 	if resolver.IsClusterEnabled() {
-		log.Printf("[火山云账单表] 在集群模式下创建分布式表结构，基础表名: %s", s.tableName)
+		logger.Info("Volcengine bill table creating distributed table structure in cluster mode",
+			zap.String("provider", "volcengine"),
+			zap.String("table_name", s.tableName))
 		return s.chClient.CreateDistributedTableWithResolver(ctx, s.tableName, schema)
 	} else {
-		log.Printf("[火山云账单表] 在单机模式下创建表: %s", actualTableName)
+		logger.Info("Volcengine bill table creating table in standalone mode",
+			zap.String("provider", "volcengine"),
+			zap.String("table_name", actualTableName))
 		return s.chClient.CreateTable(ctx, s.tableName, schema)
 	}
 }
@@ -194,16 +202,16 @@ func (s *billServiceImpl) getBillTableSchema() string {
 		-- 系统字段
 		created_at DateTime64(3) DEFAULT now(),
 		updated_at DateTime64(3) DEFAULT now()
-	) ENGINE = ReplacingMergeTree()
-	ORDER BY (BillPeriod, ExpenseDate, BillDetailId, InstanceNo, ExpenseBeginTime, Product, Element)  
-	PARTITION BY toYYYYMM(toDate(ExpenseDate))`
+	) ENGINE = ReplacingMergeTree
+	PARTITION BY toYYYYMM(toDate(ExpenseDate))
+	ORDER BY (BillPeriod, ExpenseDate, InstanceNo, ExpenseBeginTime, Product, ElementCode, PayableAmount)
+	SETTINGS index_granularity = 8192`
 }
 
 // SyncBillData 同步账单数据
 func (s *billServiceImpl) SyncBillData(ctx context.Context, req *ListBillDetailRequest) (*SyncResult, error) {
 	return s.syncBillDataInternal(ctx, req, false, "")
 }
-
 
 // syncBillDataInternal 内部同步账单数据实现
 func (s *billServiceImpl) syncBillDataInternal(ctx context.Context, req *ListBillDetailRequest, isDistributed bool, tableName string) (*SyncResult, error) {
@@ -226,7 +234,7 @@ func (s *billServiceImpl) syncBillDataInternal(ctx context.Context, req *ListBil
 		result.Error = err
 		result.EndTime = time.Now()
 		result.Duration = result.EndTime.Sub(result.StartTime)
-		return result, WrapError(err, "分页处理失败")
+		return result, WrapError(err, "pagination processing failed")
 	}
 
 	// 填充结果
@@ -242,11 +250,17 @@ func (s *billServiceImpl) syncBillDataInternal(ctx context.Context, req *ListBil
 
 // syncAllBillDataInternal 内部同步所有账单数据实现
 func (s *billServiceImpl) syncAllBillDataInternal(ctx context.Context, billPeriod, tableName string, isDistributed bool) (*SyncResult, error) {
-	log.Printf("开始同步账单数据，账期: %s, 表名: %s, 分布式: %v", billPeriod, tableName, isDistributed)
+	logger.Info("Volcengine starting bill data synchronization",
+		zap.String("provider", "volcengine"),
+		zap.String("bill_period", billPeriod),
+		zap.String("table_name", tableName),
+		zap.Bool("is_distributed", isDistributed))
 
 	req := &ListBillDetailRequest{
 		BillPeriod:  billPeriod,
 		GroupPeriod: 1, // 默认按天分组
+		GroupTerm:   1, // 分组条件
+		IgnoreZero:  1, // 忽略零元账单
 	}
 
 	return s.syncBillDataInternal(ctx, req, isDistributed, tableName)
@@ -260,9 +274,9 @@ func (s *billServiceImpl) performDataPreCheck(ctx context.Context, billPeriod, t
 	}
 
 	// 检查数据库中是否已有数据
-	exists, existingCount, err := s.checkMonthlyDataExists(ctx, tableName, billPeriod)
+	exists, existingCount, err := s.CheckMonthlyDataExists(ctx, tableName, billPeriod)
 	if err != nil {
-		return result, WrapError(err, "检查现有数据失败")
+		return result, WrapError(err, "failed to check existing data")
 	}
 
 	if exists && existingCount > 0 {
@@ -273,9 +287,9 @@ func (s *billServiceImpl) performDataPreCheck(ctx context.Context, billPeriod, t
 	}
 
 	// 获取 API 数据数量
-	apiCount, err := s.getAPIDataCount(ctx, billPeriod)
+	apiCount, err := s.GetAPIDataCount(ctx, billPeriod)
 	if err != nil {
-		return result, WrapError(err, "获取API数据数量失败")
+		return result, WrapError(err, "failed to get API data count")
 	}
 
 	result.APICount = apiCount
@@ -289,20 +303,20 @@ func (s *billServiceImpl) performDataPreCheck(ctx context.Context, billPeriod, t
 	return result, nil
 }
 
-// checkMonthlyDataExists 检查月度数据是否存在
-func (s *billServiceImpl) checkMonthlyDataExists(ctx context.Context, tableName, billPeriod string) (bool, int64, error) {
+// CheckMonthlyDataExists 检查月度数据是否存在
+func (s *billServiceImpl) CheckMonthlyDataExists(ctx context.Context, tableName, billPeriod string) (bool, int64, error) {
 	resolver := s.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(tableName)
 
 	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE BillPeriod = ?", actualTableName)
-	var count int64
-	
+	var count uint64 // 使用uint64来接收ClickHouse的UInt64
+
 	rows, err := s.chClient.Query(ctx, query, billPeriod)
 	if err != nil {
 		return false, 0, err
 	}
 	defer rows.Close()
-	
+
 	if rows.Next() {
 		err = rows.Scan(&count)
 	}
@@ -310,15 +324,17 @@ func (s *billServiceImpl) checkMonthlyDataExists(ctx context.Context, tableName,
 		return false, 0, err
 	}
 
-	return count > 0, count, nil
+	return count > 0, int64(count), nil // 转换为int64返回
 }
 
-// getAPIDataCount 获取API数据数量
-func (s *billServiceImpl) getAPIDataCount(ctx context.Context, billPeriod string) (int32, error) {
+// GetAPIDataCount 获取API数据数量
+func (s *billServiceImpl) GetAPIDataCount(ctx context.Context, billPeriod string) (int32, error) {
 	req := &ListBillDetailRequest{
 		BillPeriod:    billPeriod,
 		Limit:         1,
 		NeedRecordNum: 1,
+		GroupTerm:     1, // 分组条件
+		IgnoreZero:    1, // 忽略零元账单
 	}
 
 	resp, err := s.volcClient.ListBillDetail(ctx, req)
@@ -343,7 +359,12 @@ func (s *billServiceImpl) createPaginator(processor DataProcessor) Paginator {
 	// 设置进度回调
 	paginator.SetProgressCallback(func(current, total int, duration time.Duration) {
 		percentage := float64(current) / float64(total) * 100
-		log.Printf("[进度] %d/%d (%.1f%%), 耗时: %v", current, total, percentage, duration)
+		logger.Debug("Volcengine sync progress",
+			zap.String("provider", "volcengine"),
+			zap.Int("current", current),
+			zap.Int("total", total),
+			zap.Float64("percentage", percentage),
+			zap.Duration("duration", duration))
 	})
 
 	return paginator
@@ -376,14 +397,23 @@ func (s *billServiceImpl) getRetryDelay() time.Duration {
 // logSyncResult 记录同步结果
 func (s *billServiceImpl) logSyncResult(result *SyncResult, errors []error) {
 	if len(errors) > 0 {
-		log.Printf("处理过程中出现 %d 个错误:", len(errors))
+		logger.Warn("Volcengine errors occurred during processing",
+			zap.String("provider", "volcengine"),
+			zap.Int("error_count", len(errors)))
 		for i, err := range errors {
-			log.Printf("  错误 %d: %v", i+1, err)
+			logger.Warn("Volcengine processing error details",
+				zap.String("provider", "volcengine"),
+				zap.Int("error_index", i+1),
+				zap.Error(err))
 		}
 	}
 
-	log.Printf("同步完成: 总记录数=%d, 已处理=%d, 耗时=%v, 错误=%d",
-		result.TotalRecords, result.InsertedRecords, result.Duration, len(errors))
+	logger.Info("Volcengine synchronization completed",
+		zap.String("provider", "volcengine"),
+		zap.Int("total_records", result.TotalRecords),
+		zap.Int("inserted_records", result.InsertedRecords),
+		zap.Duration("duration", result.Duration),
+		zap.Int("error_count", len(errors)))
 }
 
 // GetAvailableBillPeriods 获取可用的账期列表
@@ -398,12 +428,12 @@ func (s *billServiceImpl) GetAvailableBillPeriods(ctx context.Context, maxMonths
 	for i := 0; i < maxMonths; i++ {
 		period := now.AddDate(0, -i-1, 0) // 从上个月开始
 		periodStr := period.Format("2006-01")
-		
+
 		// 验证账期格式
 		if err := s.volcClient.ValidatePeriod(periodStr); err != nil {
 			continue
 		}
-		
+
 		periods = append(periods, periodStr)
 	}
 
@@ -418,22 +448,27 @@ func (s *billServiceImpl) GetAvailableBillPeriods(ctx context.Context, maxMonths
 // BatchSync 批量同步多个账期数据
 func (s *billServiceImpl) BatchSync(ctx context.Context, billPeriods []string, tableName string, isDistributed bool) ([]*SyncResult, error) {
 	results := make([]*SyncResult, 0, len(billPeriods))
-	
+
 	for _, period := range billPeriods {
-		log.Printf("开始同步账期: %s", period)
-		
+		logger.Info("Volcengine starting period synchronization",
+			zap.String("provider", "volcengine"),
+			zap.String("period", period))
+
 		result, err := s.SmartSyncAllData(ctx, period, tableName, isDistributed)
 		if err != nil {
-			log.Printf("同步账期 %s 失败: %v", period, err)
+			logger.Warn("Volcengine period synchronization failed",
+				zap.String("provider", "volcengine"),
+				zap.String("period", period),
+				zap.Error(err))
 			result = &SyncResult{
 				StartTime: time.Now(),
 				EndTime:   time.Now(),
 				Error:     err,
 			}
 		}
-		
+
 		results = append(results, result)
-		
+
 		// 在批次之间添加短暂延迟，避免过于频繁的API调用
 		select {
 		case <-time.After(1 * time.Second):
@@ -441,6 +476,6 @@ func (s *billServiceImpl) BatchSync(ctx context.Context, billPeriods []string, t
 			return results, ctx.Err()
 		}
 	}
-	
+
 	return results, nil
 }

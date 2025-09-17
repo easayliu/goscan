@@ -35,6 +35,13 @@ type HealthResponse struct {
 	Version   string    `json:"version" example:"1.0.0"`
 }
 
+// HealthCheckResponse represents the health check response with detailed checks
+type HealthCheckResponse struct {
+	Status    string                 `json:"status" example:"healthy"`
+	Timestamp time.Time              `json:"timestamp" example:"2025-09-11T08:13:24Z"`
+	Checks    map[string]interface{} `json:"checks"`
+}
+
 // TaskRequest represents a task creation request
 type TaskRequest struct {
 	Name        string                 `json:"name" example:"volcengine_sync_task" validate:"required"`
@@ -42,7 +49,7 @@ type TaskRequest struct {
 	Provider    string                 `json:"provider" example:"volcengine" validate:"required"`
 	Parameters  map[string]interface{} `json:"parameters"`
 	Schedule    string                 `json:"schedule,omitempty" example:"0 2 * * *"`
-	Description string                 `json:"description,omitempty" example:"同步火山云账单数据"`
+	Description string                 `json:"description,omitempty" example:"Sync VolcEngine billing data"`
 }
 
 // TaskResponse represents a task response
@@ -54,7 +61,7 @@ type TaskResponse struct {
 	Status      string                 `json:"status" example:"running"`
 	Parameters  map[string]interface{} `json:"parameters"`
 	Schedule    string                 `json:"schedule,omitempty" example:"0 2 * * *"`
-	Description string                 `json:"description,omitempty" example:"同步火山云账单数据"`
+	Description string                 `json:"description,omitempty" example:"Sync VolcEngine billing data"`
 	CreatedAt   time.Time              `json:"created_at" example:"2025-09-11T08:13:24Z"`
 	UpdatedAt   time.Time              `json:"updated_at" example:"2025-09-11T08:13:24Z"`
 	StartedAt   *time.Time             `json:"started_at,omitempty" example:"2025-09-11T08:13:24Z"`
@@ -80,7 +87,7 @@ type SyncStatusResponse struct {
 	Provider    string     `json:"provider" example:"volcengine"`
 	Status      string     `json:"status" example:"running"`
 	Progress    float64    `json:"progress" example:"75.5"`
-	Message     string     `json:"message,omitempty" example:"同步进行中..."`
+	Message     string     `json:"message,omitempty" example:"Syncing in progress..."`
 	StartedAt   *time.Time `json:"started_at,omitempty" example:"2025-09-11T08:13:24Z"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	RecordCount int        `json:"record_count" example:"1500"`
@@ -104,7 +111,7 @@ type SyncHistoryEntry struct {
 	Duration    int64      `json:"duration" example:"125"`
 	StartedAt   time.Time  `json:"started_at" example:"2025-09-11T08:13:24Z"`
 	CompletedAt *time.Time `json:"completed_at,omitempty" example:"2025-09-11T08:15:29Z"`
-	Message     string     `json:"message,omitempty" example:"同步完成"`
+	Message     string     `json:"message,omitempty" example:"Sync completed"`
 }
 
 // JobRequest represents a scheduled job creation request
@@ -114,7 +121,7 @@ type JobRequest struct {
 	Provider    string                 `json:"provider" example:"volcengine" validate:"required"`
 	TaskType    string                 `json:"task_type" example:"sync" validate:"required"`
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
-	Description string                 `json:"description,omitempty" example:"每日凌晨2点同步火山云账单"`
+	Description string                 `json:"description,omitempty" example:"Daily VolcEngine billing sync at 2 AM"`
 	Enabled     bool                   `json:"enabled" example:"true"`
 }
 
@@ -126,7 +133,7 @@ type JobResponse struct {
 	Provider    string                 `json:"provider" example:"volcengine"`
 	TaskType    string                 `json:"task_type" example:"sync"`
 	Parameters  map[string]interface{} `json:"parameters,omitempty"`
-	Description string                 `json:"description,omitempty" example:"每日凌晨2点同步火山云账单"`
+	Description string                 `json:"description,omitempty" example:"Daily VolcEngine billing sync at 2 AM"`
 	Enabled     bool                   `json:"enabled" example:"true"`
 	NextRun     *time.Time             `json:"next_run,omitempty" example:"2025-09-12T02:00:00Z"`
 	LastRun     *time.Time             `json:"last_run,omitempty" example:"2025-09-11T02:00:00Z"`
@@ -138,6 +145,16 @@ type JobResponse struct {
 type JobListResponse struct {
 	Jobs  []JobResponse `json:"jobs"`
 	Count int           `json:"count" example:"3"`
+}
+
+// SchedulerMetricsResponse represents scheduler metrics response
+type SchedulerMetricsResponse struct {
+	SchedulerStatus *SchedulerStatus `json:"scheduler_status"`
+	TotalJobs       int              `json:"total_jobs" example:"10"`
+	ActiveJobs      int              `json:"active_jobs" example:"8"`
+	InactiveJobs    int              `json:"inactive_jobs" example:"2"`
+	Timestamp       time.Time        `json:"timestamp" example:"2025-09-11T08:13:24Z"`
+	Uptime          string           `json:"uptime" example:"3h45m"`
 }
 
 // ConfigResponse represents configuration response (sensitive data masked)
@@ -186,65 +203,65 @@ type AppConfig struct {
 // ErrorResponse represents an error response
 type ErrorResponse struct {
 	Error   bool   `json:"error" example:"true"`
-	Message string `json:"message" example:"参数验证失败"`
+	Message string `json:"message" example:"Parameter validation failed"`
 	Code    int    `json:"code" example:"400"`
-	Details string `json:"details,omitempty" example:"provider字段不能为空"`
+	Details string `json:"details,omitempty" example:"Provider field cannot be empty"`
 }
 
 // MessageResponse represents a simple message response
 type MessageResponse struct {
-	Message string `json:"message" example:"操作成功"`
+	Message string `json:"message" example:"Operation successful"`
 	Success bool   `json:"success" example:"true"`
 }
 
-// WeChatNotificationRequest 企业微信通知触发请求参数
-// @Description 企业微信费用报告通知触发请求，支持指定分析日期、云服务商和告警阈值
+// WeChatNotificationRequest represents WeChat Work notification trigger request parameters
+// @Description WeChat Work cost report notification trigger request, supports specifying analysis date, cloud providers and alert threshold
 type WeChatNotificationRequest struct {
-	Date           string   `json:"date,omitempty" example:"2025-09-12" validate:"omitempty,len=10"`                                                     // 分析日期，格式：YYYY-MM-DD，默认为当前日期。示例：2025-09-12
-	Providers      []string `json:"providers,omitempty" example:"volcengine,alicloud" validate:"omitempty,dive,oneof=volcengine alicloud aws azure gcp"` // 要分析的云服务商列表，支持：volcengine（火山云）、alicloud（阿里云）、aws、azure、gcp，默认为 ["volcengine", "alicloud"]
-	AlertThreshold float64  `json:"alert_threshold,omitempty" example:"10.0" validate:"omitempty,min=0,max=100"`                                         // 费用变化告警阈值（百分比），当费用变化超过此值时触发告警，默认使用系统配置值，范围：0-100
-	ForceNotify    bool     `json:"force_notify,omitempty" example:"false"`                                                                              // 强制发送通知，设为true时即使未达到告警阈值也会发送通知，默认为false
-	TestMode       bool     `json:"test_mode,omitempty" example:"false"`                                                                                 // 测试模式，设为true时仅测试企业微信连接而不发送实际的费用报告，默认为false
+	Date           string   `json:"date,omitempty" example:"2025-09-12" validate:"omitempty,len=10"`                                                     // Analysis date, format: YYYY-MM-DD, defaults to current date. Example: 2025-09-12
+	Providers      []string `json:"providers,omitempty" example:"volcengine,alicloud" validate:"omitempty,dive,oneof=volcengine alicloud aws azure gcp"` // List of cloud providers to analyze, supports: volcengine (VolcEngine), alicloud (Alibaba Cloud), aws, azure, gcp, defaults to ["volcengine", "alicloud"]
+	AlertThreshold float64  `json:"alert_threshold,omitempty" example:"10.0" validate:"omitempty,min=0,max=100"`                                         // Cost change alert threshold (percentage), triggers alert when cost change exceeds this value, defaults to system configuration value, range: 0-100
+	ForceNotify    bool     `json:"force_notify,omitempty" example:"false"`                                                                              // Force send notification, when set to true will send notification even if alert threshold is not reached, defaults to false
+	TestMode       bool     `json:"test_mode,omitempty" example:"false"`                                                                                 // Test mode, when set to true only tests WeChat Work connection without sending actual cost report, defaults to false
 }
 
-// WeChatTestRequest 企业微信Webhook连接测试请求参数
-// @Description 企业微信Webhook连接测试请求，用于验证Webhook URL的可用性
+// WeChatTestRequest represents WeChat Work Webhook connection test request parameters
+// @Description WeChat Work Webhook connection test request, used to verify Webhook URL availability
 type WeChatTestRequest struct {
-	CustomMessage string `json:"custom_message,omitempty" example:"这是一条来自费用监控系统的测试消息" validate:"omitempty,max=500"` // 自定义测试消息内容，最大长度500字符，默认使用系统预设的测试消息
-	Timeout       int    `json:"timeout,omitempty" example:"10" validate:"omitempty,min=1,max=60"`                  // 连接超时时间（秒），范围1-60秒，默认为10秒
+	CustomMessage string `json:"custom_message,omitempty" example:"This is a test message from cost monitoring system" validate:"omitempty,max=500"` // Custom test message content, maximum length 500 characters, defaults to system preset test message
+	Timeout       int    `json:"timeout,omitempty" example:"10" validate:"omitempty,min=1,max=60"`                                                   // Connection timeout (seconds), range 1-60 seconds, defaults to 10 seconds
 }
 
-// WeChatNotificationStatusQueryParams 企业微信通知状态查询参数
-// @Description 企业微信通知状态查询的可选参数，用于筛选和控制返回的数据
+// WeChatNotificationStatusQueryParams represents WeChat Work notification status query parameters
+// @Description Optional parameters for WeChat Work notification status query, used to filter and control returned data
 type WeChatNotificationStatusQueryParams struct {
-	HistoryLimit  int  `json:"history_limit,omitempty" example:"10" validate:"omitempty,min=1,max=50"` // 返回的历史记录数量限制，范围1-50，默认为10条
-	IncludeConfig bool `json:"include_config,omitempty" example:"true"`                                // 是否包含详细的配置信息，默认为true
+	HistoryLimit  int  `json:"history_limit,omitempty" example:"10" validate:"omitempty,min=1,max=50"` // Limit on number of history records returned, range 1-50, defaults to 10 entries
+	IncludeConfig bool `json:"include_config,omitempty" example:"true"`                                // Whether to include detailed configuration information, defaults to true
 }
 
 // WeChatNotificationStatusResponse represents WeChat notification status response
 type WeChatNotificationStatusResponse struct {
-	Enabled           bool                             `json:"enabled" example:"true"`                        // 微信通知功能是否启用
-	WebhookConfigured bool                             `json:"webhook_configured" example:"true"`             // Webhook是否已配置
-	WebhookURL        string                           `json:"webhook_url" example:"https://qyapi***webhook"` // 脱敏后的Webhook URL
-	AlertThreshold    float64                          `json:"alert_threshold" example:"10.0"`                // 告警阈值
-	MentionUsers      []string                         `json:"mention_users" example:"user1,user2"`           // 提及用户列表
-	MaxRetries        int                              `json:"max_retries" example:"3"`                       // 最大重试次数
-	RetryDelay        int                              `json:"retry_delay" example:"5"`                       // 重试延迟时间（秒）
-	ExecutorStatus    string                           `json:"executor_status" example:"ready"`               // 执行器状态
-	ExecutorEnabled   bool                             `json:"executor_enabled" example:"true"`               // 执行器是否启用
-	RecentHistory     []WeChatNotificationHistoryEntry `json:"recent_history"`                                // 最近通知历史
-	HistoryCount      int                              `json:"history_count" example:"5"`                     // 历史记录数量
-	Timestamp         time.Time                        `json:"timestamp" example:"2025-09-12T08:13:24Z"`      // 状态查询时间戳
+	Enabled           bool                             `json:"enabled" example:"true"`                        // Whether WeChat notification feature is enabled
+	WebhookConfigured bool                             `json:"webhook_configured" example:"true"`             // Whether Webhook is configured
+	WebhookURL        string                           `json:"webhook_url" example:"https://qyapi***webhook"` // Masked Webhook URL
+	AlertThreshold    float64                          `json:"alert_threshold" example:"10.0"`                // Alert threshold
+	MentionUsers      []string                         `json:"mention_users" example:"user1,user2"`           // List of users to mention
+	MaxRetries        int                              `json:"max_retries" example:"3"`                       // Maximum retry attempts
+	RetryDelay        int                              `json:"retry_delay" example:"5"`                       // Retry delay time (seconds)
+	ExecutorStatus    string                           `json:"executor_status" example:"ready"`               // Executor status
+	ExecutorEnabled   bool                             `json:"executor_enabled" example:"true"`               // Whether executor is enabled
+	RecentHistory     []WeChatNotificationHistoryEntry `json:"recent_history"`                                // Recent notification history
+	HistoryCount      int                              `json:"history_count" example:"5"`                     // Number of history records
+	Timestamp         time.Time                        `json:"timestamp" example:"2025-09-12T08:13:24Z"`      // Status query timestamp
 }
 
 // WeChatNotificationHistoryEntry represents a WeChat notification history entry
 type WeChatNotificationHistoryEntry struct {
-	ID               string    `json:"id" example:"task_123456"`                   // 任务ID
-	Status           string    `json:"status" example:"completed"`                 // 执行状态
-	StartTime        time.Time `json:"start_time" example:"2025-09-12T08:13:24Z"`  // 开始时间
-	EndTime          time.Time `json:"end_time" example:"2025-09-12T08:15:30Z"`    // 结束时间
-	Duration         string    `json:"duration" example:"2m6s"`                    // 执行耗时
-	Message          string    `json:"message,omitempty" example:"通知发送成功"`         // 执行消息
-	RecordsProcessed int       `json:"records_processed,omitempty" example:"1500"` // 处理记录数
-	Error            string    `json:"error,omitempty" example:"连接超时"`             // 错误信息
+	ID               string    `json:"id" example:"task_123456"`                                   // Task ID
+	Status           string    `json:"status" example:"completed"`                                 // Execution status
+	StartTime        time.Time `json:"start_time" example:"2025-09-12T08:13:24Z"`                  // Start time
+	EndTime          time.Time `json:"end_time" example:"2025-09-12T08:15:30Z"`                    // End time
+	Duration         string    `json:"duration" example:"2m6s"`                                    // Execution duration
+	Message          string    `json:"message,omitempty" example:"Notification sent successfully"` // Execution message
+	RecordsProcessed int       `json:"records_processed,omitempty" example:"1500"`                 // Number of records processed
+	Error            string    `json:"error,omitempty" example:"Connection timeout"`               // Error message
 }

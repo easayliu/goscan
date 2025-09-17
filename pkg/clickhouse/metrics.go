@@ -4,18 +4,20 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/config"
-	"log"
+	"goscan/pkg/logger"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
-// metricsCollector 指标收集器
+// metricsCollector metrics collector
 type metricsCollector struct {
 	queryExecutor QueryExecutor
 	config        *config.ClickHouseConfig
 }
 
-// NewMetricsCollector 创建指标收集器
+// NewMetricsCollector creates metrics collector
 func NewMetricsCollector(queryExecutor QueryExecutor, config *config.ClickHouseConfig) MetricsCollector {
 	return &metricsCollector{
 		queryExecutor: queryExecutor,
@@ -23,7 +25,7 @@ func NewMetricsCollector(queryExecutor QueryExecutor, config *config.ClickHouseC
 	}
 }
 
-// GetTableSize 获取表的存储大小信息
+// GetTableSize retrieves table storage size information
 func (mc *metricsCollector) GetTableSize(ctx context.Context, tableName string) (map[string]interface{}, error) {
 	query := `
 		SELECT 
@@ -41,7 +43,7 @@ func (mc *metricsCollector) GetTableSize(ctx context.Context, tableName string) 
 	var totalRows, totalSize, compressedSize, uncompressedSize, partsCount int64
 	err := row.Scan(&totalRows, &totalSize, &compressedSize, &uncompressedSize, &partsCount)
 	if err != nil {
-		return nil, WrapTableError(tableName, fmt.Errorf("获取表大小信息失败: %w", err))
+		return nil, WrapTableError(tableName, fmt.Errorf("failed to get table size info: %w", err))
 	}
 
 	compressionRatio := float64(0)
@@ -62,11 +64,11 @@ func (mc *metricsCollector) GetTableSize(ctx context.Context, tableName string) 
 	}, nil
 }
 
-// CheckTableHealth 检查表的健康状态
+// CheckTableHealth checks table health status
 func (mc *metricsCollector) CheckTableHealth(ctx context.Context, tableName string) (map[string]interface{}, error) {
 	healthInfo := make(map[string]interface{})
 
-	// 检查表是否存在
+	// Check if table exists
 	exists, err := mc.tableExists(ctx, tableName)
 	if err != nil {
 		return nil, WrapTableError(tableName, err)
@@ -78,7 +80,7 @@ func (mc *metricsCollector) CheckTableHealth(ctx context.Context, tableName stri
 		return healthInfo, nil
 	}
 
-	// 获取表基本信息
+	// Get basic table information
 	info, err := mc.getBasicTableInfo(ctx, tableName)
 	if err != nil {
 		healthInfo["status"] = "ERROR"
@@ -90,13 +92,13 @@ func (mc *metricsCollector) CheckTableHealth(ctx context.Context, tableName stri
 	healthInfo["total_bytes"] = info["total_bytes"]
 	healthInfo["engine"] = info["engine"]
 
-	// 检查是否有损坏的部分
+	// Check for corrupted parts
 	corruptedParts, err := mc.getCorruptedPartsCount(ctx, tableName)
 	if err == nil {
 		healthInfo["corrupted_parts"] = corruptedParts
 	}
 
-	// 确定健康状态
+	// Determine health status
 	if corruptedParts > 0 {
 		healthInfo["status"] = "CORRUPTED"
 	} else if info["total_rows"].(int64) > 0 {
@@ -108,7 +110,7 @@ func (mc *metricsCollector) CheckTableHealth(ctx context.Context, tableName stri
 	return healthInfo, nil
 }
 
-// GetTablesInfo 获取所有表的基本信息
+// GetTablesInfo retrieves basic information for all tables
 func (mc *metricsCollector) GetTablesInfo(ctx context.Context) ([]map[string]interface{}, error) {
 	query := `
 		SELECT 
@@ -124,7 +126,7 @@ func (mc *metricsCollector) GetTablesInfo(ctx context.Context) ([]map[string]int
 
 	rows, err := mc.queryExecutor.Query(ctx, query, mc.config.Database)
 	if err != nil {
-		return nil, fmt.Errorf("获取表信息失败: %w", err)
+		return nil, fmt.Errorf("failed to get table info: %w", err)
 	}
 	defer rows.Close()
 
@@ -134,7 +136,7 @@ func (mc *metricsCollector) GetTablesInfo(ctx context.Context) ([]map[string]int
 		var totalRows, totalBytes int64
 
 		if err := rows.Scan(&name, &engine, &totalRows, &totalBytes, &modTime); err != nil {
-			return nil, fmt.Errorf("扫描表信息失败: %w", err)
+			return nil, fmt.Errorf("failed to scan table info: %w", err)
 		}
 
 		tableInfo := map[string]interface{}{
@@ -152,7 +154,7 @@ func (mc *metricsCollector) GetTablesInfo(ctx context.Context) ([]map[string]int
 	return tables, rows.Err()
 }
 
-// tableExists 检查表是否存在
+// tableExists checks if table exists
 func (mc *metricsCollector) tableExists(ctx context.Context, tableName string) (bool, error) {
 	query := "SELECT 1 FROM system.tables WHERE database = ? AND name = ?"
 	row := mc.queryExecutor.QueryRow(ctx, query, mc.config.Database, tableName)
@@ -160,7 +162,7 @@ func (mc *metricsCollector) tableExists(ctx context.Context, tableName string) (
 	var exists uint8
 	err := row.Scan(&exists)
 	if err != nil {
-		// sql.ErrNoRows 表示表不存在
+		// sql.ErrNoRows indicates table does not exist
 		if strings.Contains(err.Error(), "no rows") {
 			return false, nil
 		}
@@ -170,7 +172,7 @@ func (mc *metricsCollector) tableExists(ctx context.Context, tableName string) (
 	return exists == 1, nil
 }
 
-// getBasicTableInfo 获取表的基本信息
+// getBasicTableInfo retrieves basic table information
 func (mc *metricsCollector) getBasicTableInfo(ctx context.Context, tableName string) (map[string]interface{}, error) {
 	query := `
 		SELECT 
@@ -197,7 +199,7 @@ func (mc *metricsCollector) getBasicTableInfo(ctx context.Context, tableName str
 	}, nil
 }
 
-// getCorruptedPartsCount 获取损坏的分区数量
+// getCorruptedPartsCount retrieves count of corrupted partitions
 func (mc *metricsCollector) getCorruptedPartsCount(ctx context.Context, tableName string) (int64, error) {
 	corruptedQuery := `
 		SELECT count() as corrupted_parts
@@ -215,7 +217,7 @@ func (mc *metricsCollector) getCorruptedPartsCount(ctx context.Context, tableNam
 	return corruptedParts, err
 }
 
-// GetClusterMetrics 获取集群指标信息
+// GetClusterMetrics retrieves cluster metrics information
 func (mc *metricsCollector) GetClusterMetrics(ctx context.Context) (map[string]interface{}, error) {
 	if mc.config.Cluster == "" {
 		return nil, ErrClusterNotConfigured
@@ -223,20 +225,20 @@ func (mc *metricsCollector) GetClusterMetrics(ctx context.Context) (map[string]i
 
 	metrics := make(map[string]interface{})
 
-	// 获取集群节点信息
+	// Get cluster node information
 	nodesInfo, err := mc.getClusterNodesInfo(ctx)
 	if err != nil {
-		log.Printf("获取集群节点信息失败: %v", err)
+		logger.Error("Failed to get cluster node info", zap.Error(err))
 		metrics["nodes_error"] = err.Error()
 	} else {
 		metrics["nodes"] = nodesInfo
 		metrics["nodes_count"] = len(nodesInfo)
 	}
 
-	// 获取集群表统计
+	// Get cluster table statistics
 	tablesStats, err := mc.getClusterTablesStats(ctx)
 	if err != nil {
-		log.Printf("获取集群表统计失败: %v", err)
+		logger.Error("Failed to get cluster table statistics", zap.Error(err))
 		metrics["tables_error"] = err.Error()
 	} else {
 		metrics["tables_stats"] = tablesStats
@@ -245,12 +247,12 @@ func (mc *metricsCollector) GetClusterMetrics(ctx context.Context) (map[string]i
 	return metrics, nil
 }
 
-// getClusterNodesInfo 获取集群节点信息
+// getClusterNodesInfo retrieves cluster node information
 func (mc *metricsCollector) getClusterNodesInfo(ctx context.Context) ([]map[string]interface{}, error) {
 	query := "SELECT host_name, port, is_local FROM system.clusters WHERE cluster = ?"
 	rows, err := mc.queryExecutor.Query(ctx, query, mc.config.Cluster)
 	if err != nil {
-		return nil, fmt.Errorf("查询集群节点信息失败: %w", err)
+		return nil, fmt.Errorf("failed to query cluster node info: %w", err)
 	}
 	defer rows.Close()
 
@@ -261,7 +263,7 @@ func (mc *metricsCollector) getClusterNodesInfo(ctx context.Context) ([]map[stri
 		var isLocal uint8
 
 		if err := rows.Scan(&hostName, &port, &isLocal); err != nil {
-			return nil, fmt.Errorf("扫描集群节点信息失败: %w", err)
+			return nil, fmt.Errorf("failed to scan cluster node info: %w", err)
 		}
 
 		nodeInfo := map[string]interface{}{
@@ -276,7 +278,7 @@ func (mc *metricsCollector) getClusterNodesInfo(ctx context.Context) ([]map[stri
 	return nodesInfo, rows.Err()
 }
 
-// getClusterTablesStats 获取集群表统计信息
+// getClusterTablesStats retrieves cluster table statistics information
 func (mc *metricsCollector) getClusterTablesStats(ctx context.Context) (map[string]interface{}, error) {
 	query := fmt.Sprintf(`
 		SELECT 
@@ -292,7 +294,7 @@ func (mc *metricsCollector) getClusterTablesStats(ctx context.Context) (map[stri
 	var totalTables, totalRows, totalBytes int64
 	err := row.Scan(&totalTables, &totalRows, &totalBytes)
 	if err != nil {
-		return nil, fmt.Errorf("查询集群表统计失败: %w", err)
+		return nil, fmt.Errorf("failed to query cluster table statistics: %w", err)
 	}
 
 	return map[string]interface{}{
@@ -303,22 +305,22 @@ func (mc *metricsCollector) getClusterTablesStats(ctx context.Context) (map[stri
 	}, nil
 }
 
-// GetQueryMetrics 获取查询相关指标
+// GetQueryMetrics retrieves query-related metrics
 func (mc *metricsCollector) GetQueryMetrics(ctx context.Context) (map[string]interface{}, error) {
 	metrics := make(map[string]interface{})
 
-	// 获取当前正在执行的查询数量
+	// Get count of currently executing queries
 	runningQueries, err := mc.getRunningQueriesCount(ctx)
 	if err != nil {
-		log.Printf("获取运行中查询数量失败: %v", err)
+		logger.Error("Failed to get running query count", zap.Error(err))
 	} else {
 		metrics["running_queries"] = runningQueries
 	}
 
-	// 获取查询统计
+	// Get query statistics
 	queryStats, err := mc.getQueryStats(ctx)
 	if err != nil {
-		log.Printf("获取查询统计失败: %v", err)
+		logger.Error("Failed to get query statistics", zap.Error(err))
 	} else {
 		metrics["query_stats"] = queryStats
 	}
@@ -326,7 +328,7 @@ func (mc *metricsCollector) GetQueryMetrics(ctx context.Context) (map[string]int
 	return metrics, nil
 }
 
-// getRunningQueriesCount 获取正在运行的查询数量
+// getRunningQueriesCount retrieves count of running queries
 func (mc *metricsCollector) getRunningQueriesCount(ctx context.Context) (int64, error) {
 	query := "SELECT COUNT(*) FROM system.processes WHERE query != ''"
 	row := mc.queryExecutor.QueryRow(ctx, query)
@@ -336,32 +338,32 @@ func (mc *metricsCollector) getRunningQueriesCount(ctx context.Context) (int64, 
 	return count, err
 }
 
-// getQueryStats 获取查询统计信息
+// getQueryStats retrieves query statistics information
 func (mc *metricsCollector) getQueryStats(ctx context.Context) (map[string]interface{}, error) {
-	// 这里可以获取更详细的查询统计，比如最近一段时间的查询数量、平均执行时间等
-	// 由于system.query_log可能需要特殊配置，这里提供基础实现
+	// Here we can get more detailed query statistics, such as query count in recent period, average execution time, etc.
+	// Since system.query_log may require special configuration, we provide basic implementation here
 	return map[string]interface{}{
 		"status": "basic_stats_only",
-		"note":   "详细查询统计需要启用query_log",
+		"note":   "Detailed query statistics require enabling query_log",
 	}, nil
 }
 
-// GetStorageMetrics 获取存储相关指标
+// GetStorageMetrics retrieves storage-related metrics
 func (mc *metricsCollector) GetStorageMetrics(ctx context.Context) (map[string]interface{}, error) {
 	metrics := make(map[string]interface{})
 
-	// 获取磁盘使用情况
+	// Get disk usage
 	diskUsage, err := mc.getDiskUsage(ctx)
 	if err != nil {
-		log.Printf("获取磁盘使用情况失败: %v", err)
+		logger.Error("Failed to get disk usage", zap.Error(err))
 	} else {
 		metrics["disk_usage"] = diskUsage
 	}
 
-	// 获取数据库大小
+	// Get database size
 	dbSize, err := mc.getDatabaseSize(ctx)
 	if err != nil {
-		log.Printf("获取数据库大小失败: %v", err)
+		logger.Error("Failed to get database size", zap.Error(err))
 	} else {
 		metrics["database_size"] = dbSize
 	}
@@ -369,7 +371,7 @@ func (mc *metricsCollector) GetStorageMetrics(ctx context.Context) (map[string]i
 	return metrics, nil
 }
 
-// getDiskUsage 获取磁盘使用情况
+// getDiskUsage retrieves disk usage
 func (mc *metricsCollector) getDiskUsage(ctx context.Context) ([]map[string]interface{}, error) {
 	query := `
 		SELECT 
@@ -383,7 +385,7 @@ func (mc *metricsCollector) getDiskUsage(ctx context.Context) ([]map[string]inte
 
 	rows, err := mc.queryExecutor.Query(ctx, query)
 	if err != nil {
-		return nil, fmt.Errorf("查询磁盘信息失败: %w", err)
+		return nil, fmt.Errorf("failed to query disk info: %w", err)
 	}
 	defer rows.Close()
 
@@ -393,7 +395,7 @@ func (mc *metricsCollector) getDiskUsage(ctx context.Context) ([]map[string]inte
 		var freeSpace, totalSpace, usedSpace int64
 
 		if err := rows.Scan(&name, &path, &freeSpace, &totalSpace, &usedSpace); err != nil {
-			return nil, fmt.Errorf("扫描磁盘信息失败: %w", err)
+			return nil, fmt.Errorf("failed to scan disk info: %w", err)
 		}
 
 		usagePercent := float64(0)
@@ -419,7 +421,7 @@ func (mc *metricsCollector) getDiskUsage(ctx context.Context) ([]map[string]inte
 	return diskInfo, rows.Err()
 }
 
-// getDatabaseSize 获取数据库大小
+// getDatabaseSize retrieves database size
 func (mc *metricsCollector) getDatabaseSize(ctx context.Context) (map[string]interface{}, error) {
 	query := `
 		SELECT 
@@ -435,7 +437,7 @@ func (mc *metricsCollector) getDatabaseSize(ctx context.Context) (map[string]int
 	var totalBytes, totalRows, tableCount int64
 	err := row.Scan(&totalBytes, &totalRows, &tableCount)
 	if err != nil {
-		return nil, fmt.Errorf("查询数据库大小失败: %w", err)
+		return nil, fmt.Errorf("failed to query database size: %w", err)
 	}
 
 	return map[string]interface{}{
@@ -447,31 +449,31 @@ func (mc *metricsCollector) getDatabaseSize(ctx context.Context) (map[string]int
 	}, nil
 }
 
-// GetPerformanceMetrics 获取性能指标
+// GetPerformanceMetrics retrieves performance metrics
 func (mc *metricsCollector) GetPerformanceMetrics(ctx context.Context) (map[string]interface{}, error) {
 	metrics := make(map[string]interface{})
 
-	// 获取系统指标
+	// Get system metrics
 	systemMetrics, err := mc.getSystemMetrics(ctx)
 	if err != nil {
-		log.Printf("获取系统指标失败: %v", err)
+		logger.Error("Failed to get system metrics", zap.Error(err))
 	} else {
 		metrics["system"] = systemMetrics
 	}
 
-	// 添加时间戳
+	// Add timestamp
 	metrics["timestamp"] = time.Now().Unix()
 
 	return metrics, nil
 }
 
-// getSystemMetrics 获取系统级指标
+// getSystemMetrics retrieves system-level metrics
 func (mc *metricsCollector) getSystemMetrics(ctx context.Context) (map[string]interface{}, error) {
-	// 这里可以扩展获取更多系统指标
-	// 当前提供基础的连接和版本信息
+	// Here we can extend to get more system metrics
+	// Currently provides basic connection and version information
 	return map[string]interface{}{
 		"database":    mc.config.Database,
 		"cluster":     mc.config.Cluster,
-		"connections": "active", // 简化表示连接状态
+		"connections": "active", // Simplified representation of connection status
 	}, nil
 }

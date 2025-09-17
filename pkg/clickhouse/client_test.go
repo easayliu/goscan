@@ -48,10 +48,10 @@ func TestTableOperations(t *testing.T) {
 	ctx := context.Background()
 	tableName := "test_table"
 
-	// 清理
+	// Cleanup
 	defer client.DropTable(ctx, tableName)
 
-	// 创建表
+	// Create table
 	schema := `(
 		id UInt64,
 		name String,
@@ -63,7 +63,7 @@ func TestTableOperations(t *testing.T) {
 		t.Fatalf("Failed to create table: %v", err)
 	}
 
-	// 检查表是否存在
+	// Check if table exists
 	exists, err := client.TableExists(ctx, tableName)
 	if err != nil {
 		t.Fatalf("Failed to check table existence: %v", err)
@@ -72,7 +72,7 @@ func TestTableOperations(t *testing.T) {
 		t.Fatal("Table should exist after creation")
 	}
 
-	// 插入数据
+	// Insert data
 	data := map[string]interface{}{
 		"id":         1,
 		"name":       "test",
@@ -83,7 +83,7 @@ func TestTableOperations(t *testing.T) {
 		t.Fatalf("Failed to insert data: %v", err)
 	}
 
-	// 批量插入
+	// Batch insert
 	batchData := []map[string]interface{}{
 		{
 			"id":         2,
@@ -101,7 +101,7 @@ func TestTableOperations(t *testing.T) {
 		t.Fatalf("Failed to insert batch: %v", err)
 	}
 
-	// 查询数据
+	// Query data
 	rows, err := client.Query(ctx, "SELECT COUNT(*) FROM "+tableName)
 	if err != nil {
 		t.Fatalf("Failed to query: %v", err)
@@ -122,7 +122,7 @@ func TestTableOperations(t *testing.T) {
 }
 
 func TestClientCleanupFunctions(t *testing.T) {
-	// 创建测试配置
+	// Create test configuration
 	cfg := &config.ClickHouseConfig{
 		Hosts:    []string{"localhost"},
 		Port:     9000,
@@ -133,25 +133,25 @@ func TestClientCleanupFunctions(t *testing.T) {
 		Protocol: "native",
 	}
 
-	// 创建客户端
+	// Create client
 	client, err := NewClient(cfg)
 	if err != nil {
-		t.Skipf("跳过测试：无法连接到 ClickHouse: %v", err)
+		t.Skipf("Skip test: unable to connect to ClickHouse: %v", err)
 		return
 	}
 	defer client.Close()
 
 	ctx := context.Background()
 
-	// 测试表名
+	// Test table name
 	testTable := "test_cleanup_table"
 
-	// 清理测试环境
+	// Cleanup test environment
 	defer func() {
 		client.DropTable(ctx, testTable)
 	}()
 
-	// 创建测试表
+	// Create test table
 	schema := `(
 		id UInt64,
 		name String,
@@ -162,10 +162,10 @@ func TestClientCleanupFunctions(t *testing.T) {
 
 	err = client.CreateTable(ctx, testTable, schema)
 	if err != nil {
-		t.Fatalf("创建测试表失败: %v", err)
+		t.Fatalf("failed to create test table: %v", err)
 	}
 
-	// 插入测试数据
+	// Insert test data
 	testData := []map[string]interface{}{
 		{"id": 1, "name": "test1", "value": 100.0, "created_at": time.Now()},
 		{"id": 2, "name": "test2", "value": 200.0, "created_at": time.Now()},
@@ -174,20 +174,20 @@ func TestClientCleanupFunctions(t *testing.T) {
 
 	err = client.InsertBatch(ctx, testTable, testData)
 	if err != nil {
-		t.Fatalf("插入测试数据失败: %v", err)
+		t.Fatalf("failed to insert test data: %v", err)
 	}
 
-	// 测试 CleanTableData 方法 - 按条件删除
+	// Test CleanTableData method - delete by condition
 	t.Run("TestDeleteByCondition", func(t *testing.T) {
 		err := client.CleanTableData(ctx, testTable, "id = ?", 1)
 		if err != nil {
-			t.Fatalf("按条件清理数据失败: %v", err)
+			t.Fatalf("failed to clean data by condition: %v", err)
 		}
 
-		// 验证数据是否被删除
+		// Verify data was deleted
 		rows, err := client.Query(ctx, "SELECT COUNT(*) FROM "+testTable+" WHERE id = 1")
 		if err != nil {
-			t.Fatalf("查询失败: %v", err)
+			t.Fatalf("query failed: %v", err)
 		}
 		defer rows.Close()
 
@@ -195,32 +195,32 @@ func TestClientCleanupFunctions(t *testing.T) {
 			var count uint64
 			err = rows.Scan(&count)
 			if err != nil {
-				t.Fatalf("扫描失败: %v", err)
+				t.Fatalf("scan failed: %v", err)
 			}
 			if count != 0 {
-				t.Errorf("预期删除后数量为 0，实际为 %d", count)
+				t.Errorf("expected count after deletion to be 0, got %d", count)
 			}
 		}
 	})
 
-	// 测试 CleanTableData 方法 - 清空表
+	// Test CleanTableData method - truncate table
 	t.Run("TestTruncateTable", func(t *testing.T) {
-		// 重新插入数据
+		// Re-insert data
 		err := client.InsertBatch(ctx, testTable, testData)
 		if err != nil {
-			t.Fatalf("重新插入测试数据失败: %v", err)
+			t.Fatalf("failed to re-insert test data: %v", err)
 		}
 
-		// 清空表
+		// Truncate table
 		err = client.CleanTableData(ctx, testTable, "")
 		if err != nil {
-			t.Fatalf("清空表失败: %v", err)
+			t.Fatalf("failed to truncate table: %v", err)
 		}
 
-		// 验证表是否为空
+		// Verify table is empty
 		rows, err := client.Query(ctx, "SELECT COUNT(*) FROM "+testTable)
 		if err != nil {
-			t.Fatalf("查询失败: %v", err)
+			t.Fatalf("query failed: %v", err)
 		}
 		defer rows.Close()
 
@@ -228,32 +228,32 @@ func TestClientCleanupFunctions(t *testing.T) {
 			var count uint64
 			err = rows.Scan(&count)
 			if err != nil {
-				t.Fatalf("扫描失败: %v", err)
+				t.Fatalf("scan failed: %v", err)
 			}
 			if count != 0 {
-				t.Errorf("预期清空后数量为 0，实际为 %d", count)
+				t.Errorf("expected count after truncate to be 0, got %d", count)
 			}
 		}
 	})
 
-	// 测试 TruncateTable 方法
+	// Test TruncateTable method
 	t.Run("TestTruncateTableDirect", func(t *testing.T) {
-		// 重新插入数据
+		// Re-insert data
 		err := client.InsertBatch(ctx, testTable, testData)
 		if err != nil {
-			t.Fatalf("重新插入测试数据失败: %v", err)
+			t.Fatalf("failed to re-insert test data: %v", err)
 		}
 
-		// 直接调用 TruncateTable
+		// Call TruncateTable directly
 		err = client.TruncateTable(ctx, testTable)
 		if err != nil {
-			t.Fatalf("TRUNCATE 表失败: %v", err)
+			t.Fatalf("failed to TRUNCATE table: %v", err)
 		}
 
-		// 验证表是否为空
+		// Verify table is empty
 		rows, err := client.Query(ctx, "SELECT COUNT(*) FROM "+testTable)
 		if err != nil {
-			t.Fatalf("查询失败: %v", err)
+			t.Fatalf("query failed: %v", err)
 		}
 		defer rows.Close()
 
@@ -261,32 +261,32 @@ func TestClientCleanupFunctions(t *testing.T) {
 			var count uint64
 			err = rows.Scan(&count)
 			if err != nil {
-				t.Fatalf("扫描失败: %v", err)
+				t.Fatalf("scan failed: %v", err)
 			}
 			if count != 0 {
-				t.Errorf("预期 TRUNCATE 后数量为 0，实际为 %d", count)
+				t.Errorf("expected count after TRUNCATE to be 0, got %d", count)
 			}
 		}
 	})
 
-	// 测试 DeleteByCondition 方法
+	// Test DeleteByCondition method
 	t.Run("TestDeleteByConditionDirect", func(t *testing.T) {
-		// 重新插入数据
+		// Re-insert data
 		err := client.InsertBatch(ctx, testTable, testData)
 		if err != nil {
-			t.Fatalf("重新插入测试数据失败: %v", err)
+			t.Fatalf("failed to re-insert test data: %v", err)
 		}
 
-		// 直接调用 DeleteByCondition
+		// Call DeleteByCondition directly
 		err = client.DeleteByCondition(ctx, testTable, "value > ?", 150.0)
 		if err != nil {
-			t.Fatalf("按条件删除失败: %v", err)
+			t.Fatalf("failed to delete by condition: %v", err)
 		}
 
-		// 验证只剩下 value <= 150 的数据
+		// Verify only data with value <= 150 remains
 		rows, err := client.Query(ctx, "SELECT COUNT(*) FROM "+testTable+" WHERE value > 150")
 		if err != nil {
-			t.Fatalf("查询失败: %v", err)
+			t.Fatalf("query failed: %v", err)
 		}
 		defer rows.Close()
 
@@ -294,17 +294,17 @@ func TestClientCleanupFunctions(t *testing.T) {
 			var count uint64
 			err = rows.Scan(&count)
 			if err != nil {
-				t.Fatalf("扫描失败: %v", err)
+				t.Fatalf("scan failed: %v", err)
 			}
 			if count != 0 {
-				t.Errorf("预期删除后数量为 0，实际为 %d", count)
+				t.Errorf("expected count after deletion to be 0, got %d", count)
 			}
 		}
 
-		// 验证剩余数据数量
+		// Verify remaining data count
 		rows2, err := client.Query(ctx, "SELECT COUNT(*) FROM "+testTable)
 		if err != nil {
-			t.Fatalf("查询失败: %v", err)
+			t.Fatalf("query failed: %v", err)
 		}
 		defer rows2.Close()
 
@@ -312,10 +312,10 @@ func TestClientCleanupFunctions(t *testing.T) {
 			var count uint64
 			err = rows2.Scan(&count)
 			if err != nil {
-				t.Fatalf("扫描失败: %v", err)
+				t.Fatalf("scan failed: %v", err)
 			}
 			if count != 1 {
-				t.Errorf("预期剩余数量为 1，实际为 %d", count)
+				t.Errorf("expected remaining count to be 1, got %d", count)
 			}
 		}
 	})

@@ -1,9 +1,9 @@
 package config
 
-// database_configs.go 包含数据库相关的配置
-// ClickHouseConfig 在 config.go 中定义，这里只包含数据库特定的验证和扩展方法
+// database_configs.go contains database-related configurations
+// ClickHouseConfig is defined in config.go, this file only contains database-specific validation and extension methods
 
-// Validate 验证ClickHouse配置
+// Validate validates ClickHouse configuration
 func (c *ClickHouseConfig) Validate() error {
 	if len(c.Hosts) == 0 {
 		return ErrMissingRequired

@@ -4,31 +4,33 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/clickhouse"
-	"log"
+	"goscan/pkg/logger"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // ProcessorOptions 处理器选项
 type ProcessorOptions struct {
-	BatchSize      int           `json:"batch_size"`      // 批次大小
-	MaxRetries     int           `json:"max_retries"`     // 最大重试次数
-	RetryDelay     time.Duration `json:"retry_delay"`     // 重试延迟
-	EnableAsync    bool          `json:"enable_async"`    // 启用异步插入
-	ProgressLog    bool          `json:"progress_log"`    // 是否显示进度日志
-	DryRunCleanup  bool          `json:"dry_run_cleanup"` // 干预式清理预览
-	Timeout        time.Duration `json:"timeout"`         // 超时时间
+	BatchSize     int           `json:"batch_size"`      // 批次大小
+	MaxRetries    int           `json:"max_retries"`     // 最大重试次数
+	RetryDelay    time.Duration `json:"retry_delay"`     // 重试延迟
+	EnableAsync   bool          `json:"enable_async"`    // 启用异步插入
+	ProgressLog   bool          `json:"progress_log"`    // Whether to emit progress logs
+	DryRunCleanup bool          `json:"dry_run_cleanup"` // 干预式清理预览
+	Timeout       time.Duration `json:"timeout"`         // 超时时间
 }
 
 // ProcessResult 处理结果
 type ProcessResult struct {
-	TotalRecords     int                            `json:"total_records"`
-	InsertedRecords  int                            `json:"inserted_records"`
-	FailedRecords    int                            `json:"failed_records"`
-	Errors           []error                        `json:"errors"`
-	Duration         time.Duration                  `json:"duration"`
-	AverageSpeed     float64                        `json:"average_speed"` // 记录/秒
-	CleanupResult    *clickhouse.CleanupResult      `json:"cleanup_result,omitempty"`
-	BatchResult      *clickhouse.BatchInsertResult  `json:"batch_result,omitempty"`
+	TotalRecords    int                           `json:"total_records"`
+	InsertedRecords int                           `json:"inserted_records"`
+	FailedRecords   int                           `json:"failed_records"`
+	Errors          []error                       `json:"errors"`
+	Duration        time.Duration                 `json:"duration"`
+	AverageSpeed    float64                       `json:"average_speed"` // 记录/秒
+	CleanupResult   *clickhouse.CleanupResult     `json:"cleanup_result,omitempty"`
+	BatchResult     *clickhouse.BatchInsertResult `json:"batch_result,omitempty"`
 }
 
 // DefaultProcessorOptions 创建默认处理器选项
@@ -119,10 +121,6 @@ func (p *ClickHouseProcessor) ProcessWithResult(ctx context.Context, data []Bill
 		Errors:       make([]error, 0),
 	}
 
-	if len(data) == 0 {
-		return result, nil
-	}
-
 	startTime := time.Now()
 	defer func() {
 		result.Duration = time.Since(startTime)
@@ -131,11 +129,21 @@ func (p *ClickHouseProcessor) ProcessWithResult(ctx context.Context, data []Bill
 		}
 	}()
 
-	p.logProgress("开始处理 %d 条记录到表 %s", len(data), p.tableName)
+	p.logProgress("Processing started",
+		zap.Int("records", len(data)),
+		zap.String("table", p.tableName))
 
-	// 执行数据清理
+	// 执行数据清理 - 即使数据为空也需要执行清理操作
 	if err := p.performCleanup(ctx, result); err != nil {
 		return result, err
+	}
+
+	// 如果数据为空且已完成清理，直接返回
+	if len(data) == 0 {
+		p.logProgress("Processing completed with cleanup only",
+			zap.String("table", p.tableName),
+			zap.Bool("cleanup_performed", p.cleanBeforeInsert))
+		return result, nil
 	}
 
 	// 如果是预览模式，直接返回
@@ -165,21 +173,26 @@ func (p *ClickHouseProcessor) performCleanup(ctx context.Context, result *Proces
 		ProgressLog: p.options.ProgressLog,
 	}
 
-	action := "清理"
+	action := "cleanup"
 	if p.options.DryRunCleanup {
-		action = "预览清理"
+		action = "cleanup preview"
 	}
-	p.logProgress("%s表 %s 中的数据，条件: %s", action, p.tableName, p.cleanCondition)
+	p.logProgress("Preparing cleanup",
+		zap.String("action", action),
+		zap.String("table", p.tableName),
+		zap.String("condition", p.cleanCondition))
 
 	cleanupResult, err := p.client.EnhancedCleanTableData(ctx, p.tableName, cleanupOpts)
 	result.CleanupResult = cleanupResult
-	
+
 	if err != nil {
-		result.Errors = append(result.Errors, fmt.Errorf("数据清理失败: %w", err))
+		result.Errors = append(result.Errors, fmt.Errorf("cleanup failed: %w", err))
 		return err
 	}
 
-	p.logProgress("清理完成: %s", cleanupResult.String())
+	p.logProgress("Cleanup finished",
+		zap.String("table", p.tableName),
+		zap.String("summary", cleanupResult.String()))
 
 	// 清理完成后重置标志
 	if !p.options.DryRunCleanup {
@@ -193,31 +206,60 @@ func (p *ClickHouseProcessor) performCleanup(ctx context.Context, result *Proces
 func (p *ClickHouseProcessor) processDataInsert(ctx context.Context, data []BillDetail, result *ProcessResult) error {
 	// 转换数据格式
 	records := p.convertBillsToRecords(data)
-	
+
 	// 批量插入
 	return p.performBatchInsert(ctx, records, result)
 }
 
 // convertBillsToRecords 批量转换账单数据
 func (p *ClickHouseProcessor) convertBillsToRecords(data []BillDetail) []map[string]interface{} {
-	p.logProgress("开始转换 %d 条账单数据", len(data))
-	
+	p.logProgress("Conversion started",
+		zap.Int("records", len(data)),
+		zap.String("table", p.tableName))
+
 	records := make([]map[string]interface{}, 0, len(data))
 	for i, bill := range data {
 		if i > 0 && i%100 == 0 {
-			p.logProgress("转换进度: %d/%d", i, len(data))
+			p.logProgress("Conversion progress",
+				zap.Int("processed", i),
+				zap.Int("total", len(data)),
+				zap.String("table", p.tableName))
 		}
 		records = append(records, bill.ToDBMap())
 	}
-	
-	p.logProgress("数据转换完成，准备批量插入 %d 条记录", len(records))
+
+	p.logProgress("Conversion completed",
+		zap.Int("records", len(records)),
+		zap.String("table", p.tableName))
 	return records
 }
 
 // performBatchInsert 执行批量插入
 func (p *ClickHouseProcessor) performBatchInsert(ctx context.Context, records []map[string]interface{}, result *ProcessResult) error {
-	p.logProgress("准备批量插入到表: %s (分布式: %v)", p.tableName, p.isDistributed)
-	
+	// Retrieve resolver info for debugging
+	resolverInfo := p.client.GetTableNameResolver().GetTableInfo(p.tableName)
+	p.logProgress("Preparing batch insert",
+		zap.String("table", p.tableName),
+		zap.Bool("distributed", p.isDistributed),
+		zap.Any("resolver_info", resolverInfo))
+
+	// Check whether the target table exists
+	targetTable := p.tableName
+	if p.isDistributed {
+		targetTable = p.client.GetTableNameResolver().ResolveInsertTarget(p.tableName)
+	}
+
+	exists, err := p.client.TableExists(ctx, targetTable)
+	if err != nil {
+		p.logProgress("Table existence check failed",
+			zap.String("table", targetTable),
+			zap.Error(err))
+		// Do not return immediately; attempt insert so ClickHouse returns a concrete error
+	} else if !exists {
+		p.logProgress("Target table missing",
+			zap.String("table", targetTable))
+	}
+
 	batchOpts := &clickhouse.BatchInsertOptions{
 		BatchSize:   p.options.BatchSize,
 		MaxRetries:  p.options.MaxRetries,
@@ -227,21 +269,26 @@ func (p *ClickHouseProcessor) performBatchInsert(ctx context.Context, records []
 	}
 
 	var batchResult *clickhouse.BatchInsertResult
-	var err error
 
 	if p.isDistributed {
-		p.logProgress("开始分布式批量插入...")
+		p.logProgress("Batch insert started",
+			zap.String("table", targetTable),
+			zap.String("mode", "distributed"))
 		batchResult, err = p.client.OptimizedBatchInsertToDistributed(ctx, p.tableName, records, batchOpts)
 	} else {
-		p.logProgress("开始本地批量插入...")
+		p.logProgress("Batch insert started",
+			zap.String("table", targetTable),
+			zap.String("mode", "local"))
 		batchResult, err = p.client.OptimizedBatchInsert(ctx, p.tableName, records, batchOpts)
 	}
 
 	result.BatchResult = batchResult
-	
+
 	if err != nil {
-		p.logProgress("批量插入失败: %v", err)
-		result.Errors = append(result.Errors, fmt.Errorf("批量插入失败: %w", err))
+		p.logProgress("Batch insert failed",
+			zap.String("table", targetTable),
+			zap.Error(err))
+		result.Errors = append(result.Errors, fmt.Errorf("batch insert failed: %w", err))
 		return err
 	}
 
@@ -252,32 +299,42 @@ func (p *ClickHouseProcessor) performBatchInsert(ctx context.Context, records []
 		result.Errors = append(result.Errors, batchResult.Errors...)
 	}
 
+	p.logProgress("Batch insert completed",
+		zap.String("table", targetTable),
+		zap.Int("inserted_records", batchResult.InsertedRecords),
+		zap.Int("failed_records", batchResult.FailedRecords))
 	return nil
 }
 
-// logProgress 记录进度日志
-func (p *ClickHouseProcessor) logProgress(format string, args ...interface{}) {
-	if p.options.ProgressLog {
-		log.Printf("[处理器] "+format, args...)
+// logProgress writes progress logs following the standard structured style
+func (p *ClickHouseProcessor) logProgress(message string, fields ...zap.Field) {
+	if !p.options.ProgressLog {
+		return
 	}
+
+	base := []zap.Field{zap.String("provider", "volcengine")}
+	base = append(base, fields...)
+	logger.Info(message, base...)
 }
 
-// logProcessResult 记录处理结果
+// logProcessResult logs the processing summary
 func (p *ClickHouseProcessor) logProcessResult(result *ProcessResult) {
 	if p.options.ProgressLog {
-		log.Printf("处理完成: %s", result.String())
+		logger.Info("Volcengine data processing completed",
+			zap.String("provider", "volcengine"),
+			zap.String("result", result.String()))
 	}
 }
 
-// String 实现 Stringer 接口
+// String implements fmt.Stringer for structured summaries
 func (r *ProcessResult) String() string {
 	successRate := r.GetSuccessRate()
-	status := "成功"
+	status := "success"
 	if !r.IsSuccess() {
-		status = "部分失败"
+		status = "partial failure"
 	}
-	
-	return fmt.Sprintf("状态=%s, 总数=%d, 成功=%d, 失败=%d, 成功率=%.1f%%, 平均速度=%.1f记录/秒, 耗时=%v",
+
+	return fmt.Sprintf("status=%s, total=%d, succeeded=%d, failed=%d, success_rate=%.1f%%, avg_speed=%.1f records/s, duration=%v",
 		status, r.TotalRecords, r.InsertedRecords, r.FailedRecords, successRate, r.AverageSpeed, r.Duration)
 }
 
@@ -295,6 +352,34 @@ func (r *ProcessResult) GetSuccessRate() float64 {
 }
 
 // 以下是链式方法，提供更友好的API
+
+// ExecuteCleanupOnly 仅执行数据清理操作，不进行数据插入
+func (p *ClickHouseProcessor) ExecuteCleanupOnly(ctx context.Context) (*ProcessResult, error) {
+	result := &ProcessResult{
+		TotalRecords: 0,
+		Errors:       make([]error, 0),
+	}
+
+	startTime := time.Now()
+	defer func() {
+		result.Duration = time.Since(startTime)
+	}()
+
+	p.logProgress("Executing cleanup only",
+		zap.String("table", p.tableName),
+		zap.String("condition", p.cleanCondition))
+
+	// 执行清理操作
+	if err := p.performCleanup(ctx, result); err != nil {
+		return result, err
+	}
+
+	p.logProgress("Cleanup only completed",
+		zap.String("table", p.tableName),
+		zap.Bool("cleanup_performed", p.cleanBeforeInsert))
+
+	return result, nil
+}
 
 // WithCleanupPreview 设置清理预览
 func (p *ClickHouseProcessor) WithCleanupPreview(condition string, args ...interface{}) *ClickHouseProcessor {
@@ -368,8 +453,11 @@ func (bp *BatchProcessor) ProcessWithResult(ctx context.Context, data []BillDeta
 	}()
 
 	for i, processor := range bp.processors {
-		log.Printf("执行第 %d/%d 个处理器", i+1, len(bp.processors))
-		
+		logger.Info("Volcengine batch processor executing processor",
+			zap.String("provider", "volcengine"),
+			zap.Int("current", i+1),
+			zap.Int("total", len(bp.processors)))
+
 		if chProcessor, ok := processor.(*ClickHouseProcessor); ok {
 			result, err := chProcessor.ProcessWithResult(ctx, data)
 			if err != nil {

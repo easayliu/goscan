@@ -2,7 +2,10 @@ package alicloud
 
 import (
 	"fmt"
+	"goscan/pkg/logger"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // DescribeInstanceBillRequest 查询实例账单请求
@@ -93,13 +96,13 @@ func (req *DescribeInstanceBillRequest) Clone() *DescribeInstanceBillRequest {
 		IsHideZeroCharge:       req.IsHideZeroCharge,
 		IsDisplayLocalCurrency: req.IsDisplayLocalCurrency,
 	}
-	
+
 	// 深拷贝切片
 	if req.InstanceIDs != nil {
 		cloned.InstanceIDs = make([]string, len(req.InstanceIDs))
 		copy(cloned.InstanceIDs, req.InstanceIDs)
 	}
-	
+
 	return cloned
 }
 
@@ -129,7 +132,7 @@ func (req *DescribeInstanceBillRequest) GetTimeRange() (start, end time.Time, er
 		end = start.AddDate(0, 0, 1) // 下一天
 		return start, end, nil
 	}
-	
+
 	// 按月粒度，返回整个月份
 	start, err = time.Parse("2006-01", req.BillingCycle)
 	if err != nil {
@@ -145,7 +148,7 @@ func (req *DescribeInstanceBillRequest) String() string {
 	if req.BillingDate != "" {
 		granularityInfo += fmt.Sprintf("(%s)", req.BillingDate)
 	}
-	
+
 	return fmt.Sprintf("DescribeInstanceBillRequest{BillingCycle: %s, Granularity: %s, MaxResults: %d}",
 		req.BillingCycle, granularityInfo, req.MaxResults)
 }
@@ -228,19 +231,19 @@ func (rb *RequestBuilder) WithDisplayLocalCurrency(displayLocalCurrency bool) *R
 func (rb *RequestBuilder) Build() (*DescribeInstanceBillRequest, error) {
 	req := rb.request.Clone()
 	req.SetDefaults()
-	
+
 	if err := req.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid request parameters: %w", err)
 	}
-	
+
 	return req, nil
 }
 
-// MustBuild 构建请求，如果失败则panic
+// MustBuild builds request, exits with fatal error if failed
 func (rb *RequestBuilder) MustBuild() *DescribeInstanceBillRequest {
 	req, err := rb.Build()
 	if err != nil {
-		panic(fmt.Sprintf("failed to build request: %v", err))
+		logger.Fatal("failed to build request", zap.Error(err))
 	}
 	return req
 }

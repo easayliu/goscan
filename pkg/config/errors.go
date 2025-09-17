@@ -2,30 +2,30 @@ package config
 
 import "errors"
 
-// 配置相关的错误定义，使用 sentinel errors 模式
+// Configuration-related error definitions using sentinel errors pattern
 var (
-	// 通用错误
-	ErrConfigNotFound = errors.New("配置文件未找到")
-	ErrInvalidFormat  = errors.New("配置文件格式无效")
-	
-	// 配置验证错误
-	ErrMissingRequired = errors.New("缺少必需的配置项")
-	ErrInvalidValue    = errors.New("配置值无效")
-	
-	// 云服务提供商配置错误
-	ErrVolcEngineConfig = errors.New("火山引擎配置错误")
-	ErrAliCloudConfig   = errors.New("阿里云配置错误")
-	ErrAWSConfig        = errors.New("AWS配置错误")
-	ErrAzureConfig      = errors.New("Azure配置错误")
-	ErrGCPConfig        = errors.New("GCP配置错误")
-	
-	// 数据库配置错误
-	ErrClickHouseConfig = errors.New("ClickHouse配置错误")
-	
-	// 通知配置错误
-	ErrWeChatConfig = errors.New("微信通知配置错误")
-	
-	// 调度器配置错误
-	ErrSchedulerConfig = errors.New("调度器配置错误")
-	ErrInvalidCron     = errors.New("无效的Cron表达式")
+	// Generic errors
+	ErrConfigNotFound = errors.New("configuration file not found")
+	ErrInvalidFormat  = errors.New("invalid configuration file format")
+
+	// Configuration validation errors
+	ErrMissingRequired = errors.New("missing required configuration item")
+	ErrInvalidValue    = errors.New("invalid configuration value")
+
+	// Cloud service provider configuration errors
+	ErrVolcEngineConfig = errors.New("VolcEngine configuration error")
+	ErrAliCloudConfig   = errors.New("AliCloud configuration error")
+	ErrAWSConfig        = errors.New("AWS configuration error")
+	ErrAzureConfig      = errors.New("Azure configuration error")
+	ErrGCPConfig        = errors.New("GCP configuration error")
+
+	// Database configuration errors
+	ErrClickHouseConfig = errors.New("ClickHouse configuration error")
+
+	// Notification configuration errors
+	ErrWeChatConfig = errors.New("WeChat notification configuration error")
+
+	// Scheduler configuration errors
+	ErrSchedulerConfig = errors.New("scheduler configuration error")
+	ErrInvalidCron     = errors.New("invalid Cron expression")
 )
