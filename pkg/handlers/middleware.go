@@ -185,16 +185,3 @@ func buildTaskResponse(taskID, status, message string) map[string]interface{} {
 	}
 }
 
-// buildSuccessResponse builds success response
-func buildSuccessResponse(data interface{}) map[string]interface{} {
-	response := map[string]interface{}{
-		"success":   true,
-		"timestamp": getCurrentTimestamp(),
-	}
-
-	if data != nil {
-		response["data"] = data
-	}
-
-	return response
-}

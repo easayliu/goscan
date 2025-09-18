@@ -102,6 +102,17 @@ func (ts *TaskScheduler) Start() error {
 
 	ts.cron.Start()
 
+	// Update next run times for all jobs after cron starts
+	ts.jobsMutex.Lock()
+	for _, job := range ts.jobs {
+		if err := ts.updateJobNextRunTime(job); err != nil {
+			logger.Warn("Failed to update next run time after start", 
+				zap.String("job_name", job.Name), 
+				zap.Error(err))
+		}
+	}
+	ts.jobsMutex.Unlock()
+
 	// Log scheduled jobs
 	ts.logScheduledJobs()
 

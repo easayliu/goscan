@@ -3,9 +3,10 @@ package middleware
 import (
 	"time"
 
+	"goscan/pkg/logger"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"goscan/pkg/logger"
 )
 
 // GinZapLogger creates a Gin logging middleware using zap directly

@@ -3,6 +3,9 @@ package wechat
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"goscan/pkg/logger"
@@ -78,6 +81,22 @@ func (c *Client) SendTemplateCard(ctx context.Context, card *TemplateCard) error
 	return c.sendMessage(ctx, msg)
 }
 
+// SendImage sends image message
+func (c *Client) SendImage(ctx context.Context, imageData []byte) error {
+	// Validate image size (max 2MB)
+	if len(imageData) > 2*1024*1024 {
+		return fmt.Errorf("image size %d bytes exceeds 2MB limit", len(imageData))
+	}
+
+	// Convert to base64 and calculate MD5
+	base64Str := base64.StdEncoding.EncodeToString(imageData)
+	hash := md5.Sum(imageData)
+	md5Str := hex.EncodeToString(hash[:])
+
+	msg := c.messageBuilder.BuildImageMessage(base64Str, md5Str)
+	return c.sendMessage(ctx, msg)
+}
+
 // SendCostReport sends cost comparison report
 func (c *Client) SendCostReport(ctx context.Context, data *CostComparisonData) error {
 	return c.SendCostReportWithFormat(ctx, data, c.notificationFormat)
@@ -95,6 +114,11 @@ func (c *Client) SendCostReportWithFormat(ctx context.Context, data *CostCompari
 	default:
 		return c.sendMarkdownReport(ctx, data)
 	}
+}
+
+// SendCostReportAsImage sends cost comparison report as image
+func (c *Client) SendCostReportAsImage(ctx context.Context, imageData []byte) error {
+	return c.SendImage(ctx, imageData)
 }
 
 // sendMessage sends message with retry

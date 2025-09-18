@@ -40,6 +40,13 @@ scheduler:
         clean_before: true
         granularity: "both"
 
+    # 企业微信费用报告通知任务
+    - name: "daily_cost_report_notification"
+      provider: "notification"
+      cron: "30 8 * * *"  # 每天早上8点30分执行
+      config:
+        sync_mode: "cost_report"
+
 runtime:
   max_concurrent_tasks: 3
   task_timeout: 3600  # 任务超时时间（秒）
@@ -102,6 +109,45 @@ cloud_providers:
     project_id: ""
     service_account_key: ""
     timeout: 30
+
+# 企业微信通知配置
+wechat:
+  # 企业微信机器人webhook地址（必填）
+  webhook_url: ""
+  # 是否启用微信通知（默认：false）
+  enabled: false
+  # @用户列表（可选，用于@特定用户或@all）
+  mention_users: []
+  # 费用异常告警阈值，百分比（默认：20.0，表示变化超过20%时告警）
+  alert_threshold: 20.0
+  # 最大重试次数（默认：3）
+  max_retries: 3
+  # 重试延迟，秒（默认：2）
+  retry_delay: 2
+  # 通知格式：markdown/template_card/auto（默认：auto）
+  notification_format: "auto"
+  # 是否以图片形式发送报告（默认：false）
+  # 设置为true可以生成包含完整产品明细的PNG图片报告
+  send_as_image: false
+  
+  # 图片生成配置
+  image_config:
+    # 图片宽度（像素，默认：1200）
+    width: 1200
+    # 图表高度（像素，默认：300）
+    chart_height: 300
+    # 是否显示所有产品明细（默认：true）
+    show_all_products: true
+    # 是否包含图表（默认：true）
+    include_charts: true
+    # 字体大小（默认：14）
+    font_size: 14
+    # 标题字体大小（默认：20）
+    title_font_size: 20
+    # 表格字体大小（默认：12）
+    table_font_size: 12
+    # 最大文件大小限制（MB，默认：2）
+    max_size_mb: 2.0
 
 app:
   environment: production

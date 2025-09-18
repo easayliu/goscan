@@ -16,7 +16,7 @@ var (
 	ErrVolcEngineConfig = errors.New("VolcEngine configuration error")
 	ErrAliCloudConfig   = errors.New("AliCloud configuration error")
 	ErrAWSConfig        = errors.New("AWS configuration error")
-	ErrAzureConfig      = errors.New("Azure configuration error")
+	ErrAzureConfig      = errors.New("azure configuration error")
 	ErrGCPConfig        = errors.New("GCP configuration error")
 
 	// Database configuration errors

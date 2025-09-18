@@ -3,7 +3,6 @@ package alicloud
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -485,29 +484,6 @@ func (bd *BillDetail) ToDBFormatWithTime(timestamp time.Time) *BillDetailForDB {
 	}
 }
 
-// parseTimeFromString 辅助函数：解析时间字符串
-func parseTimeFromString(timeStr string) time.Time {
-	if timeStr == "" {
-		return time.Time{}
-	}
-
-	// 尝试不同的时间格式
-	formats := []string{
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05Z",
-		"2006-01-02T15:04:05.000Z",
-		"2006-01-02",
-		"2006-01",
-	}
-
-	for _, format := range formats {
-		if t, err := time.Parse(format, timeStr); err == nil {
-			return t
-		}
-	}
-
-	return time.Time{}
-}
 
 // 注意：ValidationError 类型已迁移到 errors.go 文件
 
@@ -542,16 +518,6 @@ func (bd *BillDetail) Validate() error {
 
 // 注意：ProcessingStats 类型已迁移到 response.go 文件
 
-// parseFloat64 辅助函数：安全解析字符串为float64
-func parseFloat64(s string) float64 {
-	if s == "" || s == "-" {
-		return 0.0
-	}
-	if val, err := strconv.ParseFloat(s, 64); err == nil {
-		return val
-	}
-	return 0.0
-}
 
 // BatchTransformationOptions 批量转换选项
 type BatchTransformationOptions struct {

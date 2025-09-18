@@ -139,7 +139,7 @@ func (a *dataAggregator) BatchQueryCostData(ctx context.Context, tables []Databa
 			defer mu.Unlock()
 
 			if err != nil {
-				errors = append(errors, fmt.Errorf("Failed to query table %s: %w", tableInfo.TableName, err))
+				errors = append(errors, fmt.Errorf("failed to query table %s: %w", tableInfo.TableName, err))
 				logger.Warn("Table query failed in batch query", zap.String("table", tableInfo.TableName), zap.Error(err))
 			} else {
 				allData = append(allData, data...)
@@ -199,7 +199,6 @@ func (a *dataAggregator) queryCostDataFromTableDirect(ctx context.Context, info 
 	// build query statement
 	query, args := a.buildQuery(info, resolvedTableName, dates)
 
-
 	// create context with timeout
 	queryCtx, cancel := context.WithTimeout(ctx, a.queryTimeout)
 	defer cancel()
@@ -223,7 +222,6 @@ func (a *dataAggregator) queryCostDataFromTableDirect(ctx context.Context, info 
 		zap.Int("records", len(data)),
 		zap.Duration("duration", duration),
 		zap.Int("dates_count", len(dates)))
-
 
 	return data, nil
 }
@@ -316,7 +314,7 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 		amountSumExpr,
 		info.CurrencyColumn,
 		resolvedTableName,
-		dateWhereExpr,   // use processed date field in WHERE clause
+		dateWhereExpr, // use processed date field in WHERE clause
 		dateCondition,
 		amountWhereExpr,
 		info.ProductColumn,
@@ -333,7 +331,7 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 	for i, date := range dates {
 		dateStrs[i] = "'" + date.Format("2006-01-02") + "'"
 	}
-	dateCondition := "(" + fmt.Sprintf("%s", dateStrs[0])
+	dateCondition := "(" + dateStrs[0]
 	for i := 1; i < len(dateStrs); i++ {
 		dateCondition += ", " + dateStrs[i]
 	}

@@ -248,60 +248,7 @@ func (s *billServiceImpl) syncBillDataInternal(ctx context.Context, req *ListBil
 	return result, nil
 }
 
-// syncAllBillDataInternal 内部同步所有账单数据实现
-func (s *billServiceImpl) syncAllBillDataInternal(ctx context.Context, billPeriod, tableName string, isDistributed bool) (*SyncResult, error) {
-	logger.Info("Volcengine starting bill data synchronization",
-		zap.String("provider", "volcengine"),
-		zap.String("bill_period", billPeriod),
-		zap.String("table_name", tableName),
-		zap.Bool("is_distributed", isDistributed))
 
-	req := &ListBillDetailRequest{
-		BillPeriod:  billPeriod,
-		GroupPeriod: 1, // 默认按天分组
-		GroupTerm:   1, // 分组条件
-		IgnoreZero:  1, // 忽略零元账单
-	}
-
-	return s.syncBillDataInternal(ctx, req, isDistributed, tableName)
-}
-
-// performDataPreCheck 执行数据预检查
-func (s *billServiceImpl) performDataPreCheck(ctx context.Context, billPeriod, tableName string, isDistributed bool) (*DataPreCheckResult, error) {
-	result := &DataPreCheckResult{
-		BillPeriod: billPeriod,
-		NeedSync:   true,
-	}
-
-	// 检查数据库中是否已有数据
-	exists, existingCount, err := s.CheckMonthlyDataExists(ctx, tableName, billPeriod)
-	if err != nil {
-		return result, WrapError(err, "failed to check existing data")
-	}
-
-	if exists && existingCount > 0 {
-		result.DatabaseCount = existingCount
-		result.NeedSync = false
-		result.Reason = fmt.Sprintf("数据库中已存在 %d 条记录", existingCount)
-		return result, nil
-	}
-
-	// 获取 API 数据数量
-	apiCount, err := s.GetAPIDataCount(ctx, billPeriod)
-	if err != nil {
-		return result, WrapError(err, "failed to get API data count")
-	}
-
-	result.APICount = apiCount
-	result.DatabaseCount = existingCount
-
-	if apiCount == 0 {
-		result.NeedSync = false
-		result.Reason = "API 返回无数据"
-	}
-
-	return result, nil
-}
 
 // CheckMonthlyDataExists 检查月度数据是否存在
 func (s *billServiceImpl) CheckMonthlyDataExists(ctx context.Context, tableName, billPeriod string) (bool, int64, error) {

@@ -157,44 +157,4 @@ func wrapError(err error, message string, args ...interface{}) error {
 }
 
 // isTemporaryError determines if error is temporary
-func isTemporaryError(err error) bool {
-	type temporary interface {
-		Temporary() bool
-	}
 
-	if te, ok := err.(temporary); ok && te.Temporary() {
-		return true
-	}
-
-	// Check common temporary errors
-	switch {
-	case errors.Is(err, ErrQueryTimeout):
-		return true
-	case errors.Is(err, ErrConnectionNotInitialized):
-		return true
-	default:
-		return false
-	}
-}
-
-// isRetryableError determines if error is retryable
-func isRetryableError(err error) bool {
-	if isTemporaryError(err) {
-		return true
-	}
-
-	// Check retryable error types
-	var queryErr *QueryError
-	var connErr *ConnectionError
-
-	switch {
-	case errors.As(err, &queryErr):
-		// Query timeout and similar situations can be retried
-		return errors.Is(queryErr.Err, ErrQueryTimeout)
-	case errors.As(err, &connErr):
-		// Connection failures can be retried
-		return true
-	default:
-		return false
-	}
-}

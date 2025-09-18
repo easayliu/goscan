@@ -182,6 +182,15 @@ func (ca *CostAnalyzer) ConvertToWeChatFormat(result *CostAnalysisResult) interf
 	return ca.formatter.ConvertToWeChatFormat(result)
 }
 
+// GenerateReportImage generates cost analysis report as PNG image
+func (ca *CostAnalyzer) GenerateReportImage(result *CostAnalysisResult) ([]byte, error) {
+	// Use modern Apple-style generator with enhanced design system
+	generator := NewModernAppleReportGenerator()
+	
+	// Generate PNG image
+	return generator.GenerateReport(result)
+}
+
 // BatchQueryCostData batch queries cost data with concurrent querying of multiple tables
 func (ca *CostAnalyzer) BatchQueryCostData(ctx context.Context, tables []DatabaseTableInfo, dates []time.Time) ([]*RawCostData, error) {
 	return ca.aggregator.BatchQueryCostData(ctx, tables, dates)

@@ -37,14 +37,14 @@ func (req *ListBillDetailRequest) Validate() error {
 	}
 
 	if req.Limit <= 0 {
-		return fmt.Errorf("Limit is required and must be greater than 0")
+		return fmt.Errorf("limit is required and must be greater than 0")
 	}
 	if req.Limit > 1000 {
-		return fmt.Errorf("Limit must not exceed 1000, got: %d", req.Limit)
+		return fmt.Errorf("limit must not exceed 1000, got: %d", req.Limit)
 	}
 
 	if req.Offset < 0 {
-		return fmt.Errorf("Offset must be non-negative, got: %d", req.Offset)
+		return fmt.Errorf("offset must be non-negative, got: %d", req.Offset)
 	}
 
 	return nil

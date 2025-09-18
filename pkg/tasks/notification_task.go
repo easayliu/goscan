@@ -7,11 +7,44 @@ import (
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
 	"goscan/pkg/logger"
+	"goscan/pkg/utils/dateutils"
 	"goscan/pkg/wechat"
 	"time"
 
 	"go.uber.org/zap"
 )
+
+// Helper functions for task result management
+func setTaskFailed(result *TaskResult, message string, err error) {
+	result.Status = "failed"
+	result.Success = false
+	result.Message = message
+	result.CompletedAt = time.Now()
+	result.Duration = time.Since(result.StartedAt)
+	if err != nil {
+		result.Error = err.Error()
+	}
+}
+
+func setTaskSuccess(result *TaskResult, message string) {
+	result.Status = "completed"
+	result.Success = true
+	result.Message = message
+	result.CompletedAt = time.Now()
+	result.Duration = time.Since(result.StartedAt)
+}
+
+func updateRecordsProcessed(result *TaskResult, processed, fetched int) {
+	result.RecordsProcessed = processed
+	result.RecordsFetched = fetched
+}
+
+func wrapError(err error, message string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", message, err)
+}
 
 // NotificationTaskExecutor 通知任务执行器
 type NotificationTaskExecutor struct {
@@ -64,6 +97,7 @@ type NotificationParams struct {
 	Providers      []string  `json:"providers"`       // 云服务商列表
 	AlertThreshold float64   `json:"alert_threshold"` // 告警阈值
 	ForceNotify    bool      `json:"force_notify"`    // 强制发送
+	SendAsImage    bool      `json:"send_as_image"`   // 是否以图片形式发送
 }
 
 // ExecuteCostReport 执行费用报告任务（使用默认参数）
@@ -74,6 +108,7 @@ func (nte *NotificationTaskExecutor) ExecuteCostReport(ctx context.Context) (*Ta
 		Providers:      []string{"volcengine", "alicloud"}, // 默认支持的云服务商
 		AlertThreshold: nte.config.AlertThreshold,
 		ForceNotify:    false,
+		SendAsImage:    nte.config.SendAsImage, // 从配置中读取是否发送图片
 	}
 	return nte.ExecuteCostReportWithParams(ctx, params)
 }
@@ -102,12 +137,8 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 	}
 
 	if nte.wechatClient == nil {
-		err := fmt.Errorf("%w: wechat client not initialized, please check webhook URL configuration", ErrNotificationFailed)
-		result.Status = "failed"
-		result.Message = "微信客户端未初始化"
-		result.Error = err.Error()
-		result.CompletedAt = time.Now()
-		result.Duration = time.Since(startTime)
+		err := wrapError(ErrNotificationFailed, "wechat client not initialized, please check webhook URL configuration")
+		setTaskFailed(result, "微信客户端未初始化", err)
 		return result, err
 	}
 
@@ -128,7 +159,8 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 		zap.String("date", dateStr),
 		zap.Strings("providers", params.Providers),
 		zap.Float64("alert_threshold", params.AlertThreshold),
-		zap.Bool("force_notify", params.ForceNotify))
+		zap.Bool("force_notify", params.ForceNotify),
+		zap.Bool("send_as_image", params.SendAsImage))
 
 	analysisDateStr := "默认（将使用昨天）"
 	if !analysisReq.Date.IsZero() {
@@ -144,47 +176,69 @@ func (nte *NotificationTaskExecutor) ExecuteCostReportWithParams(ctx context.Con
 	if err != nil {
 		wrappedErr := fmt.Errorf("%w: cost analysis failed: %v", ErrDataValidationFailed, err)
 		logger.Error("Cost analysis failed", zap.Error(wrappedErr))
-		result.Status = "failed"
-		result.Message = "费用分析失败"
-		result.Error = wrappedErr.Error()
-		result.CompletedAt = time.Now()
-		result.Duration = time.Since(startTime)
+		setTaskFailed(result, "费用分析失败", wrappedErr)
 		return result, wrappedErr
 	}
 
-	// 转换为微信消息格式
-	wechatData := nte.analyzer.ConvertToWeChatFormat(analysisResult)
-
 	// 发送微信通知
-	if wechatCostData, ok := wechatData.(*wechat.CostComparisonData); ok {
-		if err := nte.wechatClient.SendCostReport(ctx, wechatCostData); err != nil {
-			wrappedErr := fmt.Errorf("%w: send wechat notification failed: %v", ErrNotificationFailed, err)
-			logger.Error("Failed to send WeChat notification", zap.Error(wrappedErr))
-			result.Status = "failed"
-			result.Message = "发送微信通知失败"
-			result.Error = wrappedErr.Error()
-			result.CompletedAt = time.Now()
-			result.Duration = time.Since(startTime)
-			return result, wrappedErr
+	if params.SendAsImage {
+		// 生成报告图片
+		logger.Info("Generating cost report image")
+		imageData, err := nte.analyzer.GenerateReportImage(analysisResult)
+		if err != nil {
+			logger.Warn("Failed to generate report image, falling back to text", zap.Error(err))
+			// 降级到文本消息
+			wechatData := nte.analyzer.ConvertToWeChatFormat(analysisResult)
+			if wechatCostData, ok := wechatData.(*wechat.CostComparisonData); ok {
+				if err := nte.wechatClient.SendCostReport(ctx, wechatCostData); err != nil {
+					wrappedErr := fmt.Errorf("%w: send wechat notification failed: %v", ErrNotificationFailed, err)
+					logger.Error("Failed to send WeChat notification", zap.Error(wrappedErr))
+					setTaskFailed(result, "发送微信通知失败", wrappedErr)
+					return result, wrappedErr
+				}
+			}
+		} else {
+			// 发送图片
+			logger.Info("Sending cost report as image", zap.Int("image_size_bytes", len(imageData)))
+			if err := nte.wechatClient.SendCostReportAsImage(ctx, imageData); err != nil {
+				logger.Warn("Failed to send report image, falling back to text", zap.Error(err))
+				// 降级到文本消息
+				wechatData := nte.analyzer.ConvertToWeChatFormat(analysisResult)
+				if wechatCostData, ok := wechatData.(*wechat.CostComparisonData); ok {
+					if err := nte.wechatClient.SendCostReport(ctx, wechatCostData); err != nil {
+						wrappedErr := fmt.Errorf("%w: send wechat notification failed: %v", ErrNotificationFailed, err)
+						logger.Error("Failed to send WeChat notification", zap.Error(wrappedErr))
+						setTaskFailed(result, "发送微信通知失败", wrappedErr)
+						return result, wrappedErr
+					}
+				}
+			} else {
+				logger.Info("Cost report image sent successfully")
+			}
 		}
 	} else {
-		wrappedErr := fmt.Errorf("%w: failed to convert wechat data format", ErrNotificationFailed)
-		logger.Error("Failed to convert WeChat data format", zap.Error(wrappedErr))
-		result.Status = "failed"
-		result.Message = "转换微信数据格式失败"
-		result.Error = wrappedErr.Error()
-		result.CompletedAt = time.Now()
-		result.Duration = time.Since(startTime)
-		return result, wrappedErr
+		// 发送文本消息
+		wechatData := nte.analyzer.ConvertToWeChatFormat(analysisResult)
+		if wechatCostData, ok := wechatData.(*wechat.CostComparisonData); ok {
+			if err := nte.wechatClient.SendCostReport(ctx, wechatCostData); err != nil {
+				wrappedErr := fmt.Errorf("%w: send wechat notification failed: %v", ErrNotificationFailed, err)
+				logger.Error("Failed to send WeChat notification", zap.Error(wrappedErr))
+				setTaskFailed(result, "发送微信通知失败", wrappedErr)
+				return result, wrappedErr
+			}
+		} else {
+			wrappedErr := wrapError(ErrNotificationFailed, "failed to convert wechat data format")
+			logger.Error("Failed to convert WeChat data format", zap.Error(wrappedErr))
+			setTaskFailed(result, "转换微信数据格式失败", wrappedErr)
+			return result, wrappedErr
+		}
 	}
 
 	// 任务完成
-	result.Status = "completed"
-	result.Message = fmt.Sprintf("费用报告通知发送成功，共分析 %d 个云服务商，发现 %d 个告警",
+	message := fmt.Sprintf("费用报告通知发送成功，共分析 %d 个云服务商，发现 %d 个告警",
 		len(analysisResult.Providers), len(analysisResult.Alerts))
-	result.CompletedAt = time.Now()
-	result.Duration = time.Since(startTime)
-	result.RecordsProcessed = nte.calculateTotalRecords(analysisResult)
+	setTaskSuccess(result, message)
+	updateRecordsProcessed(result, nte.calculateTotalRecords(analysisResult), 0)
 
 	logger.Info("Cost report notification task completed",
 		zap.Duration("duration", result.Duration),
@@ -243,15 +297,19 @@ func (nte *NotificationTaskExecutor) SendNotification(ctx context.Context, confi
 		Providers:      []string{"volcengine", "alicloud"}, // 默认支持的云服务商
 		AlertThreshold: nte.config.AlertThreshold,
 		ForceNotify:    config.ForceUpdate, // 使用ForceUpdate作为ForceNotify
+		SendAsImage:    nte.config.SendAsImage, // 从配置中读取是否发送图片
 	}
 
 	// 如果指定了账期，转换为日期
 	if config.BillPeriod != "" {
-		if date, err := time.Parse("2006-01-02", config.BillPeriod); err == nil {
-			params.Date = date
-		} else if date, err := time.Parse("2006-01", config.BillPeriod); err == nil {
-			// 如果是月份格式，使用该月的最后一天
-			params.Date = date.AddDate(0, 1, -1)
+		if parsedDate, err := dateutils.ParseFlexibleDate(config.BillPeriod); err == nil {
+			_, granularity, _ := dateutils.ParseBillPeriod(config.BillPeriod)
+			if granularity == dateutils.GranularityMonthly {
+				// 如果是月份格式，使用该月的最后一天
+				params.Date = parsedDate.AddDate(0, 1, -1)
+			} else {
+				params.Date = parsedDate
+			}
 		}
 	}
 

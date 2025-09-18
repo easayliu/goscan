@@ -1,9 +1,10 @@
 package middleware
 
 import (
+	"goscan/pkg/logger"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"goscan/pkg/logger"
 )
 
 // ErrorHandler handles errors in Gin requests

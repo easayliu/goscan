@@ -5,11 +5,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"goscan/pkg/logger"
 	_ "goscan/pkg/models"
 	"goscan/pkg/tasks"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // TriggerWeChatNotification manually triggers WeChat Enterprise notification
@@ -132,7 +133,7 @@ func (h *HandlerService) validateWeChatRequest(req *struct {
 	NotificationFormat string   `json:"notification_format,omitempty"`
 }) error {
 	// Set default values
-	if req.Providers == nil || len(req.Providers) == 0 {
+	if len(req.Providers) == 0 {
 		req.Providers = []string{"volcengine", "alicloud"}
 	}
 
@@ -202,10 +203,12 @@ func (h *HandlerService) executeWeChatNotification(req *struct {
 	}
 
 	// Create notification parameters
+	wechatConfig := h.config.GetWeChatConfig()
 	params := &tasks.NotificationParams{
 		Providers:      req.Providers,
 		AlertThreshold: req.AlertThreshold,
 		ForceNotify:    req.ForceNotify,
+		SendAsImage:    wechatConfig.SendAsImage,
 	}
 
 	// Only parse and set when user provides date

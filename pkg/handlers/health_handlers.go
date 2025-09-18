@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	_ "goscan/pkg/models"
+
+	"github.com/gin-gonic/gin"
 )
 
 // GetStatus returns the overall system status
@@ -152,7 +153,7 @@ func (h *HandlerService) checkConfigHealth() map[string]interface{} {
 	// Check critical configuration items
 	issues := []string{}
 
-	if h.config.ClickHouse.Hosts == nil || len(h.config.ClickHouse.Hosts) == 0 {
+	if len(h.config.ClickHouse.Hosts) == 0 {
 		issues = append(issues, "ClickHouse hosts not configured")
 	}
 

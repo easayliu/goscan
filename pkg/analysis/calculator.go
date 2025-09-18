@@ -11,7 +11,6 @@ type costCalculator struct {
 	alertThreshold float64
 }
 
-
 // newCostCalculator creates cost calculator
 func newCostCalculator(alertThreshold float64) *costCalculator {
 	return &costCalculator{
@@ -238,49 +237,4 @@ func (c *costCalculator) generateProductAlerts(providers []*ProviderCostMetric, 
 	return alerts
 }
 
-// calculateTotalCosts calculates total costs
-func (c *costCalculator) calculateTotalCosts(providers []*ProviderCostMetric) *CostMetric {
-	totalMetric := &CostMetric{
-		Name:     "Total Cost",
-		Currency: "CNY",
-	}
 
-	for _, provider := range providers {
-		if provider != nil && provider.TotalCost != nil {
-			totalMetric.YesterdayCost += provider.TotalCost.YesterdayCost
-			totalMetric.TodayCost += provider.TotalCost.TodayCost
-		}
-	}
-
-	totalMetric.CalculateChange()
-	totalMetric.SetSignificant(c.alertThreshold)
-
-	return totalMetric
-}
-
-// validateCostData validates cost data
-func (c *costCalculator) validateCostData(data []*RawCostData) error {
-	if len(data) == 0 {
-		return ErrNoDataFound
-	}
-
-	for i, item := range data {
-		if item == nil {
-			return NewValidationError("data", i, fmt.Sprintf("data item %d is nil", i))
-		}
-
-		if item.Provider == "" {
-			return NewValidationError("provider", item.Provider, fmt.Sprintf("provider name is empty for data item %d", i))
-		}
-
-		if item.Product == "" {
-			return NewValidationError("product", item.Product, fmt.Sprintf("product name is empty for data item %d", i))
-		}
-
-		if item.TotalAmount < 0 {
-			return NewValidationError("amount", item.TotalAmount, fmt.Sprintf("amount is negative for data item %d", i))
-		}
-	}
-
-	return nil
-}

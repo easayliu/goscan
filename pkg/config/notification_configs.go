@@ -9,6 +9,7 @@ type WeChatConfig struct {
 	MaxRetries         int      `json:"max_retries" yaml:"max_retries"`                 // maximum retry attempts
 	RetryDelay         int      `json:"retry_delay" yaml:"retry_delay"`                 // retry delay (seconds)
 	NotificationFormat string   `json:"notification_format" yaml:"notification_format"` // notification format: markdown/template_card/auto
+	SendAsImage        bool     `json:"send_as_image" yaml:"send_as_image"`             // whether to send as image
 }
 
 // NewWeChatConfig creates WeChat configuration with default values populated from environment variables
@@ -21,6 +22,7 @@ func NewWeChatConfig() *WeChatConfig {
 		MaxRetries:         getEnvInt("WECHAT_MAX_RETRIES", 3),
 		RetryDelay:         getEnvInt("WECHAT_RETRY_DELAY", 2),
 		NotificationFormat: getEnv("WECHAT_NOTIFICATION_FORMAT", "auto"),
+		SendAsImage:        getEnvBool("WECHAT_SEND_AS_IMAGE", false),
 	}
 }
 

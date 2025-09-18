@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"goscan/pkg/config"
 	"goscan/pkg/logger"
-	"regexp"
 	"strings"
 	"time"
 
@@ -469,89 +468,7 @@ func (tm *tableManager) CleanTableData(ctx context.Context, tableName string, co
 	return tm.DeleteByCondition(ctx, tableName, condition, args...)
 }
 
-// extractPartitionFromCondition extracts partition information from cleanup condition
-func (tm *tableManager) extractPartitionFromCondition(condition string) (partition string, canUse bool) {
-	logger.Debug("Partition detection: analyzing cleanup condition", zap.String("condition", condition))
 
-	// Handle daily billing date conditions: billing_date = '2024-09-09' -> partition 20240909 (toYYYYMMDD format)
-	if matches := regexp.MustCompile(`billing_date\s*=\s*'(\d{4}-\d{2}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
-		date := matches[1]
-		logger.Debug("Partition detection: matched daily condition", zap.String("date", date))
-		if len(date) == 10 { // YYYY-MM-DD format
-			yearMonthDay := strings.ReplaceAll(date, "-", "") // Remove all -, get YYYYMMDD format
-			logger.Debug("Partition detection: extracted daily table partition", zap.String("partition", yearMonthDay))
-			return yearMonthDay, true
-		}
-	}
-
-	// Handle monthly billing cycle conditions: billing_cycle = '2024-09' -> partition 202409
-	if matches := regexp.MustCompile(`billing_cycle\s*=\s*'(\d{4}-\d{2})'`).FindStringSubmatch(condition); len(matches) > 1 {
-		cycle := matches[1]
-		logger.Debug("Partition detection: matched monthly condition (Alibaba Cloud)", zap.String("cycle", cycle))
-		if len(cycle) == 7 { // YYYY-MM format
-			yearMonth := strings.Replace(cycle, "-", "", 1) // Remove -
-			logger.Debug("Partition detection: extracted partition", zap.String("partition", yearMonth))
-			return yearMonth, true
-		}
-	}
-
-	// Handle Volcengine ExpenseDate conditions: ExpenseDate partition
-	if matches := regexp.MustCompile(`ExpenseDate\s+LIKE\s+'(\d{4}-\d{2})%'`).FindStringSubmatch(condition); len(matches) > 1 {
-		cycle := matches[1]
-		logger.Debug("Partition detection: matched ExpenseDate condition (Volcengine)", zap.String("cycle", cycle))
-		if len(cycle) == 7 { // YYYY-MM format
-			yearMonth := strings.Replace(cycle, "-", "", 1) // Remove -
-			logger.Debug("Partition detection: extracted partition", zap.String("partition", yearMonth))
-			return yearMonth, true
-		}
-	}
-
-	// Handle Volcengine toYYYYMM(toDate(ExpenseDate)) conditions
-	if matches := regexp.MustCompile(`toYYYYMM\(toDate\(ExpenseDate\)\)\s*=\s*(\d{6})`).FindStringSubmatch(condition); len(matches) > 1 {
-		partition := matches[1]
-		logger.Debug("Partition detection: matched ExpenseDate function condition (Volcengine)", zap.String("partition", partition))
-		if len(partition) == 6 { // YYYYMM format
-			return partition, true
-		}
-	}
-
-	// Handle conditions containing month range: toYYYYMM(billing_date) = 202409
-	if matches := regexp.MustCompile(`toYYYYMM\([^)]+\)\s*=\s*(\d{6})`).FindStringSubmatch(condition); len(matches) > 1 {
-		partition := matches[1]
-		logger.Debug("Partition detection: matched function condition", zap.String("partition", partition))
-		if len(partition) == 6 { // YYYYMM format
-			return partition, true
-		}
-	}
-
-	// Handle complex monthly table cleanup conditions: toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01')) = toYYYYMM(now())
-	if regexp.MustCompile(`toYYYYMM\(parseDateTimeBestEffort\(billing_cycle\s*\|\|\s*'-01'\)\)\s*=\s*toYYYYMM\(now\(\)\)`).MatchString(condition) {
-		currentMonth := time.Now().Format("200601") // YYYYMM format
-		logger.Debug("Partition detection: matched complex monthly table condition", zap.String("current_month", currentMonth))
-		return currentMonth, true
-	}
-
-	logger.Debug("Partition detection: unable to extract partition info, will use DELETE")
-	return "", false
-}
-
-// checkPartitionExists 检查分区是否存在
-func (tm *tableManager) checkPartitionExists(ctx context.Context, tableName, partition string) (bool, error) {
-	query := `
-		SELECT COUNT(*) 
-		FROM system.parts 
-		WHERE database = ? AND table = ? AND partition = ? AND active = 1
-	`
-
-	row := tm.queryExecutor.QueryRow(ctx, query, tm.config.Database, tableName, partition)
-	var count uint64
-	err := row.Scan(&count)
-	if err != nil {
-		return false, WrapPartitionError(partition, fmt.Errorf("failed to check partition existence: %w", err))
-	}
-
-	return count > 0, nil
-}
 
 // String returns string representation of table information
 func (ti *TableInfo) String() string {

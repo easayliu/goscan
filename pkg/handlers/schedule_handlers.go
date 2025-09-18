@@ -3,11 +3,12 @@ package handlers
 import (
 	"net/http"
 
-	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 	"goscan/pkg/logger"
 	_ "goscan/pkg/models"
 	"goscan/pkg/scheduler"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // GetSchedulerStatus returns scheduler status

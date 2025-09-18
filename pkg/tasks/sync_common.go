@@ -287,7 +287,7 @@ func NewCommonDataValidator(chClient *clickhouse.Client) *CommonDataValidator {
 // PerformValidation executes data validation using provided rules
 func (v *CommonDataValidator) PerformValidation(ctx context.Context, provider DataValidationProvider, monthlyPeriods, dailyPeriods []string) (*DataCheckResult, error) {
 	startTime := time.Now()
-	
+
 	// Get validation rules from provider
 	rules := provider.GetValidationRules(monthlyPeriods, dailyPeriods)
 	if len(rules) == 0 {
@@ -318,7 +318,7 @@ func (v *CommonDataValidator) PerformValidation(ctx context.Context, provider Da
 			issue := fmt.Sprintf("Rule '%s' failed to execute: %v", rule.Name, err)
 			issues = append(issues, issue)
 			checksFailed++
-			
+
 			logger.Error("validation rule execution failed",
 				zap.String("rule", rule.Name),
 				zap.Error(err))
@@ -333,16 +333,16 @@ func (v *CommonDataValidator) PerformValidation(ctx context.Context, provider Da
 				zap.Int("result", result),
 				zap.Int("expected", rule.Expected))
 		} else {
-			issue := fmt.Sprintf("%s (%s): expected %d, got %d", 
+			issue := fmt.Sprintf("%s (%s): expected %d, got %d",
 				rule.Name, rule.Severity, rule.Expected, result)
 			issues = append(issues, issue)
-			
+
 			if rule.Severity == "error" {
 				checksFailed++
 			} else {
 				checksPassed++ // Warnings don't count as failures
 			}
-			
+
 			logger.Warn("validation rule failed",
 				zap.String("rule", rule.Name),
 				zap.String("severity", rule.Severity),
@@ -378,7 +378,7 @@ func (v *CommonDataValidator) PerformValidation(ctx context.Context, provider Da
 func (v *CommonDataValidator) executeValidationQuery(ctx context.Context, query string) (int, error) {
 	// Wrap the entire query to cast result to UInt64 for consistent type handling
 	wrappedQuery := fmt.Sprintf("SELECT CAST((%s) AS UInt64)", strings.TrimSpace(query))
-	
+
 	rows, err := v.chClient.Query(ctx, wrappedQuery)
 	if err != nil {
 		return 0, fmt.Errorf("failed to execute validation query: %w", err)
@@ -413,13 +413,13 @@ func NewCommonDataCleaner(chClient *clickhouse.Client) *CommonDataCleaner {
 func (c *CommonDataCleaner) CleanPeriodData(ctx context.Context, tableName, period, conditionField, provider string) error {
 	resolver := c.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(tableName)
-	
+
 	// Try partition drop first (more efficient)
 	partitionValue, canUsePartition := c.calculatePartitionValue(period, conditionField, provider)
 	if canUsePartition {
 		return c.dropPartitionByValue(ctx, actualTableName, partitionValue, provider, period)
 	}
-	
+
 	// Fallback to condition-based cleanup
 	condition := fmt.Sprintf("%s = '%s'", conditionField, period)
 	return c.conditionBasedCleanup(ctx, actualTableName, condition, provider, period)
@@ -451,7 +451,7 @@ func (c *CommonDataCleaner) calculatePartitionValue(period, conditionField, prov
 // dropPartitionByValue drops partition by specific partition value
 func (c *CommonDataCleaner) dropPartitionByValue(ctx context.Context, tableName, partitionValue, provider, period string) error {
 	clusterName := c.chClient.GetClusterName()
-	
+
 	// Build DROP PARTITION SQL
 	var dropSQL string
 	if clusterName != "" {
@@ -464,13 +464,13 @@ func (c *CommonDataCleaner) dropPartitionByValue(ctx context.Context, tableName,
 	} else {
 		dropSQL = fmt.Sprintf("ALTER TABLE %s DROP PARTITION '%s'", tableName, partitionValue)
 	}
-	
+
 	logger.Info("dropping partition for period cleanup",
 		zap.String("provider", provider),
 		zap.String("period", period),
 		zap.String("partition", partitionValue),
 		zap.String("sql", dropSQL))
-	
+
 	err := c.chClient.Exec(ctx, dropSQL)
 	if err != nil {
 		logger.Error("partition drop failed",
@@ -479,19 +479,19 @@ func (c *CommonDataCleaner) dropPartitionByValue(ctx context.Context, tableName,
 			zap.Error(err))
 		return fmt.Errorf("failed to drop partition %s: %w", partitionValue, err)
 	}
-	
+
 	logger.Info("partition drop completed",
 		zap.String("provider", provider),
 		zap.String("period", period),
 		zap.String("partition", partitionValue))
-	
+
 	return nil
 }
 
 // conditionBasedCleanup uses condition-based DELETE as fallback
 func (c *CommonDataCleaner) conditionBasedCleanup(ctx context.Context, tableName, condition, provider, period string) error {
 	clusterName := c.chClient.GetClusterName()
-	
+
 	// Build DELETE SQL
 	var deleteSQL string
 	if clusterName != "" {
@@ -499,21 +499,56 @@ func (c *CommonDataCleaner) conditionBasedCleanup(ctx context.Context, tableName
 	} else {
 		deleteSQL = fmt.Sprintf("ALTER TABLE %s DELETE WHERE %s", tableName, condition)
 	}
-	
+
 	logger.Info("using DELETE for period cleanup",
 		zap.String("provider", provider),
 		zap.String("period", period),
 		zap.String("sql", deleteSQL))
-	
+
 	err := c.chClient.Exec(ctx, deleteSQL)
 	if err != nil {
 		return fmt.Errorf("condition-based cleanup failed: %w", err)
 	}
-	
+
 	logger.Info("DELETE cleanup completed",
 		zap.String("provider", provider),
 		zap.String("period", period))
-	
+
 	return nil
 }
 
+// CleanTableData cleans table data based on a generic condition (implements cloudsync.DataCleaner interface)
+func (c *CommonDataCleaner) CleanTableData(ctx context.Context, tableName, condition string) error {
+	resolver := c.chClient.GetTableNameResolver()
+	actualTableName := resolver.ResolveQueryTarget(tableName)
+
+	clusterName := c.chClient.GetClusterName()
+
+	// Build DELETE SQL
+	var deleteSQL string
+	if clusterName != "" {
+		deleteSQL = fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DELETE WHERE %s", actualTableName, clusterName, condition)
+	} else {
+		deleteSQL = fmt.Sprintf("ALTER TABLE %s DELETE WHERE %s", actualTableName, condition)
+	}
+
+	logger.Info("cleaning table data",
+		zap.String("table", actualTableName),
+		zap.String("condition", condition),
+		zap.String("sql", deleteSQL))
+
+	err := c.chClient.Exec(ctx, deleteSQL)
+	if err != nil {
+		logger.Error("table cleanup failed",
+			zap.String("table", actualTableName),
+			zap.String("condition", condition),
+			zap.Error(err))
+		return fmt.Errorf("failed to clean table data: %w", err)
+	}
+
+	logger.Info("table cleanup completed",
+		zap.String("table", actualTableName),
+		zap.String("condition", condition))
+
+	return nil
+}

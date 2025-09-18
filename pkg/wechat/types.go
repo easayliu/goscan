@@ -9,6 +9,7 @@ const (
 	MessageTypeText         MessageType = "text"
 	MessageTypeMarkdown     MessageType = "markdown_v2" // 只使用支持表格的v2版本
 	MessageTypeTemplateCard MessageType = "template_card"
+	MessageTypeImage        MessageType = "image"
 )
 
 // WebhookMessage 企业微信webhook消息结构
@@ -18,6 +19,7 @@ type WebhookMessage struct {
 	Markdown     *MarkdownMsg  `json:"markdown,omitempty"`    // 旧版markdown
 	MarkdownV2   *MarkdownMsg  `json:"markdown_v2,omitempty"` // 新版markdown_v2
 	TemplateCard *TemplateCard `json:"template_card,omitempty"`
+	Image        *ImageMsg     `json:"image,omitempty"`
 }
 
 // TextMsg 文本消息
@@ -30,6 +32,12 @@ type TextMsg struct {
 // MarkdownMsg Markdown消息
 type MarkdownMsg struct {
 	Content string `json:"content"`
+}
+
+// ImageMsg 图片消息
+type ImageMsg struct {
+	Base64 string `json:"base64"` // 图片内容的base64编码
+	MD5    string `json:"md5"`    // 图片内容的md5值
 }
 
 // TemplateCard 模板卡片消息

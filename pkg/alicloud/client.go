@@ -3,13 +3,14 @@ package alicloud
 import (
 	"context"
 	"fmt"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/bssopenapi"
 	"goscan/pkg/config"
 	"goscan/pkg/logger"
 	"math"
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/bssopenapi"
 
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials"
@@ -18,11 +19,9 @@ import (
 )
 
 type Client struct {
-	config       *config.AliCloudConfig
-	bssClient    *bssopenapi.Client
-	rateLimiter  RateLimiterInterface
-	retryHandler *RetryHandler
-	errorHandler ErrorHandler
+	config      *config.AliCloudConfig
+	bssClient   *bssopenapi.Client
+	rateLimiter RateLimiterInterface
 }
 
 // RetryHandler retry handler
@@ -78,72 +77,6 @@ func (rh *RetryHandler) OnRetry(attempt int, err error) {
 		zap.Error(err))
 }
 
-// aliCloudErrorHandler 阿里云错误处理器
-type aliCloudErrorHandler struct{}
-
-// HandleError 处理错误
-func (h *aliCloudErrorHandler) HandleError(ctx context.Context, err error) error {
-	if err == nil {
-		return nil
-	}
-
-	// 将SDK错误转换为我们的错误类型
-	if apiErr := h.convertToAPIError(err); apiErr != nil {
-		return apiErr
-	}
-
-	return WrapError(err, "api call failed")
-}
-
-// ShouldRetry 判断是否应该重试
-func (h *aliCloudErrorHandler) ShouldRetry(err error) bool {
-	return IsRetryableError(err)
-}
-
-// GetRetryDelay 获取重试延迟
-func (h *aliCloudErrorHandler) GetRetryDelay(attempt int) time.Duration {
-	baseDelay := time.Second
-	maxDelay := 30 * time.Second
-
-	delay := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt)))
-	if delay > maxDelay {
-		delay = maxDelay
-	}
-
-	return delay
-}
-
-// OnRetry 重试时的回调
-func (h *aliCloudErrorHandler) OnRetry(attempt int, err error) {
-	logger.Warn("error handling retry",
-		zap.String("provider", "alicloud"),
-		zap.Int("attempt", attempt),
-		zap.Error(err))
-}
-
-// convertToAPIError 将SDK错误转换为 API 错误
-func (h *aliCloudErrorHandler) convertToAPIError(err error) *APIError {
-	errStr := err.Error()
-
-	// 尝试从错误信息中提取错误代码
-	if strings.Contains(errStr, "Throttling") {
-		return NewAPIError("Throttling", "API rate limit exceeded", errStr, 429)
-	}
-	if strings.Contains(errStr, "InvalidAccessKeyId") {
-		return NewAPIError("InvalidAccessKeyId", "Invalid access key", errStr, 403)
-	}
-	if strings.Contains(errStr, "SignatureDoesNotMatch") {
-		return NewAPIError("SignatureDoesNotMatch", "Invalid signature", errStr, 403)
-	}
-	if strings.Contains(errStr, "Forbidden") {
-		return NewAPIError("Forbidden", "Access denied", errStr, 403)
-	}
-	if strings.Contains(errStr, "InternalError") {
-		return NewAPIError("InternalError", "Internal server error", errStr, 500)
-	}
-
-	return nil
-}
 
 // 实现 BillProvider 接口
 var _ BillProvider = (*Client)(nil)

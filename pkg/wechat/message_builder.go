@@ -43,6 +43,17 @@ func (b *DefaultMessageBuilder) BuildTemplateCardMessage(card *TemplateCard) *We
 	}
 }
 
+// BuildImageMessage builds image message
+func (b *DefaultMessageBuilder) BuildImageMessage(base64, md5 string) *WebhookMessage {
+	return &WebhookMessage{
+		MsgType: MessageTypeImage,
+		Image: &ImageMsg{
+			Base64: base64,
+			MD5:    md5,
+		},
+	}
+}
+
 // DefaultMessageFormatter default message formatter
 type DefaultMessageFormatter struct{}
 
@@ -228,20 +239,6 @@ func (f *DefaultMessageFormatter) getProviderIcon(provider string) string {
 	}
 }
 
-// formatCostChange formats cost change
-func (f *DefaultMessageFormatter) formatCostChange(total *CostChange) string {
-	if total.ChangeAmount != 0 {
-		changeIcon := total.GetChangeIcon()
-		if total.ChangeAmount > 0 {
-			return fmt.Sprintf("%s **+%.2f元 (%+.1f%%)**",
-				changeIcon, total.ChangeAmount, total.ChangePercent)
-		} else {
-			return fmt.Sprintf("%s %.2f元 (%.1f%%)",
-				changeIcon, total.ChangeAmount, total.ChangePercent)
-		}
-	}
-	return "➡️ 无变化"
-}
 
 // formatProductChange formats product cost change
 func (f *DefaultMessageFormatter) formatProductChange(product *CostChange) string {

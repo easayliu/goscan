@@ -97,6 +97,9 @@ type MessageBuilder interface {
 
 	// BuildTemplateCardMessage 构建模板卡片消息
 	BuildTemplateCardMessage(card *TemplateCard) *WebhookMessage
+
+	// BuildImageMessage 构建图片消息
+	BuildImageMessage(base64, md5 string) *WebhookMessage
 }
 
 // RetryPolicy 重试策略接口

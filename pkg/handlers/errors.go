@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"go.uber.org/zap"
 	"goscan/pkg/logger"
 	"goscan/pkg/response"
+
+	"go.uber.org/zap"
 )
 
 // Common error type definitions

@@ -23,9 +23,9 @@ const (
 )
 
 var (
-	Logger           *zap.Logger
-	Sugar            *zap.SugaredLogger
-	atomicLevel      zap.AtomicLevel
+	Logger            *zap.Logger
+	Sugar             *zap.SugaredLogger
+	atomicLevel       zap.AtomicLevel
 	callerDisplayMode = CallerShort // Default to most concise
 )
 
@@ -257,7 +257,7 @@ func UseFullPaths() {
 func formatCallerPath(caller zapcore.EntryCaller) string {
 	fullPath := caller.TrimmedPath()
 	var result string
-	
+
 	switch callerDisplayMode {
 	case CallerShort:
 		// Extract just filename:line (intelligent_sync.go:116)
@@ -267,33 +267,33 @@ func formatCallerPath(caller zapcore.EntryCaller) string {
 		} else {
 			result = fullPath
 		}
-		
+
 	case CallerMedium:
 		// Remove common prefixes, keep package/file.go:line
 		shortened := strings.TrimPrefix(fullPath, "pkg/")
 		shortened = strings.TrimPrefix(shortened, "cmd/")
 		shortened = strings.TrimPrefix(shortened, "internal/")
-		
+
 		parts := strings.Split(shortened, "/")
 		if len(parts) > 2 {
 			result = strings.Join(parts[len(parts)-2:], "/")
 		} else {
 			result = shortened
 		}
-		
+
 	case CallerFull:
 		result = fullPath
-		
+
 	default:
 		result = fullPath
 	}
-	
+
 	// Apply fixed width formatting for alignment
 	const callerWidth = 28
 	if len(result) > callerWidth {
 		// Truncate with ellipsis, keep the end part (filename:line)
 		result = "..." + result[len(result)-(callerWidth-3):]
 	}
-	
+
 	return fmt.Sprintf("%-*s", callerWidth, result)
 }
