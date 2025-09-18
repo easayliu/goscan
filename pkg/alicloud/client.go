@@ -77,7 +77,6 @@ func (rh *RetryHandler) OnRetry(attempt int, err error) {
 		zap.Error(err))
 }
 
-
 // 实现 BillProvider 接口
 var _ BillProvider = (*Client)(nil)
 

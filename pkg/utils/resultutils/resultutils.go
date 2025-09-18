@@ -49,12 +49,12 @@ func SetTaskFailed(result *TaskResult, err error) {
 	if result == nil {
 		return
 	}
-	
+
 	result.Status = StatusFailed
 	result.Success = false
 	result.CompletedAt = time.Now()
 	result.Duration = time.Since(result.StartedAt)
-	
+
 	if err != nil {
 		result.Error = err.Error()
 	}
@@ -73,12 +73,12 @@ func SetTaskSuccess(result *TaskResult, message string) {
 	if result == nil {
 		return
 	}
-	
+
 	result.Status = StatusCompleted
 	result.Success = true
 	result.CompletedAt = time.Now()
 	result.Duration = time.Since(result.StartedAt)
-	
+
 	if message != "" {
 		result.Message = message
 	}
@@ -89,12 +89,12 @@ func SetTaskSkipped(result *TaskResult, reason string) {
 	if result == nil {
 		return
 	}
-	
+
 	result.Status = StatusSkipped
 	result.Success = true
 	result.CompletedAt = time.Now()
 	result.Duration = time.Since(result.StartedAt)
-	
+
 	if reason != "" {
 		result.Message = reason
 	}
@@ -105,7 +105,7 @@ func SetTaskRunning(result *TaskResult) {
 	if result == nil {
 		return
 	}
-	
+
 	result.Status = StatusRunning
 	result.Success = false
 }
@@ -115,7 +115,7 @@ func UpdateRecordsProcessed(result *TaskResult, processed, fetched int) {
 	if result == nil {
 		return
 	}
-	
+
 	result.RecordsProcessed = processed
 	result.RecordsFetched = fetched
 }
@@ -125,11 +125,11 @@ func AddMetadata(result *TaskResult, key string, value interface{}) {
 	if result == nil {
 		return
 	}
-	
+
 	if result.Metadata == nil {
 		result.Metadata = make(map[string]interface{})
 	}
-	
+
 	result.Metadata[key] = value
 }
 
@@ -138,7 +138,7 @@ func GetMetadata(result *TaskResult, key string) (interface{}, bool) {
 	if result == nil || result.Metadata == nil {
 		return nil, false
 	}
-	
+
 	value, exists := result.Metadata[key]
 	return value, exists
 }
@@ -148,11 +148,11 @@ func WrapError(err error, context string) error {
 	if err == nil {
 		return nil
 	}
-	
+
 	if context == "" {
 		return err
 	}
-	
+
 	return fmt.Errorf("%s: %w", context, err)
 }
 
@@ -161,7 +161,7 @@ func WrapErrorf(err error, format string, args ...interface{}) error {
 	if err == nil {
 		return nil
 	}
-	
+
 	context := fmt.Sprintf(format, args...)
 	return fmt.Errorf("%s: %w", context, err)
 }
@@ -175,7 +175,7 @@ type ValidationError struct {
 
 // Error implements the error interface
 func (ve *ValidationError) Error() string {
-	return fmt.Sprintf("validation failed for field '%s' with value '%v': %s", 
+	return fmt.Sprintf("validation failed for field '%s' with value '%v': %s",
 		ve.Field, ve.Value, ve.Message)
 }
 
@@ -227,14 +227,14 @@ func CreateTaskSummary(result *TaskResult) string {
 	if result == nil {
 		return "No result available"
 	}
-	
+
 	status := result.Status
 	if result.Success {
 		status = "successful"
 	}
-	
-	return fmt.Sprintf("Task %s (%s) %s: processed %d/%d records in %s", 
-		result.ID, result.Type, status, 
+
+	return fmt.Sprintf("Task %s (%s) %s: processed %d/%d records in %s",
+		result.ID, result.Type, status,
 		result.RecordsProcessed, result.RecordsFetched,
 		FormatDuration(result.Duration))
 }
@@ -244,11 +244,11 @@ func IsTaskCompleted(result *TaskResult) bool {
 	if result == nil {
 		return false
 	}
-	
-	return result.Status == StatusCompleted || 
-		   result.Status == StatusFailed || 
-		   result.Status == StatusSkipped ||
-		   result.Status == StatusCancelled
+
+	return result.Status == StatusCompleted ||
+		result.Status == StatusFailed ||
+		result.Status == StatusSkipped ||
+		result.Status == StatusCancelled
 }
 
 // IsTaskSuccessful checks if a task completed successfully
@@ -256,9 +256,9 @@ func IsTaskSuccessful(result *TaskResult) bool {
 	if result == nil {
 		return false
 	}
-	
-	return (result.Status == StatusCompleted || result.Status == StatusSkipped) && 
-		   result.Success
+
+	return (result.Status == StatusCompleted || result.Status == StatusSkipped) &&
+		result.Success
 }
 
 // IsTaskFailed checks if a task failed
@@ -266,9 +266,9 @@ func IsTaskFailed(result *TaskResult) bool {
 	if result == nil {
 		return false
 	}
-	
-	return result.Status == StatusFailed || 
-		   (result.Status == StatusCompleted && !result.Success)
+
+	return result.Status == StatusFailed ||
+		(result.Status == StatusCompleted && !result.Success)
 }
 
 // CopyResult creates a copy of a task result
@@ -276,7 +276,7 @@ func CopyResult(source *TaskResult) *TaskResult {
 	if source == nil {
 		return nil
 	}
-	
+
 	result := &TaskResult{
 		ID:               source.ID,
 		Type:             source.Type,
@@ -290,7 +290,7 @@ func CopyResult(source *TaskResult) *TaskResult {
 		StartedAt:        source.StartedAt,
 		CompletedAt:      source.CompletedAt,
 	}
-	
+
 	// Deep copy metadata
 	if source.Metadata != nil {
 		result.Metadata = make(map[string]interface{})
@@ -298,7 +298,7 @@ func CopyResult(source *TaskResult) *TaskResult {
 			result.Metadata[k] = v
 		}
 	}
-	
+
 	return result
 }
 
@@ -307,64 +307,64 @@ func MergeResults(results []*TaskResult, summaryID, summaryType string) *TaskRes
 	if len(results) == 0 {
 		return NewTaskResult(summaryID, summaryType, "No tasks to merge")
 	}
-	
+
 	merged := NewTaskResult(summaryID, summaryType, "Merged task results")
-	
+
 	var totalProcessed, totalFetched int
 	var allSuccessful = true
 	var allMessages []string
 	var earliestStart time.Time
 	var latestEnd time.Time
-	
+
 	for i, result := range results {
 		if result == nil {
 			continue
 		}
-		
+
 		totalProcessed += result.RecordsProcessed
 		totalFetched += result.RecordsFetched
-		
+
 		if !result.Success {
 			allSuccessful = false
 		}
-		
+
 		if result.Message != "" {
 			allMessages = append(allMessages, fmt.Sprintf("Task %d: %s", i+1, result.Message))
 		}
-		
+
 		if earliestStart.IsZero() || result.StartedAt.Before(earliestStart) {
 			earliestStart = result.StartedAt
 		}
-		
+
 		if latestEnd.IsZero() || result.CompletedAt.After(latestEnd) {
 			latestEnd = result.CompletedAt
 		}
 	}
-	
+
 	merged.RecordsProcessed = totalProcessed
 	merged.RecordsFetched = totalFetched
 	merged.Success = allSuccessful
 	merged.StartedAt = earliestStart
 	merged.CompletedAt = latestEnd
-	
+
 	if !latestEnd.IsZero() && !earliestStart.IsZero() {
 		merged.Duration = latestEnd.Sub(earliestStart)
 	}
-	
+
 	if allSuccessful {
 		merged.Status = StatusCompleted
-		merged.Message = fmt.Sprintf("Successfully merged %d tasks: processed %d records", 
+		merged.Message = fmt.Sprintf("Successfully merged %d tasks: processed %d records",
 			len(results), totalProcessed)
 	} else {
 		merged.Status = StatusFailed
-		merged.Message = fmt.Sprintf("Merged %d tasks with some failures: processed %d records", 
+		merged.Message = fmt.Sprintf("Merged %d tasks with some failures: processed %d records",
 			len(results), totalProcessed)
 	}
-	
+
 	// Add individual messages as metadata
 	if len(allMessages) > 0 {
 		AddMetadata(merged, "individual_messages", allMessages)
 	}
-	
+
 	return merged
 }

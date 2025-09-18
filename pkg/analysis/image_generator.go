@@ -30,12 +30,12 @@ type ImageConfig struct {
 // DefaultImageConfig returns optimized image configuration for better readability
 func DefaultImageConfig() *ImageConfig {
 	return &ImageConfig{
-		Width:       1400,  // increased width for better layout
-		Height:      0,     // dynamic
-		Padding:     50,    // increased padding for better spacing
-		CardGap:     30,    // increased gap between cards
-		CardPadding: 25,    // increased internal card padding
-		MaxSizeMB:   8.0,   // increased size limit for higher quality
+		Width:       1400, // increased width for better layout
+		Height:      0,    // dynamic
+		Padding:     50,   // increased padding for better spacing
+		CardGap:     30,   // increased gap between cards
+		CardPadding: 25,   // increased internal card padding
+		MaxSizeMB:   8.0,  // increased size limit for higher quality
 	}
 }
 
@@ -48,14 +48,14 @@ type ImageGenerator struct {
 
 // ColorScheme defines color scheme for the image
 type ColorScheme struct {
-	Background  color.Color
-	CardBG      color.Color
-	Primary     color.Color
-	Secondary   color.Color
-	Success     color.Color
-	Warning     color.Color
-	Danger      color.Color
-	Border      color.Color
+	Background color.Color
+	CardBG     color.Color
+	Primary    color.Color
+	Secondary  color.Color
+	Success    color.Color
+	Warning    color.Color
+	Danger     color.Color
+	Border     color.Color
 }
 
 // DefaultColorScheme returns optimized color scheme for better contrast and readability
@@ -77,7 +77,7 @@ func NewImageGenerator(config *ImageConfig) *ImageGenerator {
 	if config == nil {
 		config = DefaultImageConfig()
 	}
-	
+
 	return &ImageGenerator{
 		config:      config,
 		colors:      DefaultColorScheme(),
@@ -102,11 +102,11 @@ func (g *ImageGenerator) GenerateReport(result *CostAnalysisResult) ([]byte, err
 
 	// Create gg context
 	dc := gg.NewContext(g.config.Width, g.config.Height)
-	
+
 	// Set background
 	dc.SetColor(g.colors.Background)
 	dc.Clear()
-	
+
 	// Load and set font
 	if err := g.loadFont(dc); err != nil {
 		logger.Warn("failed to load font, using default", zap.Error(err))
@@ -117,7 +117,7 @@ func (g *ImageGenerator) GenerateReport(result *CostAnalysisResult) ([]byte, err
 	// Draw sections
 	y = g.drawHeaderGG(dc, result, y)
 	y = g.drawSummaryCardGG(dc, result.TotalCost, y)
-	
+
 	for _, provider := range result.Providers {
 		y = g.drawProviderCardGG(dc, provider, y)
 	}
@@ -164,17 +164,17 @@ func (g *ImageGenerator) drawHeader(img draw.Image, result *CostAnalysisResult, 
 	// Title with enhanced spacing
 	title := "云服务费用日报"
 	g.drawTextWithFont(img, title, g.config.Padding, y+5, g.colors.Primary, FontSizeXLarge)
-	
+
 	// Date with better spacing and improved formatting
 	y += 45
 	date := fmt.Sprintf("报告日期: %s", result.Date.Format("2006年01月02日"))
 	g.drawTextWithFont(img, date, g.config.Padding, y, g.colors.Secondary, FontSizeLarge)
-	
+
 	// Add generation timestamp for transparency
 	y += 25
 	generatedAt := fmt.Sprintf("生成时间: %s", result.GeneratedAt.Format("15:04:05"))
 	g.drawTextWithFont(img, generatedAt, g.config.Padding, y, g.colors.Secondary, FontSizeMedium)
-	
+
 	return y + 30
 }
 
@@ -185,21 +185,21 @@ func (g *ImageGenerator) loadFont(dc *gg.Context) error {
 		"assets/fonts/SourceHanSansSC-Regular.otf",
 		"./assets/fonts/SourceHanSansSC-Regular.otf",
 		"/System/Library/Fonts/PingFang.ttc",
-		"/System/Library/Fonts/STHeiti Light.ttc", 
+		"/System/Library/Fonts/STHeiti Light.ttc",
 		"/System/Library/Fonts/Helvetica.ttc",
 		"/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
 		"/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
 		"C:\\Windows\\Fonts\\simsun.ttc",
 		"C:\\Windows\\Fonts\\msyh.ttc",
 	}
-	
+
 	for _, fontPath := range fontPaths {
 		if err := dc.LoadFontFace(fontPath, 14); err == nil {
 			logger.Info("successfully loaded font", zap.String("path", fontPath))
 			return nil
 		}
 	}
-	
+
 	return fmt.Errorf("no suitable font found")
 }
 
@@ -253,7 +253,7 @@ func (g *ImageGenerator) drawProviderCard(img draw.Image, provider *ProviderCost
 	// Provider header with visual separator
 	providerText := provider.DisplayName
 	g.drawTextWithFont(img, providerText, contentX, contentY, g.colors.Primary, FontSizeXLarge)
-	
+
 	// Cost amount with better positioning
 	costText := fmt.Sprintf("¥%.2f", provider.TotalCost.TodayCost)
 	midX := g.config.Width/2 + 100
@@ -290,19 +290,19 @@ func (g *ImageGenerator) drawProductList(img draw.Image, products []*CostMetric,
 	// Add section header
 	g.drawTextWithFont(img, "产品明细:", x, y, g.colors.Secondary, FontSizeMedium)
 	y += 25
-	
+
 	for i, product := range products {
 		currentY := y + i*30
-		
+
 		// Product name and cost with better formatting
 		productText := fmt.Sprintf("• %s", product.Name)
 		g.drawTextWithFont(img, productText, x+10, currentY, g.colors.Primary, FontSizeMedium)
-		
+
 		// Cost amount
 		costText := fmt.Sprintf("¥%.2f", product.TodayCost)
 		midX := g.config.Width/2 + 50
 		g.drawTextWithFont(img, costText, midX, currentY, g.colors.Primary, FontSizeMedium)
-		
+
 		// Change indicator with enhanced visibility
 		if math.Abs(product.ChangePercent) > 0.1 {
 			rightX := g.config.Width - g.config.Padding - g.config.CardPadding - 20
@@ -340,7 +340,7 @@ func (g *ImageGenerator) drawAlertsCard(img draw.Image, alerts []string, y int) 
 		alertText := fmt.Sprintf("• %s", alert)
 		g.drawTextWithFont(img, alertText, contentX+10, contentY, g.colors.Danger, FontSizeLarge)
 		contentY += 30
-		
+
 		// Add spacing between multiple alerts
 		if i < len(alerts)-1 {
 			contentY += 5
@@ -356,7 +356,7 @@ func (g *ImageGenerator) drawCard(img draw.Image, x, y, width, height int) {
 	// Card background
 	cardRect := image.Rect(x, y, x+width, y+height)
 	draw.Draw(img, cardRect, &image.Uniform{g.colors.CardBG}, image.Point{}, draw.Src)
-	
+
 	// Enhanced border with rounded corners effect
 	g.drawEnhancedBorder(img, x, y, width, height, g.colors.Border)
 }
@@ -367,11 +367,11 @@ func (g *ImageGenerator) drawCardWithShadow(img draw.Image, x, y, width, height 
 	shadowColor := color.RGBA{0, 0, 0, 30} // Very light shadow
 	shadowRect := image.Rect(x+2, y+2, x+width+2, y+height+2)
 	draw.Draw(img, shadowRect, &image.Uniform{shadowColor}, image.Point{}, draw.Src)
-	
+
 	// Main card
 	cardRect := image.Rect(x, y, x+width, y+height)
 	draw.Draw(img, cardRect, &image.Uniform{g.colors.CardBG}, image.Point{}, draw.Src)
-	
+
 	// Enhanced border
 	g.drawEnhancedBorder(img, x, y, width, height, g.colors.Border)
 }
@@ -393,25 +393,25 @@ func (g *ImageGenerator) drawBorder(img draw.Image, x, y, width, height int, c c
 func (g *ImageGenerator) drawEnhancedBorder(img draw.Image, x, y, width, height int, c color.Color) {
 	// Draw main border lines
 	g.drawBorder(img, x, y, width, height, c)
-	
+
 	// Add subtle corner rounding by removing corner pixels
 	backgroundColor := g.colors.Background
-	
+
 	// Top-left corner
 	img.Set(x, y, backgroundColor)
 	img.Set(x+1, y, c)
 	img.Set(x, y+1, c)
-	
-	// Top-right corner  
+
+	// Top-right corner
 	img.Set(x+width-1, y, backgroundColor)
 	img.Set(x+width-2, y, c)
 	img.Set(x+width-1, y+1, c)
-	
+
 	// Bottom-left corner
 	img.Set(x, y+height-1, backgroundColor)
 	img.Set(x+1, y+height-1, c)
 	img.Set(x, y+height-2, c)
-	
+
 	// Bottom-right corner
 	img.Set(x+width-1, y+height-1, backgroundColor)
 	img.Set(x+width-2, y+height-1, c)
@@ -424,11 +424,11 @@ func (g *ImageGenerator) drawWarningCard(img draw.Image, x, y, width, height int
 	warningBG := color.RGBA{255, 252, 240, 255} // Very light yellow tint
 	cardRect := image.Rect(x, y, x+width, y+height)
 	draw.Draw(img, cardRect, &image.Uniform{warningBG}, image.Point{}, draw.Src)
-	
+
 	// Warning border with orange color
 	warningBorder := color.RGBA{245, 158, 11, 180} // Semi-transparent warning color
 	g.drawEnhancedBorder(img, x, y, width, height, warningBorder)
-	
+
 	// Add left accent bar for visual emphasis
 	for i := 0; i < height; i++ {
 		img.Set(x+1, y+i, g.colors.Warning)
@@ -447,7 +447,7 @@ func (g *ImageGenerator) drawHorizontalLine(img draw.Image, x, y, width int, c c
 // drawTextWithFont draws text using the font manager
 func (g *ImageGenerator) drawTextWithFont(img draw.Image, text string, x, y int, c color.Color, fontSize FontSize) {
 	face := g.fontManager.GetFont(fontSize)
-	
+
 	// Try to use FreetypeFace if available
 	if freetypeFace, ok := face.(*FreetypeFace); ok {
 		// Use freetype's direct text drawing
@@ -456,7 +456,7 @@ func (g *ImageGenerator) drawTextWithFont(img draw.Image, text string, x, y int,
 			return // Successfully drawn with freetype
 		}
 	}
-	
+
 	// Fallback to standard font.Drawer
 	point := fixed.Point26_6{
 		X: fixed.I(x),
@@ -476,18 +476,18 @@ func (g *ImageGenerator) drawTextWithFont(img draw.Image, text string, x, y int,
 // drawTextRightWithFont draws right-aligned text using the font manager
 func (g *ImageGenerator) drawTextRightWithFont(img draw.Image, text string, x, y int, c color.Color, fontSize FontSize) {
 	face := g.fontManager.GetFont(fontSize)
-	
+
 	// Try to measure text width accurately
 	var textWidth int
 	if _, ok := face.(*FreetypeFace); ok {
 		// For freetype, use approximate width based on character count and font size
-		textWidth = len([]rune(text)) * int(float64(fontSize) * 0.6) // Approximate character width
+		textWidth = len([]rune(text)) * int(float64(fontSize)*0.6) // Approximate character width
 	} else {
 		// Use standard measurement
 		measured := font.MeasureString(face, text)
 		textWidth = int(measured.Round())
 	}
-	
+
 	adjustedX := x - textWidth
 	g.drawTextWithFont(img, text, adjustedX, y, c, fontSize)
 }
@@ -514,18 +514,18 @@ func (g *ImageGenerator) encodePNG(img image.Image) ([]byte, error) {
 	}
 
 	data := buf.Bytes()
-	
+
 	// Enhanced size validation with detailed logging
 	sizeMB := float64(len(data)) / 1024 / 1024
-	logger.Info("generated PNG image", 
+	logger.Info("generated PNG image",
 		zap.Float64("size_mb", sizeMB),
 		zap.Int("width", g.config.Width),
 		zap.Int("height", g.config.Height),
 		zap.String("format", "PNG"))
-		
+
 	if sizeMB > g.config.MaxSizeMB {
-		logger.Warn("PNG image exceeds size limit", 
-			zap.Float64("actual_size_mb", sizeMB), 
+		logger.Warn("PNG image exceeds size limit",
+			zap.Float64("actual_size_mb", sizeMB),
 			zap.Float64("limit_mb", g.config.MaxSizeMB),
 			zap.String("recommendation", "consider reducing image dimensions or content"))
 	}
@@ -537,27 +537,27 @@ func (g *ImageGenerator) encodePNG(img image.Image) ([]byte, error) {
 func (g *ImageGenerator) GenerateImageAsync(ctx context.Context, result *CostAnalysisResult) (<-chan []byte, <-chan error) {
 	imageChan := make(chan []byte, 1)
 	errChan := make(chan error, 1)
-	
+
 	go func() {
 		defer close(imageChan)
 		defer close(errChan)
-		
+
 		select {
 		case <-ctx.Done():
 			errChan <- ctx.Err()
 			return
 		default:
 		}
-		
+
 		imageData, err := g.GenerateReport(result)
 		if err != nil {
 			errChan <- err
 			return
 		}
-		
+
 		imageChan <- imageData
 	}()
-	
+
 	return imageChan, errChan
 }
 
@@ -570,23 +570,23 @@ func (g *ImageGenerator) drawHeaderGG(dc *gg.Context, result *CostAnalysisResult
 	dc.SetColor(g.colors.Primary)
 	title := "云服务费用日报 - 昨日报告"
 	dc.DrawString(title, float64(g.config.Padding), y+25)
-	
+
 	// Date range - showing yesterday vs day before
 	y += 50
 	dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 18)
 	dc.SetColor(g.colors.Primary)
-	dateRange := fmt.Sprintf("统计日期: %s (对比 %s)", 
+	dateRange := fmt.Sprintf("统计日期: %s (对比 %s)",
 		result.Date.Format("2006年01月02日"),
 		result.Date.AddDate(0, 0, -1).Format("01月02日"))
 	dc.DrawString(dateRange, float64(g.config.Padding), y+20)
-	
+
 	// Generation timestamp with full date and time
 	y += 30
 	dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 16)
 	dc.SetColor(g.colors.Secondary)
 	generatedAt := fmt.Sprintf("生成时间: %s", result.GeneratedAt.Format("2006-01-02 15:04:05"))
 	dc.DrawString(generatedAt, float64(g.config.Padding), y+20)
-	
+
 	return y + 35
 }
 
@@ -596,7 +596,7 @@ func (g *ImageGenerator) drawSummaryCardGG(dc *gg.Context, total *CostMetric, y 
 		return y
 	}
 
-	cardHeight := 150.0  // Height for all content
+	cardHeight := 150.0 // Height for all content
 	g.drawCardGG(dc, float64(g.config.Padding), y, float64(g.config.Width-g.config.Padding*2), cardHeight)
 
 	contentX := float64(g.config.Padding + g.config.CardPadding)
@@ -613,7 +613,7 @@ func (g *ImageGenerator) drawSummaryCardGG(dc *gg.Context, total *CostMetric, y 
 	dc.SetColor(g.colors.Primary)
 	yesterdayStr := fmt.Sprintf("昨日费用: ¥%.2f", total.TodayCost)
 	dc.DrawString(yesterdayStr, contentX, contentY+24)
-	
+
 	// Day before yesterday's cost for comparison
 	contentY += 35
 	dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 18)
@@ -625,13 +625,13 @@ func (g *ImageGenerator) drawSummaryCardGG(dc *gg.Context, total *CostMetric, y 
 	contentY += 30
 	dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 17)
 	if total.ChangePercent > 0 {
-		changeStr := fmt.Sprintf("较前日上升 ¥%.2f (+%.1f%%)", 
-			total.TodayCost - total.YesterdayCost, total.ChangePercent)
+		changeStr := fmt.Sprintf("较前日上升 ¥%.2f (+%.1f%%)",
+			total.TodayCost-total.YesterdayCost, total.ChangePercent)
 		dc.SetColor(g.colors.Danger)
 		dc.DrawString(changeStr, contentX, contentY+17)
 	} else if total.ChangePercent < 0 {
-		changeStr := fmt.Sprintf("较前日下降 ¥%.2f (-%.1f%%)", 
-			math.Abs(total.TodayCost - total.YesterdayCost), math.Abs(total.ChangePercent))
+		changeStr := fmt.Sprintf("较前日下降 ¥%.2f (-%.1f%%)",
+			math.Abs(total.TodayCost-total.YesterdayCost), math.Abs(total.ChangePercent))
 		dc.SetColor(g.colors.Success)
 		dc.DrawString(changeStr, contentX, contentY+17)
 	} else {
@@ -660,7 +660,7 @@ func (g *ImageGenerator) drawProviderCardGG(dc *gg.Context, provider *ProviderCo
 	dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 18)
 	dc.SetColor(g.colors.Primary)
 	dc.DrawString(provider.DisplayName, contentX, contentY+20)
-	
+
 	// Yesterday's cost (center aligned)
 	dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 16)
 	dc.SetColor(g.colors.Primary)
@@ -711,27 +711,27 @@ func (g *ImageGenerator) drawProductListGG(dc *gg.Context, products []*CostMetri
 	dc.SetColor(g.colors.Secondary)
 	dc.DrawString("产品明细:", x, y+16)
 	y += 35
-	
+
 	for i, product := range products {
 		currentY := y + float64(i*40) // Proper spacing between products
-		
+
 		// Product name (left aligned)
 		dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 15)
 		dc.SetColor(g.colors.Primary)
 		productText := fmt.Sprintf("• %s", product.Name)
 		dc.DrawString(productText, x+10, currentY+15)
-		
+
 		// Yesterday's cost (center aligned)
 		costText := fmt.Sprintf("昨日: ¥%.2f", product.TodayCost)
 		midX := float64(g.config.Width/2 - 80)
 		dc.DrawString(costText, midX, currentY+15)
-		
+
 		// Day before's cost (smaller, below or beside)
 		dc.LoadFontFace("assets/fonts/SourceHanSansSC-Regular.otf", 13)
 		dc.SetColor(g.colors.Secondary)
 		prevCostText := fmt.Sprintf("(前日: ¥%.2f)", product.YesterdayCost)
 		dc.DrawString(prevCostText, midX+130, currentY+15)
-		
+
 		// Change indicator (right aligned with safety margin)
 		if math.Abs(product.ChangePercent) > 0.1 {
 			rightX := float64(g.config.Width - g.config.Padding - g.config.CardPadding - 40)
@@ -776,7 +776,7 @@ func (g *ImageGenerator) drawAlertsCardGG(dc *gg.Context, alerts []string, y flo
 		alertText := fmt.Sprintf("• %s", alert)
 		dc.DrawString(alertText, contentX+10, contentY+16)
 		contentY += 35 // Consistent spacing between alerts
-		
+
 		if i < len(alerts)-1 {
 			// No extra spacing needed, already handled by the 35px increment
 		}
@@ -793,7 +793,7 @@ func (g *ImageGenerator) drawCardGG(dc *gg.Context, x, y, width, height float64)
 	dc.SetColor(g.colors.CardBG)
 	dc.DrawRectangle(x, y, width, height)
 	dc.Fill()
-	
+
 	// Border
 	dc.SetColor(g.colors.Border)
 	dc.SetLineWidth(1)
@@ -808,13 +808,13 @@ func (g *ImageGenerator) drawWarningCardGG(dc *gg.Context, x, y, width, height f
 	dc.SetColor(warningBG)
 	dc.DrawRectangle(x, y, width, height)
 	dc.Fill()
-	
+
 	// Warning border
 	dc.SetColor(g.colors.Warning)
 	dc.SetLineWidth(2)
 	dc.DrawRectangle(x, y, width, height)
 	dc.Stroke()
-	
+
 	// Left accent bar
 	dc.SetColor(g.colors.Warning)
 	dc.DrawRectangle(x+1, y, 3, height)
@@ -832,7 +832,7 @@ func (g *ImageGenerator) drawHorizontalLineGG(dc *gg.Context, x, y, width float6
 // encodePNGGG encodes gg context to PNG
 func (g *ImageGenerator) encodePNGGG(dc *gg.Context) ([]byte, error) {
 	img := dc.Image()
-	
+
 	var buf bytes.Buffer
 	encoder := png.Encoder{
 		CompressionLevel: png.BestCompression,
@@ -844,18 +844,18 @@ func (g *ImageGenerator) encodePNGGG(dc *gg.Context) ([]byte, error) {
 	}
 
 	data := buf.Bytes()
-	
+
 	// Size validation
 	sizeMB := float64(len(data)) / 1024 / 1024
-	logger.Info("generated PNG image", 
+	logger.Info("generated PNG image",
 		zap.Float64("size_mb", sizeMB),
 		zap.Int("width", g.config.Width),
 		zap.Int("height", g.config.Height),
 		zap.String("format", "PNG"))
-		
+
 	if sizeMB > g.config.MaxSizeMB {
-		logger.Warn("PNG image exceeds size limit", 
-			zap.Float64("actual_size_mb", sizeMB), 
+		logger.Warn("PNG image exceeds size limit",
+			zap.Float64("actual_size_mb", sizeMB),
 			zap.Float64("limit_mb", g.config.MaxSizeMB),
 			zap.String("recommendation", "consider reducing image dimensions or content"))
 	}

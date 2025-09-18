@@ -62,7 +62,7 @@ func (e *AliCloudSyncExecutor) convertToTasksSyncResult(result *cloudsync.SyncRe
 	if output == nil {
 		return nil
 	}
-	
+
 	return &SyncResult{
 		Success:          output.Success,
 		RecordsProcessed: output.RecordsProcessed,
@@ -81,7 +81,7 @@ func (e *AliCloudSyncExecutor) convertToCloudSyncTableConfig(config *TableConfig
 	if config == nil {
 		return configutils.ConvertTableConfigWithProvider(nil, "alicloud")
 	}
-	
+
 	input := &configutils.TableConfigInput{
 		LocalTableName:       config.LocalTableName,
 		DistributedTableName: config.DistributedTableName,
@@ -129,7 +129,7 @@ func (e *AliCloudSyncExecutor) PerformDataCheck(ctx context.Context, period stri
 	if output == nil {
 		return nil, fmt.Errorf("failed to convert data check result")
 	}
-	
+
 	return &DataCheckResult{
 		Success:      output.Success,
 		TotalRecords: output.TotalRecords,

@@ -239,7 +239,6 @@ func (f *DefaultMessageFormatter) getProviderIcon(provider string) string {
 	}
 }
 
-
 // formatProductChange formats product cost change
 func (f *DefaultMessageFormatter) formatProductChange(product *CostChange) string {
 	if product.ChangeAmount != 0 {

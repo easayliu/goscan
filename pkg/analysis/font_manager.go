@@ -20,10 +20,10 @@ import (
 
 // FontManager manages font loading and caching using freetype-go
 type FontManager struct {
-	fontCache   map[string]*truetype.Font
+	fontCache    map[string]*truetype.Font
 	contextCache map[string]*freetype.Context
-	cacheMutex  sync.RWMutex
-	fallback    font.Face
+	cacheMutex   sync.RWMutex
+	fallback     font.Face
 }
 
 // FontSize represents font size configuration
@@ -57,39 +57,39 @@ func NewFontManager() *FontManager {
 		contextCache: make(map[string]*freetype.Context),
 		fallback:     basicfont.Face7x13,
 	}
-	
+
 	return fm
 }
 
 // GetFont returns a font face for the given size
 func (fm *FontManager) GetFont(size FontSize) font.Face {
 	cacheKey := fmt.Sprintf("chinese_%d", int(size))
-	
+
 	fm.cacheMutex.RLock()
 	if ctx, exists := fm.contextCache[cacheKey]; exists {
 		fm.cacheMutex.RUnlock()
 		return &FreetypeFace{context: ctx, size: float64(size)}
 	}
 	fm.cacheMutex.RUnlock()
-	
+
 	// Load font if not cached
 	font := fm.loadChineseFont()
 	if font == nil {
 		fmt.Printf("Failed to load Chinese font (size: %d), using fallback\n", int(size))
 		return fm.fallback
 	}
-	
+
 	// Create freetype context
 	ctx := freetype.NewContext()
 	ctx.SetDPI(96)
 	ctx.SetFont(font)
 	ctx.SetFontSize(float64(size))
-	
+
 	// Cache the context
 	fm.cacheMutex.Lock()
 	fm.contextCache[cacheKey] = ctx
 	fm.cacheMutex.Unlock()
-	
+
 	return &FreetypeFace{context: ctx, size: float64(size)}
 }
 
@@ -99,12 +99,12 @@ func (fm *FontManager) loadChineseFont() *truetype.Font {
 	if font := fm.trySystemFonts(); font != nil {
 		return font
 	}
-	
+
 	// Try embedded font as fallback (may fail with OTF format)
 	if font := fm.tryEmbeddedFont(); font != nil {
 		return font
 	}
-	
+
 	return nil
 }
 
@@ -118,33 +118,33 @@ func (fm *FontManager) tryEmbeddedFont() *truetype.Font {
 		"../../assets/fonts/SourceHanSansSC-Regular.otf",
 		"../../../assets/fonts/SourceHanSansSC-Regular.otf",
 	}
-	
+
 	// Also try to get path relative to executable
 	if execPath, err := os.Executable(); err == nil {
 		execDir := filepath.Dir(execPath)
-		possiblePaths = append(possiblePaths, 
+		possiblePaths = append(possiblePaths,
 			filepath.Join(execDir, "assets/fonts/SourceHanSansSC-Regular.otf"),
 			filepath.Join(filepath.Dir(execDir), "assets/fonts/SourceHanSansSC-Regular.otf"),
 		)
 	}
-	
+
 	for _, fontPath := range possiblePaths {
 		// Check if file exists
 		if _, err := os.Stat(fontPath); err != nil {
 			continue // Try next path
 		}
-		
+
 		font, err := fm.loadFontFromPath(fontPath)
 		if err != nil {
 			fmt.Printf("Failed to load embedded font from %s: %v\n", fontPath, err)
 			continue // Try next path
 		}
-		
+
 		// Successfully loaded
 		fmt.Printf("Successfully loaded embedded Chinese font: %s\n", fontPath)
 		return font
 	}
-	
+
 	// No embedded font found
 	fmt.Printf("Embedded font SourceHanSansSC-Regular.otf not found in any expected location\n")
 	return nil
@@ -153,21 +153,21 @@ func (fm *FontManager) tryEmbeddedFont() *truetype.Font {
 // trySystemFonts tries to load system Chinese fonts
 func (fm *FontManager) trySystemFonts() *truetype.Font {
 	fontPaths := fm.getSystemFontPaths()
-	
+
 	for _, fontPath := range fontPaths {
 		if font, err := fm.loadFontFromPath(fontPath); err == nil && font != nil {
 			fmt.Printf("Successfully loaded system Chinese font: %s\n", fontPath)
 			return font
 		}
 	}
-	
+
 	return nil
 }
 
 // getSystemFontPaths returns system font paths for different OS
 func (fm *FontManager) getSystemFontPaths() []string {
 	var paths []string
-	
+
 	switch runtime.GOOS {
 	case "darwin":
 		// macOS Chinese fonts
@@ -180,7 +180,7 @@ func (fm *FontManager) getSystemFontPaths() []string {
 			"/Library/Fonts/Arial.ttf",
 		}
 		paths = append(paths, macFonts...)
-		
+
 	case "linux":
 		// Linux Chinese fonts
 		linuxFonts := []string{
@@ -192,7 +192,7 @@ func (fm *FontManager) getSystemFontPaths() []string {
 			"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 		}
 		paths = append(paths, linuxFonts...)
-		
+
 	case "windows":
 		// Windows Chinese fonts
 		winFonts := "C:\\Windows\\Fonts"
@@ -205,7 +205,7 @@ func (fm *FontManager) getSystemFontPaths() []string {
 		}
 		paths = append(paths, windowsFonts...)
 	}
-	
+
 	return paths
 }
 
@@ -214,18 +214,18 @@ func (fm *FontManager) loadFontFromPath(fontPath string) (*truetype.Font, error)
 	if _, err := os.Stat(fontPath); err != nil {
 		return nil, fmt.Errorf("font file not found: %s", fontPath)
 	}
-	
+
 	fontData, err := ioutil.ReadFile(fontPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read font file: %w", err)
 	}
-	
+
 	// Parse font using truetype package (supports both TTF and OTF)
 	font, err := truetype.Parse(fontData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse font: %w", err)
 	}
-	
+
 	return font, nil
 }
 
@@ -233,11 +233,11 @@ func (fm *FontManager) loadFontFromPath(fontPath string) (*truetype.Font, error)
 func (fm *FontManager) ClearCache() {
 	fm.cacheMutex.Lock()
 	defer fm.cacheMutex.Unlock()
-	
+
 	oldSize := len(fm.fontCache)
 	fm.fontCache = make(map[string]*truetype.Font)
 	fm.contextCache = make(map[string]*freetype.Context)
-	
+
 	fmt.Printf("Font cache cleared (previously had %d cached fonts)\n", oldSize)
 }
 
@@ -245,11 +245,11 @@ func (fm *FontManager) ClearCache() {
 func (fm *FontManager) GetCacheStats() map[string]interface{} {
 	fm.cacheMutex.RLock()
 	defer fm.cacheMutex.RUnlock()
-	
+
 	return map[string]interface{}{
-		"cached_fonts": len(fm.fontCache),
+		"cached_fonts":    len(fm.fontCache),
 		"cached_contexts": len(fm.contextCache),
-		"fallback": "basicfont.Face7x13",
+		"fallback":        "basicfont.Face7x13",
 	}
 }
 
@@ -303,7 +303,7 @@ func (f *FreetypeFace) DrawText(dst draw.Image, text string, x, y int, c color.C
 	f.context.SetDst(dst)
 	f.context.SetSrc(image.NewUniform(c))
 	f.context.SetClip(dst.Bounds())
-	
+
 	pt := freetype.Pt(x, y+int(f.size))
 	_, err := f.context.DrawString(text, pt)
 	return err

@@ -184,4 +184,3 @@ func buildTaskResponse(taskID, status, message string) map[string]interface{} {
 		"timestamp": getCurrentTimestamp(),
 	}
 }
-

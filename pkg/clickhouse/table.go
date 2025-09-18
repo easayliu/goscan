@@ -468,8 +468,6 @@ func (tm *tableManager) CleanTableData(ctx context.Context, tableName string, co
 	return tm.DeleteByCondition(ctx, tableName, condition, args...)
 }
 
-
-
 // String returns string representation of table information
 func (ti *TableInfo) String() string {
 	return fmt.Sprintf("Table{Name: %s, Engine: %s, Rows: %d, Size: %d bytes, Columns: %d}",

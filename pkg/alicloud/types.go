@@ -484,7 +484,6 @@ func (bd *BillDetail) ToDBFormatWithTime(timestamp time.Time) *BillDetailForDB {
 	}
 }
 
-
 // 注意：ValidationError 类型已迁移到 errors.go 文件
 
 // Validate 验证BillDetail数据
@@ -517,7 +516,6 @@ func (bd *BillDetail) Validate() error {
 }
 
 // 注意：ProcessingStats 类型已迁移到 response.go 文件
-
 
 // BatchTransformationOptions 批量转换选项
 type BatchTransformationOptions struct {

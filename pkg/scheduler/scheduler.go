@@ -106,8 +106,8 @@ func (ts *TaskScheduler) Start() error {
 	ts.jobsMutex.Lock()
 	for _, job := range ts.jobs {
 		if err := ts.updateJobNextRunTime(job); err != nil {
-			logger.Warn("Failed to update next run time after start", 
-				zap.String("job_name", job.Name), 
+			logger.Warn("Failed to update next run time after start",
+				zap.String("job_name", job.Name),
 				zap.Error(err))
 		}
 	}

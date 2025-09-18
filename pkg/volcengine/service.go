@@ -248,8 +248,6 @@ func (s *billServiceImpl) syncBillDataInternal(ctx context.Context, req *ListBil
 	return result, nil
 }
 
-
-
 // CheckMonthlyDataExists 检查月度数据是否存在
 func (s *billServiceImpl) CheckMonthlyDataExists(ctx context.Context, tableName, billPeriod string) (bool, int64, error) {
 	resolver := s.chClient.GetTableNameResolver()

@@ -236,5 +236,3 @@ func (c *costCalculator) generateProductAlerts(providers []*ProviderCostMetric, 
 
 	return alerts
 }
-
-

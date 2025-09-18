@@ -317,7 +317,7 @@ func ValidatePeriodDateConsistency(billingCycle, billingDate string) error {
 
 	expectedMonth := date.Format(LayoutYearMonth)
 	if expectedMonth != billingCycle {
-		return fmt.Errorf("billing date (%s) must be in the same month as billing cycle (%s)", 
+		return fmt.Errorf("billing date (%s) must be in the same month as billing cycle (%s)",
 			billingDate, billingCycle)
 	}
 

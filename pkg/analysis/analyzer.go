@@ -186,7 +186,7 @@ func (ca *CostAnalyzer) ConvertToWeChatFormat(result *CostAnalysisResult) interf
 func (ca *CostAnalyzer) GenerateReportImage(result *CostAnalysisResult) ([]byte, error) {
 	// Use modern Apple-style generator with enhanced design system
 	generator := NewModernAppleReportGenerator()
-	
+
 	// Generate PNG image
 	return generator.GenerateReport(result)
 }

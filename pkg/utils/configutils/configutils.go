@@ -52,25 +52,25 @@ func ConvertSyncConfig(from *SyncConfigInput) *cloudsync.SyncConfig {
 	if from == nil {
 		return cloudsync.DefaultSyncConfig()
 	}
-	
+
 	// Apply defaults for empty values
 	syncMode := from.SyncMode
 	if syncMode == "" {
 		syncMode = "standard"
 	}
-	
+
 	granularity := from.Granularity
 	if granularity == "" {
 		granularity = "monthly"
 	}
-	
+
 	batchSize := from.Limit
 	if batchSize <= 0 {
 		batchSize = 100
 	}
-	
+
 	maxWorkers := 4 // Default worker count
-	
+
 	return &cloudsync.SyncConfig{
 		SyncMode:       syncMode,
 		BillPeriod:     from.BillPeriod,
@@ -87,7 +87,7 @@ func ConvertSyncConfig(from *SyncConfigInput) *cloudsync.SyncConfig {
 // ConvertSyncConfigWithDefaults converts SyncConfigInput to cloudsync.SyncConfig with provider-specific defaults
 func ConvertSyncConfigWithDefaults(from *SyncConfigInput, provider string) *cloudsync.SyncConfig {
 	config := ConvertSyncConfig(from)
-	
+
 	// Apply provider-specific defaults
 	switch provider {
 	case "alicloud":
@@ -96,12 +96,12 @@ func ConvertSyncConfigWithDefaults(from *SyncConfigInput, provider string) *clou
 			config.Granularity = "monthly"
 		}
 		config.MaxWorkers = 4
-		
+
 	case "volcengine":
 		// VolcEngine only supports monthly granularity
 		config.Granularity = "monthly"
 		config.MaxWorkers = 4
-		
+
 	default:
 		// Default settings
 		if config.Granularity == "" {
@@ -109,7 +109,7 @@ func ConvertSyncConfigWithDefaults(from *SyncConfigInput, provider string) *clou
 		}
 		config.MaxWorkers = 4
 	}
-	
+
 	return config
 }
 
@@ -118,14 +118,14 @@ func ConvertTableConfig(from *TableConfigInput) *cloudsync.TableConfig {
 	if from == nil {
 		return nil
 	}
-	
+
 	return &cloudsync.TableConfig{
 		TableName:        from.LocalTableName,
 		DistributedTable: from.DistributedTableName,
-		PeriodField:      "BillPeriod",     // Default field name
-		DateField:        "ExpenseDate",    // Default field name
-		ProviderField:    "Provider",       // Default field name
-		Granularity:      "monthly",        // Default granularity
+		PeriodField:      "BillPeriod",  // Default field name
+		DateField:        "ExpenseDate", // Default field name
+		ProviderField:    "Provider",    // Default field name
+		Granularity:      "monthly",     // Default granularity
 	}
 }
 
@@ -135,7 +135,7 @@ func ConvertTableConfigWithProvider(from *TableConfigInput, provider string) *cl
 	if config == nil {
 		config = &cloudsync.TableConfig{}
 	}
-	
+
 	// Apply provider-specific table configurations
 	switch provider {
 	case "alicloud":
@@ -145,7 +145,7 @@ func ConvertTableConfigWithProvider(from *TableConfigInput, provider string) *cl
 		config.PeriodField = "BillingCycle"
 		config.DateField = "BillingDate"
 		config.ProviderField = "Provider"
-		
+
 	case "volcengine":
 		if config.TableName == "" {
 			config.TableName = "volcengine_bill_details"
@@ -154,13 +154,13 @@ func ConvertTableConfigWithProvider(from *TableConfigInput, provider string) *cl
 		config.DateField = "ExpenseDate"
 		config.ProviderField = "Provider"
 		config.Granularity = "monthly"
-		
+
 	default:
 		if config.TableName == "" {
 			config.TableName = fmt.Sprintf("%s_bill_details", provider)
 		}
 	}
-	
+
 	return config
 }
 
@@ -169,7 +169,7 @@ func ConvertSyncResult(from *cloudsync.SyncResult) *SyncResultOutput {
 	if from == nil {
 		return nil
 	}
-	
+
 	result := &SyncResultOutput{
 		Success:          from.Success,
 		RecordsProcessed: from.RecordsProcessed,
@@ -180,11 +180,11 @@ func ConvertSyncResult(from *cloudsync.SyncResult) *SyncResultOutput {
 		CompletedAt:      from.CompletedAt,
 		Metadata:         from.Metadata,
 	}
-	
+
 	if from.Error != nil {
 		result.Error = from.Error.Error()
 	}
-	
+
 	return result
 }
 
@@ -193,7 +193,7 @@ func ConvertDataCheckResult(from *cloudsync.DataCheckResult) *DataCheckResultOut
 	if from == nil {
 		return nil
 	}
-	
+
 	return &DataCheckResultOutput{
 		Success:      from.Success,
 		TotalRecords: from.TotalRecords,
@@ -213,7 +213,7 @@ func CreateSyncOptions(batchSize int, useDistributed bool, maxWorkers int) *clou
 	if maxWorkers <= 0 {
 		maxWorkers = 4
 	}
-	
+
 	return &cloudsync.SyncOptions{
 		BatchSize:        batchSize,
 		UseDistributed:   useDistributed,
@@ -230,16 +230,16 @@ func MergeSyncConfigs(configs ...*cloudsync.SyncConfig) *cloudsync.SyncConfig {
 	if len(configs) == 0 {
 		return cloudsync.DefaultSyncConfig()
 	}
-	
+
 	// Start with default config
 	result := cloudsync.DefaultSyncConfig()
-	
+
 	// Apply each config in order
 	for _, config := range configs {
 		if config == nil {
 			continue
 		}
-		
+
 		if config.SyncMode != "" {
 			result.SyncMode = config.SyncMode
 		}
@@ -258,18 +258,18 @@ func MergeSyncConfigs(configs ...*cloudsync.SyncConfig) *cloudsync.SyncConfig {
 		if config.MaxWorkers > 0 {
 			result.MaxWorkers = config.MaxWorkers
 		}
-		
+
 		// Boolean fields - apply directly
 		result.ForceUpdate = config.ForceUpdate
 		result.AutoClean = config.AutoClean
 		result.UseDistributed = config.UseDistributed
-		
+
 		// Merge periods
 		if len(config.Periods) > 0 {
 			result.Periods = append(result.Periods, config.Periods...)
 		}
 	}
-	
+
 	return result
 }
 
@@ -278,7 +278,7 @@ func ValidateSyncConfig(config *cloudsync.SyncConfig) error {
 	if config == nil {
 		return fmt.Errorf("sync config cannot be nil")
 	}
-	
+
 	// Validate sync mode
 	validSyncModes := []string{"standard", "sync-optimal"}
 	valid := false
@@ -291,7 +291,7 @@ func ValidateSyncConfig(config *cloudsync.SyncConfig) error {
 	if !valid {
 		return fmt.Errorf("invalid sync mode: %s, supported modes: %v", config.SyncMode, validSyncModes)
 	}
-	
+
 	// Validate granularity
 	validGranularities := []string{"monthly", "daily", "both"}
 	valid = false
@@ -304,7 +304,7 @@ func ValidateSyncConfig(config *cloudsync.SyncConfig) error {
 	if !valid {
 		return fmt.Errorf("invalid granularity: %s, supported granularities: %v", config.Granularity, validGranularities)
 	}
-	
+
 	// Validate numeric fields
 	if config.BatchSize <= 0 {
 		return fmt.Errorf("batch size must be positive, got: %d", config.BatchSize)
@@ -315,7 +315,7 @@ func ValidateSyncConfig(config *cloudsync.SyncConfig) error {
 	if config.Limit < 0 {
 		return fmt.Errorf("limit cannot be negative, got: %d", config.Limit)
 	}
-	
+
 	return nil
 }
 
@@ -324,16 +324,16 @@ func ValidateTableConfig(config *cloudsync.TableConfig) error {
 	if config == nil {
 		return fmt.Errorf("table config cannot be nil")
 	}
-	
+
 	if config.TableName == "" {
 		return fmt.Errorf("table name cannot be empty")
 	}
-	
+
 	// Validate table name format (basic validation)
 	if len(config.TableName) > 100 {
 		return fmt.Errorf("table name too long: %s (max 100 characters)", config.TableName)
 	}
-	
+
 	return nil
 }
 
@@ -347,26 +347,26 @@ func CreateProviderSyncConfig(provider, syncMode, granularity, billPeriod string
 		AutoClean:      true,
 		UseDistributed: useDistributed,
 	}
-	
+
 	// Apply provider-specific optimizations
 	switch provider {
 	case "alicloud":
 		config.BatchSize = 100
-		config.Limit = 300  // AliCloud API limit
+		config.Limit = 300 // AliCloud API limit
 		config.MaxWorkers = 4
-		
+
 	case "volcengine":
 		config.BatchSize = 100
 		config.Limit = 1000 // VolcEngine API limit
 		config.MaxWorkers = 4
 		config.Granularity = "monthly" // Force monthly for VolcEngine
-		
+
 	default:
 		config.BatchSize = 100
 		config.Limit = 1000
 		config.MaxWorkers = 4
 	}
-	
+
 	// Apply defaults for empty values
 	if config.SyncMode == "" {
 		config.SyncMode = "standard"
@@ -374,7 +374,7 @@ func CreateProviderSyncConfig(provider, syncMode, granularity, billPeriod string
 	if config.Granularity == "" {
 		config.Granularity = "monthly"
 	}
-	
+
 	return config
 }
 
@@ -383,7 +383,7 @@ func CloneSyncConfig(config *cloudsync.SyncConfig) *cloudsync.SyncConfig {
 	if config == nil {
 		return nil
 	}
-	
+
 	clone := &cloudsync.SyncConfig{
 		SyncMode:       config.SyncMode,
 		BillPeriod:     config.BillPeriod,
@@ -395,13 +395,13 @@ func CloneSyncConfig(config *cloudsync.SyncConfig) *cloudsync.SyncConfig {
 		UseDistributed: config.UseDistributed,
 		MaxWorkers:     config.MaxWorkers,
 	}
-	
+
 	// Deep copy periods slice
 	if len(config.Periods) > 0 {
 		clone.Periods = make([]string, len(config.Periods))
 		copy(clone.Periods, config.Periods)
 	}
-	
+
 	return clone
 }
 
@@ -410,7 +410,7 @@ func CloneTableConfig(config *cloudsync.TableConfig) *cloudsync.TableConfig {
 	if config == nil {
 		return nil
 	}
-	
+
 	return &cloudsync.TableConfig{
 		TableName:        config.TableName,
 		DistributedTable: config.DistributedTable,
@@ -427,9 +427,9 @@ func ConfigSummary(config *cloudsync.SyncConfig) string {
 	if config == nil {
 		return "No configuration"
 	}
-	
-	return fmt.Sprintf("SyncConfig{mode=%s, period=%s, granularity=%s, batch=%d, workers=%d, distributed=%v, force=%v}", 
-		config.SyncMode, config.BillPeriod, config.Granularity, 
+
+	return fmt.Sprintf("SyncConfig{mode=%s, period=%s, granularity=%s, batch=%d, workers=%d, distributed=%v, force=%v}",
+		config.SyncMode, config.BillPeriod, config.Granularity,
 		config.BatchSize, config.MaxWorkers, config.UseDistributed, config.ForceUpdate)
 }
 
@@ -438,7 +438,7 @@ func TableConfigSummary(config *cloudsync.TableConfig) string {
 	if config == nil {
 		return "No table configuration"
 	}
-	
-	return fmt.Sprintf("TableConfig{table=%s, distributed=%s, granularity=%s}", 
+
+	return fmt.Sprintf("TableConfig{table=%s, distributed=%s, granularity=%s}",
 		config.TableName, config.DistributedTable, config.Granularity)
 }

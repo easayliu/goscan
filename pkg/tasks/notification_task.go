@@ -296,7 +296,7 @@ func (nte *NotificationTaskExecutor) SendNotification(ctx context.Context, confi
 	params := &NotificationParams{
 		Providers:      []string{"volcengine", "alicloud"}, // 默认支持的云服务商
 		AlertThreshold: nte.config.AlertThreshold,
-		ForceNotify:    config.ForceUpdate, // 使用ForceUpdate作为ForceNotify
+		ForceNotify:    config.ForceUpdate,     // 使用ForceUpdate作为ForceNotify
 		SendAsImage:    nte.config.SendAsImage, // 从配置中读取是否发送图片
 	}
 

@@ -118,7 +118,7 @@ func (e *VolcEngineSyncExecutor) convertToCloudSyncTableConfig(config *TableConf
 	if config == nil {
 		return configutils.ConvertTableConfigWithProvider(nil, "volcengine")
 	}
-	
+
 	input := &configutils.TableConfigInput{
 		LocalTableName:       config.LocalTableName,
 		DistributedTableName: config.DistributedTableName,
@@ -132,7 +132,7 @@ func (e *VolcEngineSyncExecutor) convertToTasksSyncResult(result *cloudsync.Sync
 	if output == nil {
 		return nil
 	}
-	
+
 	return &SyncResult{
 		Success:          output.Success,
 		RecordsProcessed: output.RecordsProcessed,
