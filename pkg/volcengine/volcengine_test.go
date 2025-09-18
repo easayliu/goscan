@@ -6,7 +6,18 @@ import (
 	"time"
 )
 
-func TestValidateBillPeriod(t *testing.T) {
+func TestValidatePeriod(t *testing.T) {
+	// Create a test client
+	cfg := &config.VolcEngineConfig{
+		AccessKey: "test-key",
+		SecretKey: "test-secret",
+		Region:    "cn-north-1",
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
 	tests := []struct {
 		name        string
 		billPeriod  string
@@ -44,14 +55,14 @@ func TestValidateBillPeriod(t *testing.T) {
 		},
 		{
 			name:        "too old month",
-			billPeriod:  "2023-01",
+			billPeriod:  "2017-01",
 			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateBillPeriod(tt.billPeriod)
+			err := client.ValidatePeriod(tt.billPeriod)
 			if tt.expectError && err == nil {
 				t.Errorf("Expected error but got none")
 			}
@@ -62,22 +73,38 @@ func TestValidateBillPeriod(t *testing.T) {
 	}
 }
 
-func TestGetValidBillPeriods(t *testing.T) {
-	periods := GetValidBillPeriods()
-	if len(periods) != 2 {
-		t.Errorf("Expected 2 periods, got %d", len(periods))
+func TestCalculateSmartPeriod(t *testing.T) {
+	// Create a test client
+	cfg := &config.VolcEngineConfig{
+		AccessKey: "test-key",
+		SecretKey: "test-secret",
+		Region:    "cn-north-1",
+	}
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
 	}
 
+	selectedPeriod, dateRange := client.CalculateSmartPeriod()
+
+	// Verify returned period format
+	_, err = time.Parse("2006-01", selectedPeriod)
+	if err != nil {
+		t.Errorf("Invalid period format: %s", selectedPeriod)
+	}
+
+	// Verify date range is not empty
+	if dateRange == "" {
+		t.Error("Date range should not be empty")
+	}
+
+	// Verify period is current month or last month
 	now := time.Now()
 	currentMonth := now.Format("2006-01")
 	lastMonth := now.AddDate(0, -1, 0).Format("2006-01")
 
-	if periods[0] != currentMonth {
-		t.Errorf("Expected first period to be %s, got %s", currentMonth, periods[0])
-	}
-
-	if periods[1] != lastMonth {
-		t.Errorf("Expected second period to be %s, got %s", lastMonth, periods[1])
+	if selectedPeriod != currentMonth && selectedPeriod != lastMonth {
+		t.Errorf("Expected period to be %s or %s, got %s", currentMonth, lastMonth, selectedPeriod)
 	}
 }
 
@@ -90,7 +117,10 @@ func TestClient(t *testing.T) {
 		Timeout:   30,
 	}
 
-	client := NewClient(cfg)
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
 	if client == nil {
 		t.Fatal("Client should not be nil")
 	}
@@ -161,17 +191,17 @@ func TestListBillDetailRequest(t *testing.T) {
 	}
 }
 
-// 集成测试（需要真实的API凭证）
+// Integration test (requires real API credentials)
 func TestBillServiceIntegration(t *testing.T) {
-	// 跳过集成测试，除非设置了环境变量
+	// Skip integration test unless environment variable is set
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
 
-	// 集成测试需要真实的凭证和ClickHouse实例
+	// Integration test requires real credentials and ClickHouse instance
 	t.Skip("Integration test requires real credentials and ClickHouse instance")
 
-	// 以下代码仅作为示例，实际运行需要真实环境
+	// The following code is for example only, actual execution requires real environment
 	/*
 		cfg := &config.VolcEngineConfig{
 			AccessKey: "your-access-key",
@@ -202,12 +232,12 @@ func TestBillServiceIntegration(t *testing.T) {
 
 		ctx := context.Background()
 
-		// 创建测试表
+		// Create test table
 		if err := billService.CreateBillTable(ctx); err != nil {
 			t.Fatalf("Failed to create bill table: %v", err)
 		}
 
-		// 测试同步数据
+		// Test data synchronization
 		req := &ListBillDetailRequest{
 			BillPeriod: "2023-01",
 			Limit:      10,

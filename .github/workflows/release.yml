@@ -114,6 +114,16 @@ jobs:
         cp ./$BINARY_NAME "$INSTALL_DIR/"
         chmod +x "$INSTALL_DIR/$BINARY_NAME"
         
+        # 创建配置目录
+        CONFIG_DIR=/opt/goscan
+        sudo mkdir -p "$CONFIG_DIR"
+        
+        # 复制示例配置文件
+        if [ -f config.yaml.example ]; then
+          sudo cp config.yaml.example "$CONFIG_DIR/"
+          echo "示例配置文件已复制到 $CONFIG_DIR/config.yaml.example"
+        fi
+        
         # 创建systemd服务文件
         if command -v systemctl >/dev/null 2>&1; then
           cat > goscan.service << 'SYSTEMD_EOF'
@@ -127,7 +137,7 @@ jobs:
         User=goscan
         Group=goscan
         WorkingDirectory=/opt/goscan
-        ExecStart=/usr/local/bin/goscan
+        ExecStart=/usr/local/bin/goscan -c /opt/goscan/config.yaml
         Restart=always
         RestartSec=5
         StandardOutput=journal
@@ -152,7 +162,16 @@ jobs:
         fi
         
         echo "goscan installed successfully!"
-        echo "Run 'goscan --help' to get started."
+        echo ""
+        echo "配置文件设置:"
+        echo "  1. 将 config.yaml.example 复制为 config.yaml"
+        echo "  2. 编辑 config.yaml 填入您的配置信息"
+        echo "  3. 配置文件位置: /opt/goscan/config.yaml"
+        echo ""
+        echo "启动命令:"
+        echo "  goscan -c /opt/goscan/config.yaml"
+        echo ""
+        echo "Run 'goscan --help' to get more options."
         EOF
           chmod +x ${RELEASE_NAME}/install.sh
         fi

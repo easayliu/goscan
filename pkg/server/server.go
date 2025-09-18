@@ -2,17 +2,30 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"goscan/pkg/config"
 	"goscan/pkg/handlers"
-	"log/slog"
+	"goscan/pkg/logger"
+	"goscan/pkg/middleware"
 	"net/http"
 	"time"
 
-	"github.com/gorilla/mux"
-	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/gin-contrib/cors"
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+	"go.uber.org/zap"
+
 	_ "goscan/docs" // swagger docs
+)
+
+// Server constants
+const (
+	DefaultReadTimeout  = 30 * time.Second
+	DefaultWriteTimeout = 30 * time.Second
+	DefaultIdleTimeout  = 120 * time.Second
+	DefaultVersion      = "1.0.0"
+	ServiceName         = "goscan"
 )
 
 // Config holds HTTP server configuration
@@ -25,17 +38,51 @@ type Config struct {
 // HTTPServer represents the HTTP server component
 type HTTPServer struct {
 	server     *http.Server
-	router     *mux.Router
+	router     *gin.Engine
 	config     *Config
+	logger     *zap.Logger
 	ctx        context.Context
 	handlerSvc *handlers.HandlerService
 }
 
 // NewHTTPServer creates a new HTTP server instance
 func NewHTTPServer(ctx context.Context, config *Config) (*HTTPServer, error) {
-	slog.Info("Initializing HTTP server", "address", config.Address, "port", config.Port)
+	// Initialize zap logger
+	isDev := config.Config.App.Environment != "production"
+	logPath := config.Config.App.LogFile
+	// Use relative path as default to avoid permission issues
+	if logPath == "" {
+		logPath = "./logs/app.log"
+	}
 
-	router := mux.NewRouter()
+	if err := logger.InitLogger(isDev, logPath, config.Config.App.LogLevel); err != nil {
+		return nil, fmt.Errorf("failed to initialize logger: %w", err)
+	}
+
+	logger.Info("Initializing HTTP server",
+		zap.String("address", config.Address),
+		zap.Int("port", config.Port),
+		zap.String("environment", config.Config.App.Environment),
+	)
+
+	// Set Gin mode based on environment
+	if !isDev {
+		gin.SetMode(gin.ReleaseMode)
+		logger.Debug("Set Gin to release mode")
+	} else {
+		gin.SetMode(gin.DebugMode)
+		logger.Debug("Set Gin to debug mode")
+	}
+
+	// Create Gin router without default middleware
+	router := gin.New()
+
+	// Add middleware
+	router.Use(middleware.RequestID())                 // Add request ID first
+	router.Use(middleware.GinZapLogger(logger.Logger)) // Logging middleware with zap
+	router.Use(middleware.Recovery())                  // Panic recovery
+	router.Use(middleware.ErrorHandler())              // Error handling
+	router.Use(cors.Default())                         // CORS
 
 	// Create handler service
 	handlerSvc, err := handlers.NewHandlerService(ctx, config.Config)
@@ -47,6 +94,7 @@ func NewHTTPServer(ctx context.Context, config *Config) (*HTTPServer, error) {
 		router:     router,
 		config:     config,
 		ctx:        ctx,
+		logger:     logger.Logger,
 		handlerSvc: handlerSvc,
 	}
 
@@ -57,70 +105,39 @@ func NewHTTPServer(ctx context.Context, config *Config) (*HTTPServer, error) {
 	addr := fmt.Sprintf("%s:%d", config.Address, config.Port)
 	server.server = &http.Server{
 		Addr:         addr,
-		Handler:      server.router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Handler:      router,
+		ReadTimeout:  DefaultReadTimeout,
+		WriteTimeout: DefaultWriteTimeout,
+		IdleTimeout:  DefaultIdleTimeout,
 	}
 
-	slog.Info("HTTP server initialized", "listen_addr", addr)
+	logger.Info("HTTP server initialized", zap.String("listen_addr", addr))
 	return server, nil
 }
 
 // SetScheduler sets the scheduler reference in the handler service
-func (s *HTTPServer) SetScheduler(scheduler interface{}) {
-	// Set scheduler in handler service using interface{}
+func (s *HTTPServer) SetScheduler(scheduler any) {
+	// Set scheduler in handler service using any
 	s.handlerSvc.SetScheduler(scheduler)
 }
 
 // setupRoutes configures all HTTP routes
 func (s *HTTPServer) setupRoutes() {
-	// Health check endpoint
-	s.router.HandleFunc("/health", s.handleHealth).Methods("GET")
+	// Health check endpoint (no logging)
+	s.router.GET("/health", s.handlerSvc.HealthCheck)
 
 	// Swagger documentation
-	s.router.PathPrefix("/swagger/").Handler(httpSwagger.WrapHandler)
+	s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 
-	// API v1 routes
-	api := s.router.PathPrefix("/api/v1").Subrouter()
+	// Setup API routes
+	s.setupAPIRoutes()
 
-	// System endpoints
-	api.HandleFunc("/status", s.handlerSvc.GetStatus).Methods("GET")
-	api.HandleFunc("/config", s.handlerSvc.GetConfig).Methods("GET")
-	api.HandleFunc("/config", s.handlerSvc.UpdateConfig).Methods("PUT")
-
-	// Task management endpoints
-	api.HandleFunc("/tasks", s.handlerSvc.GetTasks).Methods("GET")
-	api.HandleFunc("/tasks", s.handlerSvc.CreateTask).Methods("POST")
-	api.HandleFunc("/tasks/{id}", s.handlerSvc.GetTask).Methods("GET")
-	api.HandleFunc("/tasks/{id}", s.handlerSvc.DeleteTask).Methods("DELETE")
-
-	// Sync operation endpoints
-	api.HandleFunc("/sync/trigger", s.handlerSvc.TriggerSync).Methods("POST")
-	api.HandleFunc("/sync/status", s.handlerSvc.GetSyncStatus).Methods("GET")
-	api.HandleFunc("/sync/history", s.handlerSvc.GetSyncHistory).Methods("GET")
-
-	// Scheduler endpoints
-	api.HandleFunc("/scheduler/status", s.handlerSvc.GetSchedulerStatus).Methods("GET")
-	api.HandleFunc("/scheduler/jobs", s.handlerSvc.GetScheduledJobs).Methods("GET")
-	api.HandleFunc("/scheduler/jobs", s.handlerSvc.CreateScheduledJob).Methods("POST")
-	api.HandleFunc("/scheduler/jobs/{id}", s.handlerSvc.DeleteScheduledJob).Methods("DELETE")
-
-	// WeChat notification endpoints
-	api.HandleFunc("/notifications/wechat/trigger", s.handlerSvc.TriggerWeChatNotification).Methods("POST")
-	api.HandleFunc("/notifications/wechat/status", s.handlerSvc.GetWeChatNotificationStatus).Methods("GET")
-	api.HandleFunc("/notifications/wechat/test", s.handlerSvc.TestWeChatWebhook).Methods("POST")
-
-	// Add middleware
-	s.router.Use(s.loggingMiddleware)
-	s.router.Use(s.corsMiddleware)
-
-	slog.Info("HTTP routes configured")
+	logger.Debug("HTTP routes configured")
 }
 
 // Start starts the HTTP server
 func (s *HTTPServer) Start() error {
-	slog.Info("Starting HTTP server", "addr", s.server.Addr)
+	logger.Info("Starting HTTP server", zap.String("addr", s.server.Addr))
 
 	if err := s.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("HTTP server failed: %w", err)
@@ -131,7 +148,10 @@ func (s *HTTPServer) Start() error {
 
 // Shutdown gracefully shuts down the HTTP server
 func (s *HTTPServer) Shutdown(ctx context.Context) error {
-	slog.Info("Shutting down HTTP server")
+	logger.Info("Shutting down HTTP server")
+
+	// Sync logger before shutdown
+	defer logger.Sync()
 
 	if err := s.server.Shutdown(ctx); err != nil {
 		return fmt.Errorf("HTTP server shutdown failed: %w", err)
@@ -140,70 +160,60 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// handleHealth handles health check requests
-// @Summary 健康检查
-// @Description 返回服务健康状态
-// @Tags System
-// @Accept json
-// @Produce json
-// @Success 200 {object} models.HealthResponse
-// @Router /health [get]
-func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
-	health := map[string]interface{}{
-		"status":    "healthy",
-		"timestamp": time.Now().UTC(),
-		"service":   "goscan",
-		"version":   "1.0.0",
+// setupAPIRoutes configures API routes with RESTful design
+func (s *HTTPServer) setupAPIRoutes() {
+	// System management routes
+	system := s.router.Group("/system")
+	{
+		system.GET("/status", s.handlerSvc.GetStatus)
+		system.GET("/config", s.handlerSvc.GetAppConfig)
+		system.PUT("/config", s.handlerSvc.UpdateConfig)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(health)
-}
+	// Task management routes (RESTful)
+	tasks := s.router.Group("/tasks")
+	{
+		tasks.GET("", s.handlerSvc.GetTasks)          // List all tasks
+		tasks.POST("", s.handlerSvc.CreateTask)       // Create a new task
+		tasks.GET("/:id", s.handlerSvc.GetTask)       // Get a specific task
+		tasks.DELETE("/:id", s.handlerSvc.DeleteTask) // Delete a specific task
+	}
 
-// loggingMiddleware logs HTTP requests
-func (s *HTTPServer) loggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+	// Sync management routes
+	sync := s.router.Group("/sync")
+	{
+		sync.POST("", s.handlerSvc.TriggerSync)           // Trigger new sync
+		sync.GET("", s.handlerSvc.GetSyncStatus)          // Get sync status
+		sync.GET("/history", s.handlerSvc.GetSyncHistory) // Get sync history
+	}
 
-		next.ServeHTTP(wrapped, r)
+	// Scheduler management routes
+	scheduler := s.router.Group("/scheduler")
+	{
+		scheduler.GET("/status", s.handlerSvc.GetSchedulerStatus)
+		scheduler.GET("/metrics", s.handlerSvc.GetSchedulerMetrics)
 
-		slog.Info("HTTP request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"duration", time.Since(start),
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.UserAgent(),
-		)
-	})
-}
-
-// corsMiddleware handles CORS headers
-func (s *HTTPServer) corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
+		// Scheduled jobs sub-routes
+		jobs := scheduler.Group("/jobs")
+		{
+			jobs.GET("", s.handlerSvc.GetScheduledJobs)                 // List all jobs
+			jobs.POST("", s.handlerSvc.CreateScheduledJob)              // Create a new job
+			jobs.GET("/:id", s.handlerSvc.GetScheduledJob)              // Get a specific job
+			jobs.PUT("/:id", s.handlerSvc.UpdateScheduledJob)           // Update a job
+			jobs.DELETE("/:id", s.handlerSvc.DeleteScheduledJob)        // Delete a job
+			jobs.POST("/:id/trigger", s.handlerSvc.TriggerScheduledJob) // Trigger a job
 		}
+	}
 
-		next.ServeHTTP(w, r)
-	})
-}
-
-// responseWriter wraps http.ResponseWriter to capture status code
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-// WriteHeader captures the status code
-func (w *responseWriter) WriteHeader(code int) {
-	w.statusCode = code
-	w.ResponseWriter.WriteHeader(code)
+	// Notification management routes
+	notifications := s.router.Group("/notifications")
+	{
+		// WeChat notification sub-routes
+		wechat := notifications.Group("/wechat")
+		{
+			wechat.POST("", s.handlerSvc.TriggerWeChatNotification)         // Send notification
+			wechat.GET("/status", s.handlerSvc.GetWeChatNotificationStatus) // Get status
+			wechat.POST("/test", s.handlerSvc.TestWeChatWebhook)            // Test webhook
+		}
+	}
 }

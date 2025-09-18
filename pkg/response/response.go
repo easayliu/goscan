@@ -2,62 +2,51 @@ package response
 
 import (
 	"encoding/json"
-	"fmt"
-	"log/slog"
+	"goscan/pkg/logger"
 	"net/http"
-	"strconv"
 
-	"github.com/gorilla/mux"
+	"go.uber.org/zap"
+)
+
+// HTTP response constants
+const (
+	ContentTypeJSON = "application/json"
+)
+
+// Error response field names
+const (
+	FieldError   = "error"
+	FieldMessage = "message"
+	FieldCode    = "code"
+	FieldDetails = "details"
 )
 
 // WriteJSONResponse writes a JSON response with the given status code
+// This function is kept for compatibility with existing code that may use it
 func WriteJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		slog.Error("Failed to encode JSON response", "error", err)
+		logger.Error("Failed to encode JSON response", zap.Error(err))
 	}
 }
 
 // WriteErrorResponse writes an error response in JSON format
+// This function is kept for compatibility with existing code that may use it
 func WriteErrorResponse(w http.ResponseWriter, statusCode int, message string, err error) {
 	errorResp := map[string]interface{}{
-		"error":   true,
-		"message": message,
-		"code":    statusCode,
+		FieldError:   true,
+		FieldMessage: message,
+		FieldCode:    statusCode,
 	}
 
 	if err != nil {
-		errorResp["details"] = err.Error()
-		slog.Error("API error", "message", message, "error", err, "status_code", statusCode)
+		errorResp[FieldDetails] = err.Error()
+		logger.Error("API error",
+			zap.String("message", message),
+			zap.Error(err),
+			zap.Int("status_code", statusCode))
 	}
 
 	WriteJSONResponse(w, statusCode, errorResp)
-}
-
-// ParseIntParam parses an integer parameter from URL path
-func ParseIntParam(r *http.Request, paramName string) (int, error) {
-	vars := mux.Vars(r)
-	paramValue, exists := vars[paramName]
-	if !exists {
-		return 0, fmt.Errorf("parameter %s not found", paramName)
-	}
-
-	intValue, err := strconv.Atoi(paramValue)
-	if err != nil {
-		return 0, fmt.Errorf("invalid integer parameter %s: %v", paramName, err)
-	}
-
-	return intValue, nil
-}
-
-// ParseStringParam parses a string parameter from URL path
-func ParseStringParam(r *http.Request, paramName string) (string, error) {
-	vars := mux.Vars(r)
-	paramValue, exists := vars[paramName]
-	if !exists {
-		return "", fmt.Errorf("parameter %s not found", paramName)
-	}
-
-	return paramValue, nil
 }

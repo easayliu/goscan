@@ -19,55 +19,11 @@
         "version": "1.0"
     },
     "host": "localhost:8080",
-    "basePath": "/api/v1",
+    "basePath": "/",
     "paths": {
-        "/config": {
-            "get": {
-                "description": "返回系统配置信息，敏感数据已脱敏处理",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "System"
-                ],
-                "summary": "获取系统配置",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/models.ConfigResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "description": "基于安全考虑，此接口暂不支持配置更新",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "System"
-                ],
-                "summary": "更新系统配置",
-                "responses": {
-                    "501": {
-                        "description": "Not Implemented",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/health": {
             "get": {
-                "description": "返回服务健康状态",
+                "description": "Perform comprehensive system health check including database connection, task manager status, etc. (Note: this endpoint is not under /api/v1 path)",
                 "consumes": [
                     "application/json"
                 ],
@@ -75,70 +31,18 @@
                     "application/json"
                 ],
                 "tags": [
-                    "System"
+                    "Health Check"
                 ],
-                "summary": "健康检查",
+                "summary": "Perform health check",
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Health check passed",
                         "schema": {
-                            "$ref": "#/definitions/models.HealthResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/notifications/wechat/status": {
-            "get": {
-                "description": "返回企业微信通知功能的配置状态和最近的通知历史",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Notifications"
-                ],
-                "summary": "获取企业微信通知状态",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/models.WeChatNotificationStatusResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/notifications/wechat/test": {
-            "post": {
-                "description": "测试企业微信Webhook URL的连通性，不发送实际的费用报告",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Notifications"
-                ],
-                "summary": "测试企业微信Webhook连接",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/models.MessageResponse"
+                            "$ref": "#/definitions/models.HealthCheckResponse"
                         }
                     },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
+                    "503": {
+                        "description": "Service unhealthy",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -146,9 +50,9 @@
                 }
             }
         },
-        "/notifications/wechat/trigger": {
+        "/notifications/wechat": {
             "post": {
-                "description": "手动触发企业微信费用报告通知，支持指定分析参数",
+                "description": "Manually trigger WeChat Enterprise cost report notification, supports specifying analysis date, cloud provider list and alert threshold. Can be used for temporary notification needs outside of scheduled tasks.\n\n**请求示例：**\n```json\n{\n\"date\": \"2025-09-12\",\n\"providers\": [\"volcengine\", \"alicloud\"],\n\"alert_threshold\": 15.0,\n\"force_notify\": false,\n\"test_mode\": false\n}\n```\n\n**Field Descriptions:**\n- `date`: Analysis date, format YYYY-MM-DD, uses current date if not provided\n- `providers`: Cloud provider list, supports volcengine/alicloud/aws/azure/gcp\n- `alert_threshold`: Cost change alert threshold (percentage), range 0-100\n- `force_notify`: Whether to force send, ignores alert threshold when true\n- `test_mode`: Test mode, only tests connection without sending actual report when true",
                 "consumes": [
                     "application/json"
                 ],
@@ -156,12 +60,12 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Notifications"
+                    "Notification Management"
                 ],
-                "summary": "手动触发企业微信通知",
+                "summary": "Manually trigger WeChat Enterprise notification",
                 "parameters": [
                     {
-                        "description": "微信通知触发请求参数",
+                        "description": "WeChat notification trigger request parameters",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -172,19 +76,105 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Triggered successfully",
                         "schema": {
                             "$ref": "#/definitions/models.MessageResponse"
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid request parameters or WeChat notification not enabled",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/wechat/status": {
+            "get": {
+                "description": "Returns detailed information about WeChat Enterprise notification feature configuration status, connection status, recent notification history, etc.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notification Management"
+                ],
+                "summary": "Get WeChat Enterprise notification status",
+                "parameters": [
+                    {
+                        "maximum": 50,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 10,
+                        "description": "History record count limit",
+                        "name": "history_limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "default": true,
+                        "description": "Whether to include detailed configuration",
+                        "name": "include_config",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Status information retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.WeChatNotificationStatusResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/notifications/wechat/test": {
+            "post": {
+                "description": "Send test message to WeChat Enterprise group to verify correctness and connectivity of Webhook URL configuration, will not send actual cost reports",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Notification Management"
+                ],
+                "summary": "Test WeChat Enterprise Webhook connection",
+                "parameters": [
+                    {
+                        "description": "Test request parameters (optional)",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/models.WeChatTestRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Connection test successful",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "WeChat notification not enabled or Webhook URL not configured",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Connection test failed or internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -194,7 +184,7 @@
         },
         "/scheduler/jobs": {
             "get": {
-                "description": "返回所有已配置的定时任务信息",
+                "description": "Returns information of all configured scheduled jobs",
                 "consumes": [
                     "application/json"
                 ],
@@ -202,9 +192,9 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Scheduler"
+                    "Schedule Management"
                 ],
-                "summary": "获取定时任务列表",
+                "summary": "Get scheduled job list",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -221,7 +211,7 @@
                 }
             },
             "post": {
-                "description": "创建一个新的定时同步任务",
+                "description": "Create a new scheduled sync job",
                 "consumes": [
                     "application/json"
                 ],
@@ -229,12 +219,12 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Scheduler"
+                    "Schedule Management"
                 ],
-                "summary": "创建定时任务",
+                "summary": "Create scheduled job",
                 "parameters": [
                     {
-                        "description": "定时任务请求参数",
+                        "description": "Scheduled job request parameters",
                         "name": "job",
                         "in": "body",
                         "required": true,
@@ -266,8 +256,8 @@
             }
         },
         "/scheduler/jobs/{id}": {
-            "delete": {
-                "description": "删除指定的定时任务",
+            "get": {
+                "description": "Returns detailed information of scheduled job by job ID",
                 "consumes": [
                     "application/json"
                 ],
@@ -275,13 +265,118 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Scheduler"
+                    "Schedule Management"
                 ],
-                "summary": "删除定时任务",
+                "summary": "Get specific scheduled job",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "任务ID",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.JobResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Update scheduled job configuration for specified ID",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Schedule Management"
+                ],
+                "summary": "Update scheduled job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Scheduled job update parameters",
+                        "name": "job",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.JobRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Delete specified scheduled job",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Schedule Management"
+                ],
+                "summary": "Delete scheduled job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -315,9 +410,9 @@
                 }
             }
         },
-        "/scheduler/status": {
-            "get": {
-                "description": "返回任务调度器的运行状态信息",
+        "/scheduler/jobs/{id}/trigger": {
+            "post": {
+                "description": "Immediately execute specified scheduled job without waiting for next scheduled time",
                 "consumes": [
                     "application/json"
                 ],
@@ -325,9 +420,88 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Scheduler"
+                    "Schedule Management"
                 ],
-                "summary": "获取调度器状态",
+                "summary": "Manually trigger scheduled job",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/scheduler/metrics": {
+            "get": {
+                "description": "Returns performance metrics information of scheduler, including task execution statistics, success rate, etc.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Schedule Management"
+                ],
+                "summary": "Get scheduler performance metrics",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SchedulerMetricsResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/scheduler/status": {
+            "get": {
+                "description": "Returns running status information of the task scheduler",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Schedule Management"
+                ],
+                "summary": "Get scheduler status",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -344,9 +518,9 @@
                 }
             }
         },
-        "/status": {
+        "/sync": {
             "get": {
-                "description": "返回服务运行状态、任务统计和调度器状态等系统信息",
+                "description": "Returns summary status information of all current data sync tasks, including running task count, total task count and other statistics",
                 "consumes": [
                     "application/json"
                 ],
@@ -354,68 +528,20 @@
                     "application/json"
                 ],
                 "tags": [
-                    "System"
+                    "Data Sync"
                 ],
-                "summary": "获取系统状态",
+                "summary": "Get data sync status",
                 "responses": {
                     "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/models.SystemStatus"
-                        }
-                    }
-                }
-            }
-        },
-        "/sync/history": {
-            "get": {
-                "description": "返回历史同步任务的执行记录",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Sync"
-                ],
-                "summary": "获取同步历史",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/models.SyncHistoryResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/sync/status": {
-            "get": {
-                "description": "返回当前数据同步任务的状态信息",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "Sync"
-                ],
-                "summary": "获取同步状态",
-                "responses": {
-                    "200": {
-                        "description": "OK",
+                        "description": "Sync status retrieved successfully",
                         "schema": {
                             "$ref": "#/definitions/models.SyncStatusResponse"
                         }
                     }
                 }
-            }
-        },
-        "/sync/trigger": {
+            },
             "post": {
-                "description": "手动触发指定云服务商的账单数据同步操作",
+                "description": "Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.\nSupports configuring sync mode, time range, granularity and other parameters.",
                 "consumes": [
                     "application/json"
                 ],
@@ -423,12 +549,12 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Sync"
+                    "Data Sync"
                 ],
-                "summary": "手动触发数据同步",
+                "summary": "Manually trigger billing data sync",
                 "parameters": [
                     {
-                        "description": "同步请求参数",
+                        "description": "Sync request parameters including cloud provider, sync mode, billing period range and other configurations",
                         "name": "sync",
                         "in": "body",
                         "required": true,
@@ -439,13 +565,19 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Sync task triggered successfully",
                         "schema": {
                             "$ref": "#/definitions/models.MessageResponse"
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid request parameters or missing cloud provider configuration",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -453,9 +585,9 @@
                 }
             }
         },
-        "/tasks": {
+        "/sync/history": {
             "get": {
-                "description": "返回所有任务的详细信息",
+                "description": "Returns execution records of historical sync tasks, including successful and failed tasks, as well as detailed information of each sync",
                 "consumes": [
                     "application/json"
                 ],
@@ -463,20 +595,140 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Tasks"
+                    "Data Sync"
                 ],
-                "summary": "获取任务列表",
+                "summary": "Get sync history records",
+                "parameters": [
+                    {
+                        "maximum": 1000,
+                        "minimum": 1,
+                        "type": "integer",
+                        "default": 100,
+                        "description": "Limit of returned records",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "volcengine",
+                            "alicloud",
+                            "aws",
+                            "azure",
+                            "gcp"
+                        ],
+                        "type": "string",
+                        "description": "Filter records by specified cloud provider",
+                        "name": "provider",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "History records retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.SyncHistoryResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/config": {
+            "get": {
+                "description": "Returns system configuration information with sensitive data masked",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System Management"
+                ],
+                "summary": "Get system configuration",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
+                            "$ref": "#/definitions/models.ConfigResponse"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "This endpoint does not support configuration updates for security reasons",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System Management"
+                ],
+                "summary": "Update system configuration",
+                "responses": {
+                    "501": {
+                        "description": "Not Implemented",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/system/status": {
+            "get": {
+                "description": "Returns system information including service running status, task statistics and scheduler status",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "System Management"
+                ],
+                "summary": "Get system status",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.SystemStatus"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks": {
+            "get": {
+                "description": "Returns detailed information of all tasks in the system, including running, completed and failed tasks",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Task Management"
+                ],
+                "summary": "Get all task list",
+                "responses": {
+                    "200": {
+                        "description": "Task list retrieved successfully",
+                        "schema": {
                             "$ref": "#/definitions/models.TaskListResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
                         }
                     }
                 }
             },
             "post": {
-                "description": "创建并异步执行一个新的同步任务",
+                "description": "Create and asynchronously execute a new cloud provider billing data sync task. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.",
                 "consumes": [
                     "application/json"
                 ],
@@ -484,12 +736,12 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Tasks"
+                    "Task Management"
                 ],
-                "summary": "创建新任务",
+                "summary": "Create new sync task",
                 "parameters": [
                     {
-                        "description": "任务请求参数",
+                        "description": "Task request parameters including task type, cloud provider, sync configuration, etc.",
                         "name": "task",
                         "in": "body",
                         "required": true,
@@ -500,13 +752,19 @@
                 ],
                 "responses": {
                     "201": {
-                        "description": "Created",
+                        "description": "Task created successfully",
                         "schema": {
                             "$ref": "#/definitions/models.MessageResponse"
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid request parameters",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -516,7 +774,7 @@
         },
         "/tasks/{id}": {
             "get": {
-                "description": "根据任务ID返回任务的详细信息",
+                "description": "Get detailed information of a specific task by task ID, including task status, execution progress, error information, etc.",
                 "consumes": [
                     "application/json"
                 ],
@@ -524,13 +782,13 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Tasks"
+                    "Task Management"
                 ],
-                "summary": "获取指定任务",
+                "summary": "Get specific task details",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "任务ID",
+                        "description": "Unique task identifier ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -538,19 +796,19 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Task details retrieved successfully",
                         "schema": {
                             "$ref": "#/definitions/models.TaskResponse"
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid task ID",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Task not found",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -558,7 +816,7 @@
                 }
             },
             "delete": {
-                "description": "取消或删除指定的任务",
+                "description": "Cancel running tasks or delete completed task records. Running tasks will be forcibly stopped.",
                 "consumes": [
                     "application/json"
                 ],
@@ -566,13 +824,13 @@
                     "application/json"
                 ],
                 "tags": [
-                    "Tasks"
+                    "Task Management"
                 ],
-                "summary": "删除任务",
+                "summary": "Cancel or delete task",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "任务ID",
+                        "description": "Unique task identifier ID",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -580,19 +838,19 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "OK",
+                        "description": "Task cancelled/deleted successfully",
                         "schema": {
                             "$ref": "#/definitions/models.MessageResponse"
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid task ID",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Task not found or cannot be cancelled",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -602,6 +860,36 @@
         }
     },
     "definitions": {
+        "goscan_pkg_models.ProviderConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "endpoint": {
+                    "type": "string",
+                    "example": "ecs.cn-hangzhou.aliyuncs.com"
+                },
+                "has_credentials": {
+                    "description": "Note: AccessKey and SecretKey are masked for security",
+                    "type": "boolean",
+                    "example": true
+                },
+                "host": {
+                    "type": "string",
+                    "example": "billing.volcengineapi.com"
+                },
+                "region": {
+                    "type": "string",
+                    "example": "cn-north-1"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "example": 30
+                }
+            }
+        },
         "models.AppConfig": {
             "type": "object",
             "properties": {
@@ -652,19 +940,19 @@
             "type": "object",
             "properties": {
                 "alicloud": {
-                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
                 },
                 "aws": {
-                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
                 },
                 "azure": {
-                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
                 },
                 "gcp": {
-                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
                 },
                 "volcengine": {
-                    "$ref": "#/definitions/pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
                 }
             }
         },
@@ -703,12 +991,12 @@
                 }
             }
         },
-        "models.HealthResponse": {
+        "models.HealthCheckResponse": {
             "type": "object",
             "properties": {
-                "service": {
-                    "type": "string",
-                    "example": "goscan"
+                "checks": {
+                    "type": "object",
+                    "additionalProperties": true
                 },
                 "status": {
                     "type": "string",
@@ -717,10 +1005,6 @@
                 "timestamp": {
                     "type": "string",
                     "example": "2025-09-11T08:13:24Z"
-                },
-                "version": {
-                    "type": "string",
-                    "example": "1.0.0"
                 }
             }
         },
@@ -841,6 +1125,34 @@
                 "success": {
                     "type": "boolean",
                     "example": true
+                }
+            }
+        },
+        "models.SchedulerMetricsResponse": {
+            "type": "object",
+            "properties": {
+                "active_jobs": {
+                    "type": "integer",
+                    "example": 8
+                },
+                "inactive_jobs": {
+                    "type": "integer",
+                    "example": 2
+                },
+                "scheduler_status": {
+                    "$ref": "#/definitions/models.SchedulerStatus"
+                },
+                "timestamp": {
+                    "type": "string",
+                    "example": "2025-09-11T08:13:24Z"
+                },
+                "total_jobs": {
+                    "type": "integer",
+                    "example": 10
+                },
+                "uptime": {
+                    "type": "string",
+                    "example": "3h45m"
                 }
             }
         },
@@ -1177,25 +1489,28 @@
             }
         },
         "models.WeChatNotificationRequest": {
+            "description": "企业微信费用报告通知触发请求，支持指定分析日期、云服务商和告警阈值",
             "type": "object",
             "properties": {
                 "alert_threshold": {
-                    "description": "告警阈值（百分比），默认使用配置值",
+                    "description": "费用变化告警阈值（百分比），当费用变化超过此值时触发告警，默认使用系统配置值，范围：0-100",
                     "type": "number",
+                    "maximum": 100,
+                    "minimum": 0,
                     "example": 10
                 },
                 "date": {
-                    "description": "分析日期，格式：2006-01-02，默认当前日期",
+                    "description": "分析日期，格式：YYYY-MM-DD，默认为当前日期。示例：2025-09-12",
                     "type": "string",
                     "example": "2025-09-12"
                 },
                 "force_notify": {
-                    "description": "强制发送通知，即使未达到告警阈值",
+                    "description": "强制发送通知，设为true时即使未达到告警阈值也会发送通知，默认为false",
                     "type": "boolean",
                     "example": false
                 },
                 "providers": {
-                    "description": "云服务商列表，默认：[\"volcengine\", \"alicloud\"]",
+                    "description": "要分析的云服务商列表，支持：volcengine（火山云）、alicloud（阿里云）、aws、azure、gcp，默认为 [\"volcengine\", \"alicloud\"]",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -1206,7 +1521,7 @@
                     ]
                 },
                 "test_mode": {
-                    "description": "测试模式，仅测试连接不发送实际报告",
+                    "description": "测试模式，设为true时仅测试企业微信连接而不发送实际的费用报告，默认为false",
                     "type": "boolean",
                     "example": false
                 }
@@ -1268,11 +1583,6 @@
                     "type": "integer",
                     "example": 5
                 },
-                "send_time": {
-                    "description": "发送时间",
-                    "type": "string",
-                    "example": "09:00"
-                },
                 "timestamp": {
                     "description": "状态查询时间戳",
                     "type": "string",
@@ -1290,33 +1600,22 @@
                 }
             }
         },
-        "pkg_models.ProviderConfig": {
+        "models.WeChatTestRequest": {
+            "description": "企业微信Webhook连接测试请求，用于验证Webhook URL的可用性",
             "type": "object",
             "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "example": true
-                },
-                "endpoint": {
+                "custom_message": {
+                    "description": "自定义测试消息内容，最大长度500字符，默认使用系统预设的测试消息",
                     "type": "string",
-                    "example": "ecs.cn-hangzhou.aliyuncs.com"
-                },
-                "has_credentials": {
-                    "description": "Note: AccessKey and SecretKey are masked for security",
-                    "type": "boolean",
-                    "example": true
-                },
-                "host": {
-                    "type": "string",
-                    "example": "billing.volcengineapi.com"
-                },
-                "region": {
-                    "type": "string",
-                    "example": "cn-north-1"
+                    "maxLength": 500,
+                    "example": "这是一条来自费用监控系统的测试消息"
                 },
                 "timeout": {
+                    "description": "连接超时时间（秒），范围1-60秒，默认为10秒",
                     "type": "integer",
-                    "example": 30
+                    "maximum": 60,
+                    "minimum": 1,
+                    "example": 10
                 }
             }
         }

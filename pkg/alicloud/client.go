@@ -3,24 +3,82 @@ package alicloud
 import (
 	"context"
 	"fmt"
-	"github.com/aliyun/alibaba-cloud-sdk-go/services/bssopenapi"
 	"goscan/pkg/config"
-	"log"
+	"goscan/pkg/logger"
 	"math"
 	"math/rand"
 	"strings"
 	"time"
 
+	"github.com/aliyun/alibaba-cloud-sdk-go/services/bssopenapi"
+
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
+	"go.uber.org/zap"
 )
 
 type Client struct {
 	config      *config.AliCloudConfig
 	bssClient   *bssopenapi.Client
-	rateLimiter *RateLimiter
+	rateLimiter RateLimiterInterface
 }
+
+// RetryHandler retry handler
+type RetryHandler struct {
+	maxRetries   int
+	baseDelay    time.Duration
+	maxDelay     time.Duration
+	enableJitter bool
+}
+
+// NewRetryHandler creates retry handler
+func NewRetryHandler(maxRetries int, baseDelay, maxDelay time.Duration) *RetryHandler {
+	return &RetryHandler{
+		maxRetries:   maxRetries,
+		baseDelay:    baseDelay,
+		maxDelay:     maxDelay,
+		enableJitter: true,
+	}
+}
+
+// ShouldRetry determines if retry should be attempted
+func (rh *RetryHandler) ShouldRetry(err error, attempt int) bool {
+	if attempt >= rh.maxRetries {
+		return false
+	}
+
+	return IsRetryableError(err)
+}
+
+// GetRetryDelay gets retry delay
+func (rh *RetryHandler) GetRetryDelay(attempt int) time.Duration {
+	// Exponential backoff
+	delay := time.Duration(float64(rh.baseDelay) * math.Pow(2, float64(attempt)))
+
+	if delay > rh.maxDelay {
+		delay = rh.maxDelay
+	}
+
+	// Add random jitter to avoid thundering herd effect
+	if rh.enableJitter {
+		jitter := rand.Float64()*0.3 + 0.85 // 0.85-1.15x jitter
+		delay = time.Duration(float64(delay) * jitter)
+	}
+
+	return delay
+}
+
+// OnRetry 重试时的回调
+func (rh *RetryHandler) OnRetry(attempt int, err error) {
+	logger.Warn("API call retry",
+		zap.String("provider", "alicloud"),
+		zap.Int("attempt", attempt),
+		zap.Error(err))
+}
+
+// 实现 BillProvider 接口
+var _ BillProvider = (*Client)(nil)
 
 // RateLimiter 阿里云API限流器
 // 阿里云单用户限流：10次/秒
@@ -67,8 +125,11 @@ func (rl *RateLimiter) Wait(ctx context.Context) error {
 	}
 
 	if waitTime > 0 {
-		log.Printf("[阿里云限流] 等待 %v 后发起下一个API请求 (QPS: %d, 自适应延迟: %v)",
-			waitTime, rl.maxQPS, rl.adaptiveDelay)
+		logger.Debug("rate limiter waiting",
+			zap.String("provider", "alicloud"),
+			zap.Duration("wait_time", waitTime),
+			zap.Int("max_qps", rl.maxQPS),
+			zap.Duration("adaptive_delay", rl.adaptiveDelay))
 
 		select {
 		case <-time.After(waitTime):
@@ -90,7 +151,10 @@ func (rl *RateLimiter) OnSuccess() {
 		if rl.adaptiveDelay < rl.baseDelay {
 			rl.adaptiveDelay = rl.baseDelay
 		}
-		log.Printf("[阿里云限流] 请求成功，减少延迟至 %v", rl.adaptiveDelay)
+		logger.Debug("rate limiter adjusted",
+			zap.String("provider", "alicloud"),
+			zap.String("action", "reduce_delay"),
+			zap.Duration("delay", rl.adaptiveDelay))
 	}
 }
 
@@ -113,13 +177,34 @@ func (rl *RateLimiter) OnRateLimit() {
 	}
 
 	rl.adaptiveDelay = newDelay
-	log.Printf("[阿里云限流] 触发限流，增加延迟至 %v (连续失败: %d次)", rl.adaptiveDelay, rl.consecutiveFails)
+	logger.Warn("rate limit triggered",
+		zap.String("provider", "alicloud"),
+		zap.Duration("delay", rl.adaptiveDelay),
+		zap.Int("consecutive_fails", rl.consecutiveFails))
 }
+
+// GetCurrentDelay 获取当前延迟
+func (rl *RateLimiter) GetCurrentDelay() time.Duration {
+	return rl.adaptiveDelay
+}
+
+// SetQPS 设置QPS限制
+func (rl *RateLimiter) SetQPS(qps int) {
+	if qps > 0 {
+		rl.maxQPS = qps
+		logger.Debug("rate limiter configuration updated",
+			zap.String("provider", "alicloud"),
+			zap.Int("qps_limit", qps))
+	}
+}
+
+// 实现 RateLimiterInterface 接口
+var _ RateLimiterInterface = (*RateLimiter)(nil)
 
 // OnError 记录其他错误
 func (rl *RateLimiter) OnError(err error) {
 	// 如果是限流错误，调用OnRateLimit
-	if isRateLimitError(err) {
+	if IsRateLimitError(err) {
 		rl.OnRateLimit()
 	} else {
 		// 其他错误也适当增加延迟，但不如限流那么激进
@@ -128,39 +213,15 @@ func (rl *RateLimiter) OnError(err error) {
 			newDelay := time.Duration(float64(rl.adaptiveDelay) * 1.2)
 			if newDelay <= rl.maxDelay {
 				rl.adaptiveDelay = newDelay
-				log.Printf("[阿里云限流] 请求错误，适度增加延迟至 %v", rl.adaptiveDelay)
+				logger.Debug("rate limiter adjusted for error",
+					zap.String("provider", "alicloud"),
+					zap.Duration("delay", rl.adaptiveDelay))
 			}
 		}
 	}
 }
 
-// isRateLimitError 检查是否为限流错误
-func isRateLimitError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	errStr := strings.ToLower(err.Error())
-	rateLimitIndicators := []string{
-		"qpslimitexceeded",
-		"flowlimitexceeded",
-		"throttling",
-		"rate limit",
-		"rate exceeded",
-		"too many requests",
-		"flow control",
-		"频率限制",
-		"请求过于频繁",
-	}
-
-	for _, indicator := range rateLimitIndicators {
-		if strings.Contains(errStr, indicator) {
-			return true
-		}
-	}
-
-	return false
-}
+// 注意：isRateLimitError 函数已移动到 errors.go 中作为 IsRateLimitError
 
 // NewClient 创建阿里云客户端
 func NewClient(cfg *config.AliCloudConfig) (*Client, error) {
@@ -195,7 +256,10 @@ func NewClient(cfg *config.AliCloudConfig) (*Client, error) {
 	// 如果配置的延迟过大，使用优化后的值
 	minOptimalDelay := 120 * time.Millisecond
 	if baseDelay > 1*time.Second {
-		log.Printf("[阿里云客户端] 配置延迟过大(%v)，优化为%v以提高效率", baseDelay, minOptimalDelay)
+		logger.Info("client configuration optimized",
+			zap.String("provider", "alicloud"),
+			zap.Duration("original_delay", baseDelay),
+			zap.Duration("optimized_delay", minOptimalDelay))
 		baseDelay = minOptimalDelay
 	}
 
@@ -205,7 +269,10 @@ func NewClient(cfg *config.AliCloudConfig) (*Client, error) {
 		rateLimiter: NewRateLimiter(baseDelay),
 	}
 
-	log.Printf("[阿里云客户端] 初始化完成，Region: %s, QPS限制: 10", cfg.Region)
+	logger.Info("client initialized",
+		zap.String("provider", "alicloud"),
+		zap.String("region", cfg.Region),
+		zap.Int("qps_limit", 10))
 	return client, nil
 }
 
@@ -226,8 +293,12 @@ func (c *Client) DescribeInstanceBill(ctx context.Context, req *DescribeInstance
 	if req.IsDaily() && req.BillingDate != "" {
 		granularityInfo += fmt.Sprintf(", BillingDate: %s", req.BillingDate)
 	}
-	log.Printf("[阿里云API请求] DescribeInstanceBill - BillingCycle: %s, %s, MaxResults: %d",
-		req.BillingCycle, granularityInfo, req.MaxResults)
+	logger.Debug("API request",
+		zap.String("provider", "alicloud"),
+		zap.String("api", "DescribeInstanceBill"),
+		zap.String("cycle", req.BillingCycle),
+		zap.String("granularity", granularityInfo),
+		zap.Int32("max_results", req.MaxResults))
 
 	// 使用智能重试调用API
 	response, err := c.callAPIWithRetry(ctx, req)
@@ -240,8 +311,11 @@ func (c *Client) DescribeInstanceBill(ctx context.Context, req *DescribeInstance
 		return nil, fmt.Errorf("response validation failed: %w", err)
 	}
 
-	log.Printf("[阿里云API响应] 成功获取 %d 条记录，NextToken: %s",
-		len(response.Data.Items), response.Data.NextToken)
+	logger.Debug("API response received",
+		zap.String("provider", "alicloud"),
+		zap.String("api", "DescribeInstanceBill"),
+		zap.Int("records", len(response.Data.Items)),
+		zap.String("next_token", response.Data.NextToken))
 	return response, nil
 }
 
@@ -260,7 +334,10 @@ func (c *Client) callAPIWithRetry(ctx context.Context, req *DescribeInstanceBill
 
 		// 记录请求信息
 		if attempt > 0 {
-			log.Printf("[阿里云重试] 第 %d/%d 次尝试调用API", attempt, maxRetries)
+			logger.Debug("API retry attempt",
+				zap.String("provider", "alicloud"),
+				zap.Int("attempt", attempt),
+				zap.Int("max_retries", maxRetries))
 		}
 
 		// 构建API请求
@@ -280,17 +357,24 @@ func (c *Client) callAPIWithRetry(ctx context.Context, req *DescribeInstanceBill
 
 		// 如果是最后一次尝试，直接返回错误
 		if attempt == maxRetries {
-			log.Printf("[阿里云重试] 达到最大重试次数 %d，放弃重试", maxRetries)
+			logger.Error("maximum retry attempts reached",
+				zap.String("provider", "alicloud"),
+				zap.Int("max_retries", maxRetries),
+				zap.Error(err))
 			return nil, c.wrapAPIError(err)
 		}
 
 		// 检查是否可以重试
 		if !isRetryableError(err) {
-			log.Printf("[阿里云重试] 遇到不可重试错误，放弃重试: %v", err)
+			logger.Error("non-retryable error encountered",
+				zap.String("provider", "alicloud"),
+				zap.Error(err))
 			return nil, c.wrapAPIError(err)
 		}
 
-		log.Printf("[阿里云重试] API调用失败，将进行重试: %v", err)
+		logger.Warn("API call failed, retrying",
+			zap.String("provider", "alicloud"),
+			zap.Error(err))
 	}
 
 	return nil, fmt.Errorf("unexpected end of retry loop")
@@ -452,9 +536,10 @@ func (c *Client) wrapAPIError(err error) error {
 
 	// 创建通用API错误
 	apiErr := &APIError{
-		RequestId: "unknown",
-		Code:      "UnknownError",
-		Message:   errStr,
+		Code:     "UnknownError",
+		Message:  errStr,
+		Details:  "",
+		HTTPCode: 0,
 	}
 
 	// 尝试从错误信息中提取更多细节
@@ -480,9 +565,10 @@ func (c *Client) validateResponse(response *DescribeInstanceBillResponse) error 
 
 	if !response.Success {
 		return &APIError{
-			RequestId: response.RequestId,
-			Code:      response.Code,
-			Message:   response.Message,
+			Code:     response.Code,
+			Message:  response.Message,
+			Details:  response.RequestId,
+			HTTPCode: 400,
 		}
 	}
 
@@ -548,7 +634,10 @@ func (c *Client) GetAvailableBillingCycles(ctx context.Context) ([]string, error
 		}
 	}
 
-	log.Printf("[阿里云账期] 生成可用账期列表: %v", cycles)
+	logger.Debug("billing cycles generated",
+		zap.String("provider", "alicloud"),
+		zap.Int("count", len(cycles)),
+		zap.Strings("cycles", cycles))
 	return cycles, nil
 }
 
@@ -565,20 +654,42 @@ func (c *Client) TestConnection(ctx context.Context) error {
 	_, err := c.DescribeInstanceBill(ctx, req)
 	if err != nil {
 		// 如果是认证错误，直接返回
-		if apiErr, ok := err.(*APIError); ok && apiErr.IsAuthError() {
+		if apiErr, ok := err.(*APIError); ok && isAuthError(apiErr) {
 			return fmt.Errorf("authentication failed: %w", err)
 		}
 		// 其他错误可能是暂时性的，记录但不阻断
-		log.Printf("[阿里云连接测试] 警告: %v", err)
+		logger.Warn("connection test warning",
+			zap.String("provider", "alicloud"),
+			zap.Error(err))
 	}
 
-	log.Printf("[阿里云连接测试] 连接成功")
+	logger.Info("connection test successful",
+		zap.String("provider", "alicloud"))
 	return nil
+}
+
+// isAuthError 检查是否为认证错误
+func isAuthError(apiErr *APIError) bool {
+	authErrorCodes := []string{
+		"InvalidAccessKeyId",
+		"SignatureDoesNotMatch",
+		"Forbidden",
+		"Unauthorized",
+		"AccessDenied",
+	}
+
+	for _, code := range authErrorCodes {
+		if apiErr.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 // Close 关闭客户端（预留接口）
 func (c *Client) Close() error {
 	// 阿里云SDK客户端无需显式关闭
-	log.Printf("[阿里云客户端] 客户端已关闭")
+	logger.Debug("client closed",
+		zap.String("provider", "alicloud"))
 	return nil
 }

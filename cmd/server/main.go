@@ -5,27 +5,29 @@ import (
 	"flag"
 	"fmt"
 	"goscan/pkg/config"
+	"goscan/pkg/logger"
 	"goscan/pkg/scheduler"
 	"goscan/pkg/server"
-	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // @title Goscan API
 // @version 1.0
-// @description 云账单数据同步服务API文档
-// @description 支持火山云、阿里云等多云平台的账单数据自动同步到ClickHouse数据库
+// @description Cloud billing data synchronization service API documentation
+// @description Supports automatic synchronization of billing data from multi-cloud platforms like VolcEngine and Alibaba Cloud to ClickHouse database
 // @termsOfService http://swagger.io/terms/
 // @contact.name API Support
 // @contact.email support@goscan.com
 // @license.name MIT
 // @license.url https://opensource.org/licenses/MIT
 // @host localhost:8080
-// @BasePath /api/v1
+// @BasePath /
 // @schemes http https
 
 const (
@@ -41,22 +43,24 @@ func main() {
 	)
 	flag.Parse()
 
-	// Initialize structured logger
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-	slog.SetDefault(logger)
+	// Initialize logger
+	if err := logger.InitLogger(true, ""); err != nil {
+		// Use stderr since logger initialization failed
+		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer logger.Sync()
 
-	slog.Info("Starting goscan daemon service", "version", "1.0.0")
+	logger.Info("Starting goscan service", zap.String("version", "1.0.0"))
 
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
-		slog.Error("Failed to load configuration", "error", err)
+		logger.Error("Failed to load configuration", zap.Error(err))
 		os.Exit(1)
 	}
 
-	slog.Info("Configuration loaded successfully", "config_path", getConfigPath(*configPath))
+	logger.Info("Configuration loaded successfully", zap.String("config_path", getConfigPath(*configPath)))
 
 	// Create main context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -67,43 +71,41 @@ func main() {
 		cfg:    cfg,
 		ctx:    ctx,
 		cancel: cancel,
-		logger: logger,
 	}
 
 	// Override config with command line flags if provided
 	if *port != defaultPort {
-		slog.Info("Overriding server port from command line", "port", *port)
+		logger.Info("Overriding server port from command line", zap.Int("port", *port))
 	}
 	if *address != defaultAddress {
-		slog.Info("Overriding server address from command line", "address", *address)
+		logger.Info("Overriding server address from command line", zap.String("address", *address))
 	}
 
 	// Start the daemon
 	if err := app.Start(*address, *port); err != nil {
-		slog.Error("Failed to start daemon", "error", err)
+		logger.Error("Failed to start goscan service", zap.Error(err))
 		os.Exit(1)
 	}
 
 	// Wait for shutdown signal
 	app.WaitForShutdown()
 
-	slog.Info("Goscan daemon service stopped")
+	logger.Info("Goscan service stopped")
 }
 
-// DaemonApp represents the main daemon application
+// DaemonApp represents the main application
 type DaemonApp struct {
 	cfg       *config.Config
 	ctx       context.Context
 	cancel    context.CancelFunc
-	logger    *slog.Logger
 	server    *server.HTTPServer
 	scheduler *scheduler.TaskScheduler
 	wg        sync.WaitGroup
 }
 
-// Start initializes and starts all components of the daemon
+// Start initializes and starts all components of the application
 func (app *DaemonApp) Start(address string, port int) error {
-	slog.Info("Initializing daemon components...")
+	logger.Info("Initializing goscan components...")
 
 	// Initialize HTTP server
 	serverConfig := &server.Config{
@@ -136,9 +138,9 @@ func (app *DaemonApp) Start(address string, port int) error {
 	app.wg.Add(1)
 	go func() {
 		defer app.wg.Done()
-		slog.Info("Starting HTTP server", "address", address, "port", port)
+		logger.Info("Starting HTTP server", zap.String("address", address), zap.Int("port", port))
 		if err := app.server.Start(); err != nil {
-			slog.Error("HTTP server error", "error", err)
+			logger.Error("HTTP server error", zap.Error(err))
 			app.cancel() // Trigger graceful shutdown
 		}
 	}()
@@ -147,16 +149,16 @@ func (app *DaemonApp) Start(address string, port int) error {
 	app.wg.Add(1)
 	go func() {
 		defer app.wg.Done()
-		slog.Info("Starting task scheduler")
+		logger.Info("Starting task scheduler")
 		if err := app.scheduler.Start(); err != nil {
-			slog.Error("Task scheduler error", "error", err)
+			logger.Error("Task scheduler error", zap.Error(err))
 			app.cancel() // Trigger graceful shutdown
 		}
 	}()
 
 	// Wait a moment for services to start
 	time.Sleep(100 * time.Millisecond)
-	slog.Info("Daemon started successfully")
+	logger.Info("Goscan service started successfully")
 
 	return nil
 }
@@ -170,9 +172,9 @@ func (app *DaemonApp) WaitForShutdown() {
 	// Wait for shutdown signal or context cancellation
 	select {
 	case sig := <-sigChan:
-		slog.Info("Received shutdown signal", "signal", sig.String())
+		logger.Info("Received shutdown signal", zap.String("signal", sig.String()))
 	case <-app.ctx.Done():
-		slog.Info("Context cancelled, initiating shutdown")
+		logger.Info("Context cancelled, initiating shutdown")
 	}
 
 	// Start graceful shutdown
@@ -181,7 +183,7 @@ func (app *DaemonApp) WaitForShutdown() {
 
 // Shutdown performs graceful shutdown of all components
 func (app *DaemonApp) Shutdown() {
-	slog.Info("Starting graceful shutdown...")
+	logger.Info("Starting graceful shutdown...")
 
 	// Cancel context to signal all components to stop
 	app.cancel()
@@ -198,11 +200,11 @@ func (app *DaemonApp) Shutdown() {
 		shutdownWg.Add(1)
 		go func() {
 			defer shutdownWg.Done()
-			slog.Info("Shutting down HTTP server...")
+			logger.Info("Shutting down HTTP server...")
 			if err := app.server.Shutdown(shutdownCtx); err != nil {
-				slog.Error("Error shutting down HTTP server", "error", err)
+				logger.Error("Error shutting down HTTP server", zap.Error(err))
 			} else {
-				slog.Info("HTTP server shut down successfully")
+				logger.Info("HTTP server shut down successfully")
 			}
 		}()
 	}
@@ -212,11 +214,11 @@ func (app *DaemonApp) Shutdown() {
 		shutdownWg.Add(1)
 		go func() {
 			defer shutdownWg.Done()
-			slog.Info("Shutting down task scheduler...")
+			logger.Info("Shutting down task scheduler...")
 			if err := app.scheduler.Shutdown(shutdownCtx); err != nil {
-				slog.Error("Error shutting down task scheduler", "error", err)
+				logger.Error("Error shutting down task scheduler", zap.Error(err))
 			} else {
-				slog.Info("Task scheduler shut down successfully")
+				logger.Info("Task scheduler shut down successfully")
 			}
 		}()
 	}
@@ -230,14 +232,14 @@ func (app *DaemonApp) Shutdown() {
 
 	select {
 	case <-shutdownComplete:
-		slog.Info("All components shut down successfully")
+		logger.Info("All components shut down successfully")
 	case <-shutdownCtx.Done():
-		slog.Warn("Shutdown timeout exceeded, some components may not have shut down gracefully")
+		logger.Warn("Shutdown timeout exceeded, some components may not have shut down gracefully")
 	}
 
 	// Wait for all goroutines to complete
 	app.wg.Wait()
-	slog.Info("Graceful shutdown completed")
+	logger.Info("Graceful shutdown completed")
 }
 
 // getConfigPath returns the actual config path that was used

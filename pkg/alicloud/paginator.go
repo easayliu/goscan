@@ -3,25 +3,28 @@ package alicloud
 import (
 	"context"
 	"fmt"
-	"log"
+	"goscan/pkg/logger"
 	"time"
+
+	"go.uber.org/zap"
 )
 
-// Paginator 阿里云API分页器
-// 处理NextToken分页机制
+// Paginator Alibaba Cloud API paginator
+// Handles NextToken pagination mechanism
 type Paginator struct {
-	client       *Client
-	baseRequest  *DescribeInstanceBillRequest
-	nextToken    string
-	hasMore      bool
-	currentPage  int
-	totalFetched int
-	startTime    time.Time
+	client           *Client
+	baseRequest      *DescribeInstanceBillRequest
+	nextToken        string
+	hasMore          bool
+	currentPage      int
+	totalFetched     int
+	startTime        time.Time
+	progressCallback func(current, total int32)
 }
 
-// NewPaginator 创建新的分页器
+// NewPaginator creates a new paginator
 func NewPaginator(client *Client, baseRequest *DescribeInstanceBillRequest) *Paginator {
-	// 复制基础请求，避免修改原始请求
+	// Copy base request to avoid modifying the original request
 	requestCopy := *baseRequest
 
 	return &Paginator{
@@ -35,53 +38,64 @@ func NewPaginator(client *Client, baseRequest *DescribeInstanceBillRequest) *Pag
 	}
 }
 
-// Next 获取下一页数据
+// Next fetches the next page of data
 func (p *Paginator) Next(ctx context.Context) (*DescribeInstanceBillResponse, error) {
 	if !p.hasMore {
 		return nil, fmt.Errorf("no more pages available")
 	}
 
-	// 准备请求
+	// Prepare request
 	request := *p.baseRequest
 	request.NextToken = p.nextToken
 
 	p.currentPage++
-	log.Printf("[阿里云分页器] 获取第 %d 页数据，NextToken: %s", p.currentPage,
-		p.truncateToken(p.nextToken))
+	logger.Debug("Alibaba Cloud paginator fetching data",
+		zap.String("provider", "alicloud"),
+		zap.Int("page", p.currentPage),
+		zap.String("next_token", p.truncateToken(p.nextToken)))
 
-	// 调用API
+	// Call API
 	response, err := p.client.DescribeInstanceBill(ctx, &request)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch page %d: %w", p.currentPage, err)
 	}
 
-	// 更新分页状态
+	// Update pagination state
 	p.nextToken = response.Data.NextToken
 	p.hasMore = p.nextToken != ""
 	p.totalFetched += len(response.Data.Items)
 
-	// 记录分页信息
-	pageInfo := fmt.Sprintf("第 %d 页: %d 条记录", p.currentPage, len(response.Data.Items))
+	// Record pagination information
+	pageInfo := fmt.Sprintf("Page %d: %d records", p.currentPage, len(response.Data.Items))
 	if p.hasMore {
-		pageInfo += fmt.Sprintf(", 还有更多数据 (NextToken: %s)", p.truncateToken(p.nextToken))
+		pageInfo += fmt.Sprintf(", more data available (NextToken: %s)", p.truncateToken(p.nextToken))
 	} else {
-		pageInfo += ", 已是最后一页"
+		pageInfo += ", last page reached"
 	}
-	log.Printf("[阿里云分页器] %s", pageInfo)
+	logger.Debug("Alibaba Cloud paginator page information",
+		zap.String("provider", "alicloud"),
+		zap.String("page_info", pageInfo))
 
-	// 计算统计信息
+	// Calculate statistics
 	elapsed := time.Since(p.startTime)
 	if elapsed > 0 {
 		avgSpeed := float64(p.totalFetched) / elapsed.Seconds()
-		log.Printf("[阿里云分页器] 累计获取 %d 条记录，平均速度: %.1f records/s",
-			p.totalFetched, avgSpeed)
+		logger.Debug("Alibaba Cloud paginator statistics",
+			zap.String("provider", "alicloud"),
+			zap.Int("total_fetched", p.totalFetched),
+			zap.Float64("avg_speed", avgSpeed))
 	}
 
 	return response, nil
 }
 
-// HasMore 检查是否还有更多页
+// HasMore checks if there are more pages
 func (p *Paginator) HasMore() bool {
+	return p.hasMore
+}
+
+// HasNext checks if there is a next page (implements PaginatorInterface)
+func (p *Paginator) HasNext() bool {
 	return p.hasMore
 }
 
@@ -109,9 +123,15 @@ func (p *Paginator) Reset() {
 	p.startTime = time.Now()
 }
 
+// SetProgressCallback 设置进度回调（实现PaginatorInterface接口）
+func (p *Paginator) SetProgressCallback(callback func(current, total int32)) {
+	p.progressCallback = callback
+}
+
 // FetchAll 获取所有页的数据
 func (p *Paginator) FetchAll(ctx context.Context) ([]BillDetail, error) {
-	log.Printf("[阿里云分页器] 开始获取所有数据")
+	logger.Info("Alibaba Cloud paginator starting to fetch all data",
+		zap.String("provider", "alicloud"))
 
 	var allBills []BillDetail
 
@@ -133,8 +153,10 @@ func (p *Paginator) FetchAll(ctx context.Context) ([]BillDetail, error) {
 		}
 	}
 
-	log.Printf("[阿里云分页器] 所有数据获取完成: 共 %d 页，%d 条记录",
-		p.currentPage, len(allBills))
+	logger.Info("Alibaba Cloud paginator all data fetching completed",
+		zap.String("provider", "alicloud"),
+		zap.Int("total_pages", p.currentPage),
+		zap.Int("total_records", len(allBills)))
 
 	return allBills, nil
 }
@@ -143,7 +165,8 @@ func (p *Paginator) FetchAll(ctx context.Context) ([]BillDetail, error) {
 func (p *Paginator) FetchAllWithCallback(ctx context.Context,
 	callback func(page int, pageRecords int, totalRecords int)) ([]BillDetail, error) {
 
-	log.Printf("[阿里云分页器] 开始获取所有数据（带进度回调）")
+	logger.Info("Alibaba Cloud paginator starting to fetch data with progress callback",
+		zap.String("provider", "alicloud"))
 
 	var allBills []BillDetail
 
@@ -170,8 +193,10 @@ func (p *Paginator) FetchAllWithCallback(ctx context.Context,
 		}
 	}
 
-	log.Printf("[阿里云分页器] 所有数据获取完成: 共 %d 页，%d 条记录",
-		p.currentPage, len(allBills))
+	logger.Info("Alibaba Cloud paginator data fetching completed with callback",
+		zap.String("provider", "alicloud"),
+		zap.Int("total_pages", p.currentPage),
+		zap.Int("total_records", len(allBills)))
 
 	return allBills, nil
 }
@@ -182,7 +207,9 @@ func (p *Paginator) FetchBatches(ctx context.Context, batchSize int) ([][]BillDe
 		batchSize = 1000 // 默认批次大小
 	}
 
-	log.Printf("[阿里云分页器] 开始分批获取数据，批次大小: %d", batchSize)
+	logger.Info("Alibaba Cloud paginator starting batch data fetching",
+		zap.String("provider", "alicloud"),
+		zap.Int("batch_size", batchSize))
 
 	var batches [][]BillDetail
 	var currentBatch []BillDetail
@@ -221,8 +248,11 @@ func (p *Paginator) FetchBatches(ctx context.Context, batchSize int) ([][]BillDe
 		copy(batches[len(batches)-1], currentBatch)
 	}
 
-	log.Printf("[阿里云分页器] 分批获取完成: 共 %d 页，%d 个批次，%d 条记录",
-		p.currentPage, len(batches), p.totalFetched)
+	logger.Info("Alibaba Cloud paginator batch fetching completed",
+		zap.String("provider", "alicloud"),
+		zap.Int("total_pages", p.currentPage),
+		zap.Int("batch_count", len(batches)),
+		zap.Int("total_records", p.totalFetched))
 
 	return batches, nil
 }
@@ -243,7 +273,9 @@ func (p *Paginator) EstimateTotal(ctx context.Context) (int32, error) {
 	totalCount := response.Data.TotalCount
 	p.Reset()
 
-	log.Printf("[阿里云分页器] 估算总记录数: %d", totalCount)
+	logger.Info("Alibaba Cloud paginator estimated total record count",
+		zap.String("provider", "alicloud"),
+		zap.Int32("total_count", totalCount))
 	return totalCount, nil
 }
 
@@ -261,7 +293,7 @@ func (p *Paginator) GetPaginationInfo() map[string]interface{} {
 	}
 }
 
-// truncateToken 截断Token用于日志显示
+// truncateToken shortens the token for safe logging
 func (p *Paginator) truncateToken(token string) string {
 	if len(token) <= 20 {
 		return token
@@ -378,7 +410,10 @@ func (mp *MultiplePaginator) InitializeDailyPaginators(maxResults int32) error {
 		})
 	}
 
-	log.Printf("[阿里云多粒度分页器] 初始化完成: 1个月分页器, %d个日分页器", len(dates))
+	logger.Info("Alibaba Cloud multi-granularity paginator initialization completed",
+		zap.String("provider", "alicloud"),
+		zap.Int("monthly_paginators", 1),
+		zap.Int("daily_paginators", len(dates)))
 	return nil
 }
 
@@ -394,13 +429,19 @@ func (mp *MultiplePaginator) FetchDailyData(ctx context.Context) (map[string][]B
 	for date, paginator := range mp.dailyPaginators {
 		bills, err := paginator.FetchAll(ctx)
 		if err != nil {
-			log.Printf("[阿里云多粒度分页器] 日期 %s 获取失败: %v", date, err)
+			logger.Error("Alibaba Cloud multi-granularity paginator date fetching failed",
+				zap.String("provider", "alicloud"),
+				zap.String("date", date),
+				zap.Error(err))
 			continue // 跳过失败的日期
 		}
 
 		if len(bills) > 0 {
 			result[date] = bills
-			log.Printf("[阿里云多粒度分页器] 日期 %s: %d 条记录", date, len(bills))
+			logger.Debug("Alibaba Cloud multi-granularity paginator date data",
+				zap.String("provider", "alicloud"),
+				zap.String("date", date),
+				zap.Int("record_count", len(bills)))
 		}
 
 		// 速率控制已由RateLimiter处理，这里只需要极短延迟避免CPU占用
