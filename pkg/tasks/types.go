@@ -11,6 +11,7 @@ type TaskType string
 const (
 	TaskTypeSync         TaskType = "sync"
 	TaskTypeNotification TaskType = "notification"
+	TaskTypeStockMonitor TaskType = "stock_monitor"
 )
 
 // TaskStatus represents the status of a task
@@ -34,15 +35,27 @@ type TaskRequest struct {
 
 // TaskConfig holds task-specific configuration
 type TaskConfig struct {
+	// Common task configuration
 	SyncMode       string `json:"sync_mode"`
 	UseDistributed bool   `json:"use_distributed"`
 	CreateTable    bool   `json:"create_table"`
 	ForceUpdate    bool   `json:"force_update"`
-	Granularity    string `json:"granularity,omitempty"` // For AliCloud
-	BillPeriod     string `json:"bill_period,omitempty"`
-	StartPeriod    string `json:"start_period,omitempty"`
-	EndPeriod      string `json:"end_period,omitempty"`
 	Limit          int    `json:"limit,omitempty"`
+	
+	// AliCloud sync configuration
+	Granularity string `json:"granularity,omitempty"` // For AliCloud
+	BillPeriod  string `json:"bill_period,omitempty"`
+	StartPeriod string `json:"start_period,omitempty"`
+	EndPeriod   string `json:"end_period,omitempty"`
+	
+	// Apple stock monitor configuration
+	MonitorConfigID   uint     `json:"monitor_config_id,omitempty"`   // ID of StockMonitorConfig
+	ProductCodes      []string `json:"product_codes,omitempty"`       // Specific product codes to monitor
+	StoreNumbers      []string `json:"store_numbers,omitempty"`       // Specific store numbers to check
+	CheckInterval     int      `json:"check_interval,omitempty"`      // Check interval in seconds
+	MaxRetries        int      `json:"max_retries,omitempty"`         // Maximum retry attempts
+	Timeout           int      `json:"timeout,omitempty"`             // Request timeout in seconds
+	NotifyOnAvailable bool     `json:"notify_on_available,omitempty"` // Send notification when stock becomes available
 }
 
 // Task represents a running or completed task

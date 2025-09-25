@@ -1,0 +1,117 @@
+{
+  "monitoring": {
+    "enabled": true,
+    "default_interval": 5,
+    "max_concurrent": 5,
+    "log_level": "info",
+    "rate_limit_per_minute": 10,
+    "request_timeout": 30
+  },
+  "apple_auth": {
+    "cookie": "",
+    "auto_cookie": {
+      "enabled": true
+    },
+    "use_pickup_api": false
+  },
+  "telegram": {
+    "enabled": true,
+    "bot_token": "8392633150:AAFhTFJRs21THHWHy80VQQD2X6MSC0Awz-E",
+    "chat_id": "-4948148030",
+    "timeout": 30
+  },
+  "products": [
+    {
+      "product_code": "MG8V4CH/A",
+      "product_name": "iPhone 17 Pro 256GB 深蓝色",
+      "model": "iPhone17,2",
+      "storage": "256GB", 
+      "color": "深蓝色",
+      "carrier": "Unlocked",
+      "price": 8999,
+      "enabled": false
+    },        
+    {
+      "product_code": "MG8Y4CH/A",
+      "product_name": "iPhone 17 Pro 512GB 深蓝色",
+      "model": "iPhone17,2",
+      "storage": "512GB", 
+      "color": "深蓝色",
+      "carrier": "Unlocked",
+      "price": 9999,
+      "enabled": false
+    },    
+    {
+      "product_code": "MG034CH/A",
+      "product_name": "iPhone 17 Pro Max 256GB 银色",
+      "model": "iPhone17,2",
+      "storage": "256GB", 
+      "color": "银色",
+      "carrier": "Unlocked",
+      "price": 9999,
+      "enabled": true
+    },
+    {
+      "product_code": "MG064CH/A",
+      "product_name": "iPhone 17 Pro Max 512GB 银色",
+      "model": "iPhone17,2",
+      "storage": "512GB", 
+      "color": "银色",
+      "carrier": "Unlocked",
+      "price": 11999,
+      "enabled": false
+    },
+    {
+      "product_code": "MG094CH/A",
+      "product_name": "iPhone 17 Pro Max 1TB 银色",
+      "model": "iPhone17,2",
+      "storage": "1TB", 
+      "color": "银色",
+      "carrier": "Unlocked",
+      "price": 13999,
+      "enabled": false
+    }
+  ],
+  "stores": [
+    {
+      "store_code": "R639",
+      "store_name": "Apple 珠江新城",
+      "city": "广州",
+      "state": "广东",
+      "country": "CN",
+      "address": "广州珠江新城兴民路 222 号天汇广场 1 层",
+      "phone": "4006393601",
+      "enabled": false
+    },
+    {
+      "store_code": "R577",
+      "store_name": "Apple 天环广场",
+      "city": "广州",
+      "state": "广东",
+      "country": "CN",
+      "address": "广州市天河区天河路 218 号",
+      "phone": "4006139742",
+      "enabled": true
+    },
+    {
+      "store_code": "R793",
+      "store_name": "Apple 前海壹方城",
+      "city": "深圳",
+      "state": "广东",
+      "country": "CN",
+      "address": "深圳市宝安区新湖路 99 号前海壹方城 L1 层",
+      "phone": "4000027805",
+      "enabled": false
+    },
+    {
+      "store_code": "R484",
+      "store_name": "Apple 深圳益田假日广场",
+      "city": "深圳",
+      "state": "广东",
+      "country": "CN",
+      "address": "深圳市南山区深南大道 9028 号益田假日广场",
+      "phone": "4006171254",
+      "enabled": false
+    }
+  ]
+}
