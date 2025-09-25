@@ -44,6 +44,7 @@ type SimpleMonitor struct {
 	autoCookieEnabled       bool           // Track if auto cookie is enabled
 	cookieExpireTime        time.Time      // Cookie expiration time parsed from shld_bt_ck
 	usePickupAPI            bool           // Use pickup API instead of fulfillment API
+	checkIndex              int            // Current check index for round-robin checking
 }
 
 var errAppleAuth = errors.New("apple api returned 541")
@@ -72,12 +73,12 @@ func getPlatformHeaders() PlatformHeaders {
 	// Default behavior based on runtime OS
 	switch runtime.GOOS {
 	case "linux":
-		// For Linux, use real Linux user agent - Chrome will capture actual headers
+		// For Linux, use Mac user agent to avoid detection
 		return PlatformHeaders{
-			UserAgent:       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-			SecChUa:         `"Chromium";v="131", "Not_A Brand";v="24"`,
+			UserAgent:       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+			SecChUa:         `"Chromium";v="140", "Not_A Brand";v="24"`,
 			SecChUaMobile:   "?0",
-			SecChUaPlatform: `"Linux"`,
+			SecChUaPlatform: `"macOS"`,
 		}
 	case "windows":
 		return PlatformHeaders{
@@ -324,22 +325,53 @@ func (m *SimpleMonitor) StartMonitoring(ctx context.Context, config *MonitorConf
 	}
 }
 
-// checkAllProducts checks all product-store combinations sequentially
+// checkAllProducts checks one product-store combination per call (round-robin)
 func (m *SimpleMonitor) checkAllProducts(ctx context.Context, config *MonitorConfig, isInitialCheck bool) {
-	logger.Debug("🔍 Starting stock check", zap.Int("products", len(config.Products)), zap.Int("stores", len(config.Stores)))
-
-	// Sequential execution without delays
-	for _, product := range config.Products {
-		for _, store := range config.Stores {
-			m.checkProduct(ctx, product, store)
-		}
+	// Calculate total combinations
+	totalCombinations := len(config.Products) * len(config.Stores)
+	if totalCombinations == 0 {
+		return
 	}
 
-	logger.Debug("✅ Stock check completed")
+	if isInitialCheck {
+		// On initial check, check all combinations
+		logger.Debug("🔍 Initial stock check - checking all combinations", 
+			zap.Int("products", len(config.Products)), 
+			zap.Int("stores", len(config.Stores)))
 
-	// Send initial check results notification
-	if isInitialCheck && m.telegramNotifier != nil {
-		go m.sendInitialCheckResults(ctx, config)
+		for _, product := range config.Products {
+			for _, store := range config.Stores {
+				m.checkProduct(ctx, product, store)
+			}
+		}
+
+		// Send initial check results notification
+		if m.telegramNotifier != nil {
+			go m.sendInitialCheckResults(ctx, config)
+		}
+	} else {
+		// Regular check - only check one combination
+		m.mu.Lock()
+		currentIndex := m.checkIndex
+		m.checkIndex = (m.checkIndex + 1) % totalCombinations
+		m.mu.Unlock()
+
+		// Calculate which product and store to check
+		productIndex := currentIndex / len(config.Stores)
+		storeIndex := currentIndex % len(config.Stores)
+
+		if productIndex < len(config.Products) && storeIndex < len(config.Stores) {
+			product := config.Products[productIndex]
+			store := config.Stores[storeIndex]
+			
+			logger.Debug("🔍 Checking single combination", 
+				zap.String("product", product.Name),
+				zap.String("store", store.Name),
+				zap.Int("index", currentIndex),
+				zap.Int("total", totalCombinations))
+			
+			m.checkProduct(ctx, product, store)
+		}
 	}
 }
 
@@ -671,8 +703,10 @@ func (m *SimpleMonitor) refreshCookieForProduct(ctx context.Context, productCode
 
 // callAppleAPIWithBrowser uses Chrome browser to fetch API data
 func (m *SimpleMonitor) callAppleAPIWithBrowser(ctx context.Context, productCode, storeCode, productName, storeName string) (*APIAvailabilityResult, error) {
-	// Try with page refresh retry if needed
-	return m.callAppleAPIWithBrowserRetry(ctx, productCode, storeCode, productName, storeName, false)
+	// When auto_cookie is enabled and we have browser context, 
+	// we already have cookies - just use HTTP client
+	logger.Debug("Using HTTP client with browser-obtained cookies")
+	return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
 }
 
 // callAppleAPIWithBrowserRetry uses Chrome browser to fetch API data with retry logic
@@ -1160,6 +1194,137 @@ func (m *SimpleMonitor) callAppleAPIWithBrowserRetry(ctx context.Context, produc
 	return m.parseResponse(productCode, productName, storeName, &apiResponse)
 }
 
+// callAppleAPIWithFetch uses browser fetch API to call fulfillment API in the same session
+func (m *SimpleMonitor) callAppleAPIWithFetch(ctx context.Context, productCode, storeCode, productName, storeName string) (*APIAvailabilityResult, error) {
+	m.mu.RLock()
+	browserCtx := m.browserCtx
+	m.mu.RUnlock()
+	
+	if browserCtx == nil {
+		logger.Warn("Browser context not available, falling back to HTTP")
+		return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
+	}
+	
+	// Check if browser context is still valid
+	select {
+	case <-browserCtx.Done():
+		logger.Warn("Browser context was cancelled, falling back to HTTP")
+		return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
+	default:
+		// Context is still valid, continue
+	}
+	
+	// Build API URL
+	apiURL := fmt.Sprintf("%s/shop/fulfillment-messages?fae=true&pl=true&mts.0=regular&mts.1=compact&parts.0=%s&store=%s",
+		m.baseURL, productCode, storeCode)
+	
+	logger.Debug("🌐 Using browser fetch API for fulfillment request",
+		zap.String("product", productCode),
+		zap.String("store", storeCode))
+	
+	var responseText string
+	var statusCode int
+	
+	// Create a timeout context for this specific operation
+	opCtx, opCancel := context.WithTimeout(browserCtx, 30*time.Second)
+	defer opCancel()
+	
+	// Don't navigate away from current page - stay in same context
+	err := chromedp.Run(opCtx,
+		// Use fetch API to call fulfillment API from current page
+		chromedp.ActionFunc(func(ctx context.Context) error {
+			logger.Debug("Executing fetch request to fulfillment API")
+			
+			fetchScript := fmt.Sprintf(`
+				(async function() {
+					try {
+						console.log('Fetching fulfillment API:', '%s');
+						const response = await fetch('%s', {
+							method: 'GET',
+							credentials: 'include',
+							headers: {
+								'Accept': 'application/json',
+								'X-Requested-With': 'XMLHttpRequest'
+							}
+						});
+						const text = await response.text();
+						return {
+							status: response.status,
+							statusText: response.statusText,
+							text: text,
+							ok: response.ok
+						};
+					} catch(error) {
+						console.error('Fetch failed:', error);
+						return {
+							status: 0,
+							statusText: error.toString(),
+							text: '',
+							ok: false,
+							error: error.message || error.toString()
+						};
+					}
+				})()
+			`, apiURL, apiURL)
+			
+			var fetchResult map[string]interface{}
+			if err := chromedp.Evaluate(fetchScript, &fetchResult).Do(ctx); err != nil {
+				logger.Error("Failed to execute fetch", zap.Error(err))
+				return err
+			}
+			
+			// Extract results
+			if status, ok := fetchResult["status"].(float64); ok {
+				statusCode = int(status)
+			}
+			if text, ok := fetchResult["text"].(string); ok {
+				responseText = text
+			}
+			
+			logger.Debug("Fetch API response",
+				zap.Int("status", statusCode),
+				zap.Int("response_length", len(responseText)))
+			
+			// Check for authentication errors
+			if statusCode == 541 || statusCode == 403 {
+				logger.Error("❌ Authentication error from fulfillment API", zap.Int("status", statusCode))
+				return errAppleAuth
+			}
+			
+			return nil
+		}),
+	)
+	
+	if err != nil {
+		if errors.Is(err, errAppleAuth) {
+			return nil, err
+		}
+		logger.Error("Browser fetch operation failed", zap.Error(err))
+		return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
+	}
+	
+	// Check response
+	if statusCode != 200 {
+		logger.Warn("Non-200 status from fulfillment API", zap.Int("status", statusCode))
+		return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
+	}
+	
+	// Parse JSON response
+	responseText = strings.TrimSpace(responseText)
+	if !strings.HasPrefix(responseText, "{") {
+		logger.Error("Response is not JSON format")
+		return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
+	}
+	
+	var apiResponse AppleAPIResponse
+	if err := json.Unmarshal([]byte(responseText), &apiResponse); err != nil {
+		logger.Error("Failed to parse JSON response", zap.Error(err))
+		return m.callAppleAPIWithHTTP(ctx, productCode, storeCode, productName, storeName)
+	}
+	
+	return m.parseResponse(productCode, productName, storeName, &apiResponse)
+}
+
 // CheckPickupAvailability checks product availability using pickup-message-recommendations API
 func (m *SimpleMonitor) CheckPickupAvailability(ctx context.Context, productCode, storeCode, productName, storeName string) (*APIAvailabilityResult, error) {
 	// Build pickup API URL
@@ -1349,9 +1514,17 @@ func (m *SimpleMonitor) callAppleAPIWithHTTP(ctx context.Context, productCode, s
 		zap.String("product", productCode),
 		zap.String("store", storeCode))
 
-	// Create fresh HTTP client for each request (like curl does)
+	// Get platform headers
+	platformHeaders := getPlatformHeaders()
+	
+	// Create fresh HTTP client for each request with TLS configuration
 	freshClient := &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			DisableKeepAlives: true, // Disable keep-alives to mimic browser behavior
+			ForceAttemptHTTP2: true, // Force HTTP/2 like modern browsers
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
 	}
 
 	// Create request
@@ -1369,49 +1542,37 @@ func (m *SimpleMonitor) callAppleAPIWithHTTP(ctx context.Context, productCode, s
 	}
 	m.mu.RUnlock()
 	
-	// Linux platform: always use captured headers from Chrome
-	if runtime.GOOS == "linux" {
-		if hasCapturedHeaders {
-			// Use captured headers from real browser requests
-			logger.Info("🐧 Linux: Using captured headers from browser CDP")
-			for key, value := range capturedHeaders {
-				// Skip cookie header as we'll set it separately
-				if strings.ToLower(key) != "cookie" && strings.ToLower(key) != "host" {
-					req.Header.Set(key, value)
-					logger.Debug(fmt.Sprintf("  Header: %s = %s", key, value))
+	// All platforms: use captured headers from Chrome if available
+	if hasCapturedHeaders {
+		logger.Info("📋 Using captured headers from browser CDP")
+		for key, value := range capturedHeaders {
+			// Skip cookie header as we'll set it separately
+			if strings.ToLower(key) != "cookie" && strings.ToLower(key) != "host" {
+				// For Linux, override platform-specific headers
+				if runtime.GOOS == "linux" {
+					if key == "Sec-Ch-Ua-Platform" {
+						req.Header.Set(key, `"macOS"`)
+						continue
+					}
+					if key == "Sec-Ch-Ua" {
+						req.Header.Set(key, `"Not_A Brand";v="8", "Chromium";v="140", "Google Chrome";v="140"`)
+						continue
+					}
 				}
+				req.Header.Set(key, value)
 			}
-			// Log important headers for debugging
-			logger.Debug("Key headers set:",
-				zap.String("User-Agent", req.Header.Get("User-Agent")),
-				zap.String("Accept", req.Header.Get("Accept")),
-				zap.String("Platform", req.Header.Get("Sec-Ch-Ua-Platform")))
-		} else {
-			// On Linux, we must have captured headers to work properly
-			logger.Warn("⚠️ Linux: No captured headers available, using minimal headers")
-			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8")
-			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-			req.Header.Set("Cache-Control", "no-cache")
-			// Let Chrome's actual user agent be captured
-			req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 		}
 	} else {
-		// Non-Linux platforms: use Mac headers for compatibility
-		if hasCapturedHeaders {
-			logger.Info("📋 Using captured headers from browser CDP")
-			for key, value := range capturedHeaders {
-				if strings.ToLower(key) != "cookie" && strings.ToLower(key) != "host" {
-					req.Header.Set(key, value)
-				}
-			}
-		} else {
-			logger.Debug("Using Mac headers for compatibility")
+		logger.Debug("Using default headers")
+		
+		// Linux needs special handling to mimic real browser
+		if runtime.GOOS == "linux" {
+			// Use exact headers from a real Mac Chrome browser
 			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-			req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
 			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-			req.Header.Set("Cache-Control", "no-cache")
-			req.Header.Set("Pragma", "no-cache")
-			req.Header.Set("Sec-Ch-Ua", `"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"`)
+			req.Header.Set("Cache-Control", "max-age=0")
+			req.Header.Set("Sec-Ch-Ua", `"Not_A Brand";v="8", "Chromium";v="140", "Google Chrome";v="140"`)
 			req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
 			req.Header.Set("Sec-Ch-Ua-Platform", `"macOS"`)
 			req.Header.Set("Sec-Fetch-Dest", "document")
@@ -1420,9 +1581,48 @@ func (m *SimpleMonitor) callAppleAPIWithHTTP(ctx context.Context, productCode, s
 			req.Header.Set("Sec-Fetch-User", "?1")
 			req.Header.Set("Upgrade-Insecure-Requests", "1")
 			req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+			
+			// Add more browser-like headers
+			req.Header.Set("Dnt", "1")
+			req.Header.Set("Sec-Gpc", "1")
+			
+			logger.Debug("🐧 Linux: Using Mac Chrome headers for better compatibility")
+		} else {
+			// Default headers for other platforms
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
+			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+			req.Header.Set("Cache-Control", "no-cache")
+			req.Header.Set("Pragma", "no-cache")
+			req.Header.Set("Sec-Ch-Ua", platformHeaders.SecChUa)
+			req.Header.Set("Sec-Ch-Ua-Mobile", "?0")
+			req.Header.Set("Sec-Ch-Ua-Platform", platformHeaders.SecChUaPlatform)
+			req.Header.Set("Sec-Fetch-Dest", "document")
+			req.Header.Set("Sec-Fetch-Mode", "navigate")
+			req.Header.Set("Sec-Fetch-Site", "none")
+			req.Header.Set("Sec-Fetch-User", "?1")
+			req.Header.Set("Upgrade-Insecure-Requests", "1")
+			req.Header.Set("User-Agent", platformHeaders.UserAgent)
 		}
 	}
 
+	// Add critical headers that might be missing
+	if runtime.GOOS == "linux" {
+		// Ensure these headers are always set for Linux
+		if req.Header.Get("Accept") == "" {
+			req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		}
+		if req.Header.Get("Accept-Language") == "" {
+			req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		}
+		if req.Header.Get("Accept-Encoding") == "" {
+			req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		}
+		// Critical: Override platform detection headers
+		req.Header.Set("Sec-Ch-Ua-Platform", `"macOS"`)
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+	}
+	
 	// Use original fresh cookie for each independent request
 	m.mu.RLock()
 	originalCookie := m.cookie
@@ -1434,6 +1634,25 @@ func (m *SimpleMonitor) callAppleAPIWithHTTP(ctx context.Context, productCode, s
 		// Count cookies for summary
 		cookieParts := strings.Split(originalCookie, ";")
 		
+		// Debug log complete cookie
+		logger.Debug("🍪 Full Cookie for fulfillment API", 
+			zap.String("cookie", originalCookie))
+		
+		// Generate curl command for debugging
+		curlCmd := fmt.Sprintf("curl -X GET '%s' \\", fullURL)
+		// Add headers
+		for key, values := range req.Header {
+			if len(values) > 0 {
+				// Escape single quotes in header values
+				headerValue := strings.ReplaceAll(values[0], "'", "'\\''")
+				curlCmd += fmt.Sprintf("\n  -H '%s: %s' \\", key, headerValue)
+			}
+		}
+		// Remove trailing backslash
+		curlCmd = strings.TrimSuffix(curlCmd, " \\")
+		
+		logger.Debug("🔧 Equivalent curl command:", zap.String("command", curlCmd))
+		
 		// On Linux, use debug level for cookie info
 		if runtime.GOOS == "linux" {
 			logger.Debug("🐧 Linux: Sending cookie to fulfillment API",
@@ -1442,13 +1661,6 @@ func (m *SimpleMonitor) callAppleAPIWithHTTP(ctx context.Context, productCode, s
 				zap.Int("cookie_length", len(originalCookie)),
 				zap.Bool("has_dssid2", strings.Contains(originalCookie, "dssid2=")),
 				zap.Bool("has_shld_bt_ck", strings.Contains(originalCookie, "shld_bt_ck=")))
-			
-			// Also print first 200 chars of cookie for verification
-			cookiePreview := originalCookie
-			if len(cookiePreview) > 200 {
-				cookiePreview = cookiePreview[:200] + "..."
-			}
-			logger.Debug("🍪 Cookie preview", zap.String("cookie", cookiePreview))
 			
 			// Print key cookies separately for debugging
 			if strings.Contains(originalCookie, "dssid2=") {
@@ -1521,6 +1733,16 @@ func (m *SimpleMonitor) callAppleAPIWithHTTP(ctx context.Context, productCode, s
 	var apiResponse AppleAPIResponse
 	if err := json.NewDecoder(reader).Decode(&apiResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	
+	// Check if response status is 541 (authentication error)
+	if apiResponse.Head != nil && (apiResponse.Head.Status == "541" || strings.TrimSpace(apiResponse.Head.Status) == "541") {
+		logger.Error("❌ API returned 541 - authentication failed, cookies may be invalid",
+			zap.String("response_status", apiResponse.Head.Status),
+			zap.Int("cookie_length", len(m.cookie)))
+		// Trigger cookie refresh
+		m.triggerBrowserCookieRefresh()
+		return nil, errAppleAuth
 	}
 
 	return m.parseResponse(productCode, productName, storeName, &apiResponse)

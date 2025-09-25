@@ -77,7 +77,7 @@ func GetBrowserOptions(headless bool) []chromedp.ExecAllocatorOption {
 		chromedp.Flag("disable-blink-features", "AutomationControlled"),
 		chromedp.Flag("excludeSwitches", "enable-automation"),
 		chromedp.Flag("useAutomationExtension", false),
-		chromedp.UserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
+		chromedp.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"),
 		chromedp.WindowSize(1920, 1080),
 	}
 	
