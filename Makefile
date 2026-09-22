@@ -1,4 +1,4 @@
-.PHONY: build run dev ddl check clean test deps fmt lint status swagger swagger-fmt help
+.PHONY: build dist image run dev ddl check clean test deps fmt lint status swagger swagger-fmt help
 
 CONFIG ?= configs/config.daemon.yaml
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -13,6 +13,19 @@ help: ## Show this help message
 build: ## Build the server application
 	@echo "Building Go server binary..."
 	@CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/goscan ./cmd/server
+
+# Build the binary the image is assembled from. Same flags as CI, so
+# `make image` produces the same thing the release pipeline does.
+dist: ## Build the linux binary the container image installs
+	@echo "Building linux/amd64 binary..."
+	@mkdir -p dist/linux/amd64
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" \
+		-o dist/linux/amd64/goscan ./cmd/server
+
+# The Dockerfile only installs a prebuilt binary, so the binaries have to exist
+# before it runs — plain `docker build .` will not work on its own.
+image: dist ## Build the container image locally
+	@docker build -t goscan:$(VERSION) .
 
 # Run the application
 run: build ## Build and run the server application
@@ -48,7 +61,7 @@ test: ## Run tests
 # Clean build artifacts
 clean: ## Clean build artifacts
 	@echo "Cleaning..."
-	@rm -rf bin/
+	@rm -rf bin/ dist/
 
 # Install dependencies
 deps: ## Install dependencies

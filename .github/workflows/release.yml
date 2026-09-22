@@ -16,12 +16,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      # 只出 linux/amd64，部署目标就这一种架构。要再加的话在这里加一行，
+      # 同时看一眼 Dockerfile 顶上的说明（镜像那边还要按架构挑二进制）
       matrix:
         include:
           - goos: linux
             goarch: amd64
-          - goos: linux
-            goarch: arm64
     
     steps:
     - uses: actions/checkout@v4
@@ -160,6 +160,15 @@ jobs:
         name: goscan-${{ matrix.goos }}-${{ matrix.goarch }}
         path: goscan-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
 
+    # 裸二进制单独传一份给 docker job 装进镜像，省得镜像里再编译一遍同样的代码。
+    # 镜像里那个 goscan 和 Release 里那个因此是同一个文件，版本号、构建时间都对得上
+    - name: Upload binary for the image
+      uses: actions/upload-artifact@v4
+      with:
+        name: goscan-binary-${{ matrix.goos }}-${{ matrix.goarch }}
+        path: dist/goscan
+        retention-days: 1
+
   release:
     needs: build
     runs-on: ubuntu-latest
@@ -205,7 +214,6 @@ jobs:
           echo "请根据你的操作系统选择对应的二进制文件："
           echo ""
           echo "- **Linux amd64**: goscan-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz"
-          echo "- **Linux arm64**: goscan-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz"
           echo ""
           echo "### 安装说明"
           echo "1. 下载对应平台的压缩包"
@@ -234,7 +242,22 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
-    
+
+    # build job 已经把两个架构都编好了，这里取回来直接装进镜像 ——
+    # 镜像构建阶段因此一行编译都没有，也不需要 Go 工具链
+    - name: Download prebuilt binary
+      uses: actions/download-artifact@v4
+      with:
+        name: goscan-binary-linux-amd64
+        path: dist/linux/amd64
+
+    - name: Make it executable
+      # artifact 打包时不保留可执行位
+      run: |
+        set -eu
+        chmod +x dist/linux/amd64/goscan
+        ls -l dist/linux/amd64/goscan
+
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     
@@ -260,24 +283,15 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        # 两个架构都由 Go 交叉编译（Dockerfile 里 builder 阶段钉在 BUILDPLATFORM），
-        # 所以这里不需要 docker/setup-qemu-action，也不会有模拟执行的几十分钟
-        platforms: linux/amd64,linux/arm64
+        # 只出 linux/amd64：部署目标就这一种架构，也因此不需要
+        # docker/setup-qemu-action
+        platforms: linux/amd64
         push: true
-        # 不传的话镜像里 `goscan --version` 会一直报 dev，
-        # 线上按版本号找代码就会找错
-        build-args: |
-          VERSION=${{ github.ref_name }}
+        # 版本号在 build job 编译时就 -X 进去了，镜像不用再传构建参数
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         # 多出来的 attestation manifest 会在镜像列表里显示成 unknown/unknown，
         # 有些仓库和老版本 containerd 处理不了，这里用不上就关掉
         provenance: false
-        # 缓存放 registry 而不是 type=gha：GHA 缓存按 ref 隔离，而本工作流只在
-        # v* tag 上触发，于是每个 tag 各写各的 scope、永远读不到上一个 tag 的，
-        # 等于每次发版都从零构建。registry 后端没有这个限制。
-        #
-        # mode=max 必须保留：默认的 min 只导出最终阶段的层，而 go mod download
-        # 那层在 builder 这个中间阶段里，min 模式下根本不会进缓存。
-        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
-        cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max
+        # 不配构建缓存：镜像只剩「装二进制 + 装 assets」两层，每次发版这两层本来
+        # 就全变，缓存命中不了；而推拉一份三十多 MB 的缓存比重建还慢

@@ -241,15 +241,23 @@ opdash 是只读服务，这条写路径建议由它的后端代调（浏览器�
 
 ## 发布
 
-打 `v*` tag 由 CI 构建镜像推到 GHCR（`.github/workflows/release.yml`），同时出
-linux amd64 / arm64 的二进制（纯静态，不依赖 GLIBC；macOS 包不再打，本地开发用 `make build`）。
-镜像是 `linux/amd64` + `linux/arm64` 的 manifest，两个架构都由 Go 交叉编译出来，
-不走 QEMU 模拟。镜像里的版本号来自构建参数 `VERSION`，`goscan --version` 报的就是 tag。
+打 `v*` tag 触发 `.github/workflows/release.yml`：先编出 linux/amd64 的二进制
+（纯静态，不依赖 GLIBC），Release 挂这个包，**镜像直接装同一份二进制** ——
+不在镜像里重编一遍，所以镜像里的 `goscan` 和 Release 里的是同一个文件，
+`goscan --version` 报的就是 tag。
+
+只出 linux/amd64 这一种架构（部署目标就这一种），因此镜像构建不需要 QEMU；
+macOS 包也不打，本地开发用 `make build`。要再加架构的话看 `Dockerfile` 顶上的说明。
+
+`Dockerfile` 只负责装配、本身不编译：它要求 `dist/linux/amd64/goscan` 已经存在，
+直接 `docker build .` 会失败，本地构建镜像用 `make image`（先编再构建）。
 
 ## 开发
 
 ```bash
-make build        # 构建（CGO_ENABLED=0，和镜像里那份一致）
+make build        # 构建本地二进制（CGO_ENABLED=0）
+make dist         # 交叉编译镜像要装的 linux/amd64 二进制
+make image        # 先 dist 再构建容器镜像
 make check        # 校验 configs/config.daemon.yaml
 make ddl          # 打印建表语句
 make test         # 跑测试

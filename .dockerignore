@@ -8,9 +8,9 @@
 *.swp
 *.swo
 
-# 构建产物
+# 构建产物。dist/ 不在此列：镜像装的就是 dist/linux/amd64/goscan，
+# 忽略掉的话 COPY 会找不到文件
 bin/
-dist/
 goscan
 *.exe
 
