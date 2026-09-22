@@ -75,3 +75,14 @@ func chdir(t *testing.T, dir string) func() {
 	}
 	return func() { _ = os.Chdir(previous) }
 }
+
+// Library code logs through the package-level helpers without knowing whether
+// the process has set logging up yet; before this default existed, the first
+// such call panicked on a nil Logger.
+func TestPackageHelpersWorkBeforeInit(t *testing.T) {
+	if Logger == nil {
+		t.Fatal("Logger is nil before InitLogger")
+	}
+	Info("this must not panic")
+	Warn("neither must this")
+}

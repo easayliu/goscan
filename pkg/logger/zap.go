@@ -29,6 +29,21 @@ var (
 	callerDisplayMode = CallerShort // Default to most concise
 )
 
+func init() {
+	// Until InitLogger runs, log to stderr instead of leaving Logger nil.
+	// The package-level helpers below are called from library code too (the
+	// font manager, for one), and those call sites cannot know whether the
+	// process has configured logging yet — a missing logger must not be the
+	// thing that takes the process down. stderr rather than a no-op logger so
+	// an early message is still seen rather than silently dropped.
+	Logger = zap.New(zapcore.NewCore(
+		zapcore.NewConsoleEncoder(zap.NewProductionEncoderConfig()),
+		zapcore.Lock(os.Stderr),
+		zapcore.InfoLevel,
+	))
+	Sugar = Logger.Sugar()
+}
+
 // InitLogger initializes the global logger
 func InitLogger(isDevelopment bool, logPath string, logLevel ...string) error {
 	var logger *zap.Logger

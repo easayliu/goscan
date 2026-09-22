@@ -11,8 +11,11 @@ import (
 	"runtime"
 	"sync"
 
+	"goscan/pkg/logger"
+
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
+	"go.uber.org/zap"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
@@ -75,7 +78,8 @@ func (fm *FontManager) GetFont(size FontSize) font.Face {
 	// Load font if not cached
 	font := fm.loadChineseFont()
 	if font == nil {
-		fmt.Printf("Failed to load Chinese font (size: %d), using fallback\n", int(size))
+		logger.Warn("Failed to load Chinese font, using fallback",
+			zap.Int("size", int(size)))
 		return fm.fallback
 	}
 
@@ -136,17 +140,20 @@ func (fm *FontManager) tryEmbeddedFont() *truetype.Font {
 
 		font, err := fm.loadFontFromPath(fontPath)
 		if err != nil {
-			fmt.Printf("Failed to load embedded font from %s: %v\n", fontPath, err)
+			logger.Debug("Failed to load embedded font",
+				zap.String("path", fontPath),
+				zap.Error(err))
 			continue // Try next path
 		}
 
 		// Successfully loaded
-		fmt.Printf("Successfully loaded embedded Chinese font: %s\n", fontPath)
+		logger.Info("Loaded embedded Chinese font", zap.String("path", fontPath))
 		return font
 	}
 
 	// No embedded font found
-	fmt.Printf("Embedded font SourceHanSansSC-Regular.otf not found in any expected location\n")
+	logger.Warn("Embedded Chinese font not found in any expected location",
+		zap.String("font", "SourceHanSansSC-Regular.otf"))
 	return nil
 }
 
@@ -156,7 +163,7 @@ func (fm *FontManager) trySystemFonts() *truetype.Font {
 
 	for _, fontPath := range fontPaths {
 		if font, err := fm.loadFontFromPath(fontPath); err == nil && font != nil {
-			fmt.Printf("Successfully loaded system Chinese font: %s\n", fontPath)
+			logger.Info("Loaded system Chinese font", zap.String("path", fontPath))
 			return font
 		}
 	}
@@ -238,7 +245,7 @@ func (fm *FontManager) ClearCache() {
 	fm.fontCache = make(map[string]*truetype.Font)
 	fm.contextCache = make(map[string]*freetype.Context)
 
-	fmt.Printf("Font cache cleared (previously had %d cached fonts)\n", oldSize)
+	logger.Debug("Font cache cleared", zap.Int("previous_entries", oldSize))
 }
 
 // GetCacheStats returns cache statistics
