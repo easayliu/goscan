@@ -175,8 +175,8 @@ type TableManager interface {
 	// GetTableSchema 获取表结构
 	GetTableSchema(granularity string) string
 
-	// IsDistributedTable 是否为分布式表
-	IsDistributedTable(tableName string) bool
+	// IsClusterMode 是否为集群部署（Distributed 表 + _local 本地表）
+	IsClusterMode() bool
 }
 
 // SyncManager 同步管理器接口

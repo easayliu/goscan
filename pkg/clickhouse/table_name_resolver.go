@@ -18,41 +18,23 @@ func NewTableNameResolver(config *config.ClickHouseConfig) *TableNameResolver {
 	}
 }
 
-// ResolveTableName 解析表名
-// 规则：
-// 1. 如果配置了 cluster，且表名不以 _distributed 结尾，则自动添加 _distributed 后缀
-// 2. 如果未配置 cluster，则返回原始表名
-// 3. 如果表名已经包含 _distributed 或 _local 后缀，则不进行转换
+// ResolveTableName 解析同步读写的目标表名。
+// 命名口径和 logpipe / tracepipe / metricpipe 一致：集群模式下 Distributed 表用的
+// 就是基础表名本身，真正存数据的本地表才带 _local 后缀。所以不论单机还是集群，
+// 目标表都是基础表名，这里只在调用方显式传了 _local 表时原样放行。
 func (r *TableNameResolver) ResolveTableName(baseTableName string) string {
-	// 如果未配置集群，返回原始表名
-	if r.config.Cluster == "" {
-		return baseTableName
-	}
-
-	// 如果表名已经包含分布式表或本地表标识，不进行转换
-	if strings.HasSuffix(baseTableName, "_distributed") ||
-		strings.HasSuffix(baseTableName, "_local") {
-		return baseTableName
-	}
-
-	// 配置了集群且表名是基础表名，自动添加 _distributed 后缀
-	return baseTableName + "_distributed"
+	return baseTableName
 }
 
-// ResolveLocalTableName 解析本地表名（用于分布式表场景）
+// ResolveLocalTableName 解析真正存数据的本地表名。
 // 规则：
-// 1. 如果配置了 cluster，且表名不以 _local 结尾，则自动添加 _local 后缀
-// 2. 如果表名以 _distributed 结尾，则替换为 _local
-// 3. 如果未配置 cluster，返回原始表名
+// 1. 未配置 cluster 时只有一张表，返回原始表名
+// 2. 配置了 cluster 时返回 <基础表名>_local
+// 3. 表名已经以 _local 结尾则保持不变
 func (r *TableNameResolver) ResolveLocalTableName(baseTableName string) string {
 	// 如果未配置集群，返回原始表名
 	if r.config.Cluster == "" {
 		return baseTableName
-	}
-
-	// 如果表名以 _distributed 结尾，替换为 _local
-	if strings.HasSuffix(baseTableName, "_distributed") {
-		return strings.TrimSuffix(baseTableName, "_distributed") + "_local"
 	}
 
 	// 如果表名已经以 _local 结尾，保持不变

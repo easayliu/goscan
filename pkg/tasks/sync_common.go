@@ -455,10 +455,11 @@ func (c *CommonDataCleaner) dropPartitionByValue(ctx context.Context, tableName,
 	// Build DROP PARTITION SQL
 	var dropSQL string
 	if clusterName != "" {
-		// Get local table name for distributed setup
+		// DROP PARTITION has to run against the local tables: the Distributed
+		// table (which goes by the base name) owns no parts of its own.
 		localTableName := tableName
-		if strings.Contains(tableName, "_distributed") {
-			localTableName = strings.Replace(tableName, "_distributed", "_local", 1)
+		if !strings.HasSuffix(tableName, "_local") {
+			localTableName = tableName + "_local"
 		}
 		dropSQL = fmt.Sprintf("ALTER TABLE %s ON CLUSTER %s DROP PARTITION '%s'", localTableName, clusterName, partitionValue)
 	} else {

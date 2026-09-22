@@ -10,6 +10,11 @@
 # 镜像执行 —— goscan 镜像里既没有 clickhouse-client 也没有 curl。
 #
 # 配置来源是 Deployment 同一个 ConfigMap，所以建出来的表一定和同步写入的那张一致。
+#
+# 从旧表名升级：这个 Job 只管建新表，旧的（火山那张 volcengine_bill_details、以及
+# 集群上带 _distributed 后缀的 Distributed 表）要跑一次 `goscan --drop-legacy` 的输出
+# 才会删掉。做法和这个 Job 一样是「渲染 + 执行」两段，把下面 initContainer 里的
+# `--ddl` 换成 `--drop-legacy` 跑一次即可；细节见 README「从旧表名升级」。
 ---
 apiVersion: batch/v1
 kind: Job

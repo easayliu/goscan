@@ -658,8 +658,8 @@ func (c *Client) checkPartitionExists(ctx context.Context, tableName, partition 
 
 // getLocalTableName gets local table name corresponding to distributed table
 func (c *Client) getLocalTableName(distributedTableName string) string {
-	if strings.Contains(distributedTableName, "_distributed") {
-		return strings.Replace(distributedTableName, "_distributed", "_local", 1)
+	if strings.HasSuffix(distributedTableName, "_local") {
+		return distributedTableName
 	}
 	return distributedTableName + "_local"
 }

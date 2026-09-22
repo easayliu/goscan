@@ -104,7 +104,7 @@ func NewVolcEngineConfig() *VolcEngineConfig {
 		EnableDebug: getEnvBool("VOLCENGINE_DEBUG", false),
 
 		// 表名配置默认值
-		BillTable: getEnv("VOLCENGINE_BILL_TABLE", "volcengine_bill_details"),
+		BillTable: getEnv("VOLCENGINE_BILL_TABLE", "volcengine_bill"),
 
 		// 历史数据同步配置默认值
 		DefaultSyncMode:     getEnv("VOLCENGINE_DEFAULT_SYNC_MODE", "all_periods"),

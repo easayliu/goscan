@@ -52,7 +52,7 @@ func TestCreateSQLSingleNode(t *testing.T) {
 	cfg := testConfig()
 	sql := Tables(cfg)[0].CreateSQL(OptionsFrom(cfg))
 
-	if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_details`") {
+	if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill`") {
 		t.Errorf("unexpected CREATE target:\n%s", firstLines(sql, 3))
 	}
 	for _, unwanted := range []string{"ON CLUSTER", "Distributed", "_local"} {
@@ -72,11 +72,11 @@ func TestCreateSQLCluster(t *testing.T) {
 	sql := Tables(cfg)[0].CreateSQL(OptionsFrom(cfg))
 
 	want := []string{
-		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_details_local` ON CLUSTER `bj_ck`",
-		"ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/logs/volcengine_bill_details_local', '{replica}')",
-		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_details_distributed` ON CLUSTER `bj_ck`",
-		"AS `logs`.`volcengine_bill_details_local`",
-		"ENGINE = Distributed(`bj_ck`, `logs`, `volcengine_bill_details_local`, rand())",
+		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_local` ON CLUSTER `bj_ck`",
+		"ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/logs/volcengine_bill_local', '{replica}')",
+		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill` ON CLUSTER `bj_ck`",
+		"AS `logs`.`volcengine_bill_local`",
+		"ENGINE = Distributed(`bj_ck`, `logs`, `volcengine_bill_local`, rand())",
 	}
 	for _, fragment := range want {
 		if !strings.Contains(sql, fragment) {
@@ -156,8 +156,8 @@ func TestAlterOrdersLocalBeforeDistributed(t *testing.T) {
 	cfg.ClickHouse.Cluster = "bj_ck"
 	sql := Tables(cfg)[0].AlterSQL(OptionsFrom(cfg))
 
-	local := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill_details_local`")
-	distributed := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill_details_distributed`")
+	local := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill_local`")
+	distributed := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill` ON")
 	if local < 0 || distributed < 0 {
 		t.Fatalf("expected an ALTER for both tables, got:\n%s", sql)
 	}
@@ -240,4 +240,60 @@ func firstLines(s string, n int) string {
 		lines = lines[:n]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// --drop-legacy must never name a table the new DDL creates: applied in the
+// documented order it would then drop the table that was just built.
+func TestDropLegacyLeavesCurrentTablesAlone(t *testing.T) {
+	for _, cluster := range []string{"", "bj_ck"} {
+		cfg := testConfig()
+		cfg.ClickHouse.Cluster = cluster
+		o := OptionsFrom(cfg)
+		sql := DropLegacySQL(cfg, o)
+
+		for _, table := range Tables(cfg) {
+			for _, current := range []string{table.TargetTableName(o), table.LocalTableName(o)} {
+				// The closing backtick is what keeps `volcengine_bill` from
+				// matching the `volcengine_bill_details` line above it.
+				dropped := fmt.Sprintf("DROP TABLE IF EXISTS `logs`.`%s`", current)
+				if strings.Contains(sql, dropped) {
+					t.Errorf("cluster=%q: drops the table in use %q:\n%s", cluster, current, sql)
+				}
+			}
+		}
+	}
+}
+
+// The tables the old naming created have to actually be listed, otherwise an
+// upgraded cluster keeps three Distributed shells nothing writes to.
+func TestDropLegacyCoversTheOldNames(t *testing.T) {
+	cfg := testConfig()
+	cfg.ClickHouse.Cluster = "bj_ck"
+	sql := DropLegacySQL(cfg, OptionsFrom(cfg))
+
+	want := []string{
+		"DROP TABLE IF EXISTS `logs`.`volcengine_bill_details_distributed` ON CLUSTER `bj_ck`;",
+		"DROP TABLE IF EXISTS `logs`.`volcengine_bill_details_local` ON CLUSTER `bj_ck`;",
+		"DROP TABLE IF EXISTS `logs`.`alicloud_bill_monthly_distributed` ON CLUSTER `bj_ck`;",
+		"DROP TABLE IF EXISTS `logs`.`alicloud_bill_daily_distributed` ON CLUSTER `bj_ck`;",
+	}
+	for _, fragment := range want {
+		if !strings.Contains(sql, fragment) {
+			t.Errorf("drop-legacy missing:\n%s\ngot:\n%s", fragment, sql)
+		}
+	}
+}
+
+// A config that still pins the old VolcEngine name is using that table, not
+// carrying it over from an old release — dropping it would delete live data.
+func TestDropLegacyKeepsAPinnedLegacyName(t *testing.T) {
+	cfg := testConfig()
+	cfg.CloudProviders = &config.CloudProvidersConfig{
+		VolcEngine: &config.VolcEngineConfig{BillTable: LegacyVolcEngineBillTable},
+	}
+	sql := DropLegacySQL(cfg, OptionsFrom(cfg))
+
+	if strings.Contains(sql, "DROP TABLE") {
+		t.Errorf("single node with the legacy name pinned has nothing to drop, got:\n%s", sql)
+	}
 }

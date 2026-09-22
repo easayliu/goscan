@@ -18,7 +18,8 @@ clickhouse:
   debug: false
   protocol: "native" # native 或 http
   # ClickHouse 集群名（system.clusters 里的那个，不是 k8s 集群）。填了之后
-  # `--ddl` 建的是「本地表 + Distributed 表」两张，写入和查询都走 Distributed 表。
+  # `--ddl` 建的是「<表名>_local 存数据 + <表名> 这张 Distributed」两张，写入和查询
+  # 都走 Distributed 表，也就是配置里写的这个名字（口径同 logpipe / tracepipe）。
   cluster: ""
   # 集群里的本地表用 Replicated* 引擎，需要 ClickHouse Keeper / ZooKeeper。
   # 集群是一堆无副本分片时保持 false。
@@ -76,7 +77,7 @@ cloud_providers:
     batch_size: 50
     max_retries: 5
     retry_delay: 3
-    bill_table: "volcengine_bill_details"
+    bill_table: "volcengine_bill"
     default_sync_mode: "all_periods"
     max_historical_months: 12
     auto_detect_periods: true

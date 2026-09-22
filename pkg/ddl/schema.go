@@ -32,8 +32,8 @@ func (c Column) definition() string {
 
 // Table is the canonical definition of one bill table.
 type Table struct {
-	// Name is the base table name. In cluster mode the local table gets a
-	// _local suffix and this name belongs to the Distributed table on top of it.
+	// Name is the table the sync reads and writes. In cluster mode it is the
+	// Distributed table and the local tables under it get a _local suffix.
 	Name        string
 	Comment     string // what the table holds, emitted above CREATE TABLE
 	Columns     []Column
@@ -70,13 +70,13 @@ func (t Table) LocalTableName(o Options) string {
 	return t.Name + "_local"
 }
 
-// TargetTableName is the table the sync writes into and queries read from: the
-// plain name on a single node, the Distributed table on a cluster.
+// TargetTableName is the table the sync writes into and queries read from. It
+// is the plain name in both modes: on a single node that is the table itself,
+// on a cluster it is the Distributed table sitting on top of the _local ones.
+// This is the same naming logpipe / tracepipe / metricpipe use, so a reader
+// such as opdash can point at one name and have it work in either deployment.
 func (t Table) TargetTableName(o Options) string {
-	if o.Cluster == "" {
-		return t.Name
-	}
-	return t.Name + "_distributed"
+	return t.Name
 }
 
 // SchemaClause renders everything that follows the table name in a CREATE TABLE
@@ -212,7 +212,7 @@ func Render(tables []Table, o Options) string {
 	b.WriteString("-- only backfills the columns an existing table is missing.\n")
 	if o.Cluster != "" {
 		fmt.Fprintf(&b, "-- Cluster mode (`%s`): rows live in the _local tables and the sync writes\n", o.Cluster)
-		b.WriteString("-- into the _distributed tables on top of them.\n")
+		b.WriteString("-- into the Distributed tables of the same name on top of them.\n")
 	}
 	fmt.Fprintf(&b, "-- Database `%s` must exist already.\n", o.Database)
 

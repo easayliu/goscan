@@ -3,6 +3,7 @@
 //	goscan [配置文件]                启动服务：内置 cron 调度 + HTTP API
 //	goscan --check [配置文件]        只校验配置，不连库
 //	goscan --ddl   [配置文件]        打印 ClickHouse 建表语句，不连库
+//	goscan --drop-legacy [配置文件]  打印删除旧表名的一次性迁移语句，不连库
 //	goscan --once  [配置文件] --provider volcengine
 //	                                 跑一次同步就退出，账期等维度由参数指定
 //
@@ -51,6 +52,7 @@ const usage = `goscan —— 多云账单同步入库
     goscan [配置文件]                启动服务（内置 cron 调度 + HTTP API）
     goscan --check [配置文件]        只校验配置，不连库
     goscan --ddl   [配置文件]        打印 ClickHouse 建表语句，不连库
+    goscan --drop-legacy [配置文件]  打印删除旧表名的一次性迁移语句，不连库
     goscan --once  [配置文件] --provider <云厂商> [任务参数]
                                      跑一次同步就退出
 
@@ -76,6 +78,7 @@ type options struct {
 
 	check       bool
 	ddl         bool
+	dropLegacy  bool
 	once        bool
 	showVersion bool
 
@@ -127,11 +130,14 @@ func run(opts *options) int {
 		return 1
 	}
 
-	// --ddl / --check 在 K8s 里由 Job 和 CI 跑，输出要能直接管道给 clickhouse-client，
-	// 所以放在日志初始化之前：stdout 上只有 SQL，日志走 stderr。
+	// --ddl / --drop-legacy / --check 在 K8s 里由 Job 和 CI 跑，输出要能直接管道给
+	// clickhouse-client，所以放在日志初始化之前：stdout 上只有 SQL，日志走 stderr。
 	switch {
 	case opts.ddl:
 		fmt.Print(ddl.Render(ddl.Tables(cfg), ddl.OptionsFrom(cfg)))
+		return 0
+	case opts.dropLegacy:
+		fmt.Print(ddl.DropLegacySQL(cfg, ddl.OptionsFrom(cfg)))
 		return 0
 	case opts.check:
 		if err := cfg.ValidateConfig(); err != nil {
@@ -191,6 +197,7 @@ func parseFlags(args []string) (*options, error) {
 	fs.StringVar(&opts.configPath, "config", "", "配置文件路径")
 	fs.BoolVar(&opts.check, "check", false, "只校验配置")
 	fs.BoolVar(&opts.ddl, "ddl", false, "打印建表语句")
+	fs.BoolVar(&opts.dropLegacy, "drop-legacy", false, "打印删除旧表名的迁移语句")
 	fs.BoolVar(&opts.once, "once", false, "跑一次任务就退出")
 	fs.BoolVar(&showVersion, "version", false, "打印版本")
 
@@ -228,8 +235,8 @@ func parseFlags(args []string) (*options, error) {
 		fs.Visit(func(f *flag.Flag) { opts.set[f.Name] = true })
 	}
 
-	if count(opts.check, opts.ddl, opts.once) > 1 {
-		return nil, fmt.Errorf("--check / --ddl / --once 只能用一个")
+	if count(opts.check, opts.ddl, opts.dropLegacy, opts.once) > 1 {
+		return nil, fmt.Errorf("--check / --ddl / --drop-legacy / --once 只能用一个")
 	}
 	if opts.once && opts.provider == "" {
 		return nil, fmt.Errorf("--once 需要 --provider 指定跑哪个云厂商")

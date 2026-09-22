@@ -3,6 +3,8 @@ package tasks
 import (
 	"testing"
 	"time"
+
+	"goscan/pkg/ddl"
 )
 
 // TestVolcEngineGetSupportedSyncModes 测试支持的同步模式
@@ -259,21 +261,20 @@ func TestSyncOptimalModeConstants(t *testing.T) {
 	}
 }
 
-// TestTableNamingConvention 测试表名命名约定
+// TestTableNamingConvention 表名口径：集群上 Distributed 表用的就是基础表名，
+// 只有真正存数据的本地表带 _local 后缀——和 logpipe / tracepipe / metricpipe 一致，
+// 这样 opdash 那边配一个表名在单机和集群上都能读到。
 func TestTableNamingConvention(t *testing.T) {
-	// 验证volcengine的表名约定
-	expectedBaseTableName := "volcengine_bill_details"
-	expectedDistributedSuffix := "_distributed"
+	table := ddl.VolcEngineBillTable(ddl.DefaultVolcEngineBillTable)
+	cluster := ddl.Options{Database: "logs", Cluster: "bj_ck"}
 
-	// 本地表名
-	localTableName := expectedBaseTableName
-	if localTableName != "volcengine_bill_details" {
-		t.Errorf("local table name should be %s", expectedBaseTableName)
+	if got := table.TargetTableName(cluster); got != "volcengine_bill" {
+		t.Errorf("集群上同步读写的目标表应为 volcengine_bill，实际 %s", got)
 	}
-
-	// 分布式表名
-	distributedTableName := expectedBaseTableName + expectedDistributedSuffix
-	if distributedTableName != "volcengine_bill_details_distributed" {
-		t.Errorf("distributed table name should be %s", expectedBaseTableName+expectedDistributedSuffix)
+	if got := table.LocalTableName(cluster); got != "volcengine_bill_local" {
+		t.Errorf("集群上的本地表应为 volcengine_bill_local，实际 %s", got)
+	}
+	if got := table.TargetTableName(ddl.Options{Database: "logs"}); got != "volcengine_bill" {
+		t.Errorf("单机模式表名应为 volcengine_bill，实际 %s", got)
 	}
 }

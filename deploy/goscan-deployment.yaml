@@ -61,7 +61,8 @@ data:
       username: default
       password: ""
       protocol: "native"
-      # ClickHouse 集群名。填了就建「本地表 + Distributed 表」，
+      # ClickHouse 集群名。填了就建「<表名>_local 存数据 + <表名> 这张 Distributed」，
+      # 读写用的都是下面配的表名本身（口径同 logpipe / tracepipe）。
       # 改了这里要同步改 goscan-ddl-job.yaml 的 CH_CLUSTER
       cluster: ""
       # 本地表用 Replicated* 引擎，需要 Keeper；无副本分片的集群保持 false
@@ -110,7 +111,7 @@ data:
         batch_size: 50
         max_retries: 5
         retry_delay: 3
-        bill_table: "volcengine_bill_details"
+        bill_table: "volcengine_bill"
         default_sync_mode: "all_periods"
         max_historical_months: 12
         auto_detect_periods: true

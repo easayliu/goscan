@@ -95,8 +95,8 @@ func (p *VolcEngineProvider) GetTableConfig(granularity string) *cloudsync.Table
 	distributedTable := ""
 
 	if p.chClient.GetClusterName() != "" {
-		distributedTable = baseTable + "_distributed"
-		tableName = baseTable + "_local" // For cleanup operations
+		distributedTable = baseTable     // the Distributed table goes by the base name
+		tableName = baseTable + "_local" // for cleanup operations, which act per node
 	}
 
 	return &cloudsync.TableConfig{

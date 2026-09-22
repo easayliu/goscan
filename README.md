@@ -23,7 +23,7 @@ opdash 负责查。前三个是「应用自己吐出来的数据」，goscan 是
 
 | 表 | 内容 | 时间列 | 金额列 |
 | --- | --- | --- | --- |
-| `volcengine_bill_details` | 火山引擎账单明细，一行一个计费项 | `BillPeriod`（账期 `2026-09`）/ `ExpenseDate` | `PayableAmount` 等 |
+| `volcengine_bill` | 火山引擎账单明细，一行一个计费项 | `BillPeriod`（账期 `2026-09`）/ `ExpenseDate` | `PayableAmount` 等 |
 | `alicloud_bill_monthly` | 阿里云月度账单 | `billing_cycle`（`2026-09`） | `pretax_amount` / `payment_amount` |
 | `alicloud_bill_daily` | 阿里云日度账单 | `billing_date`（`Date`） | 同上 |
 
@@ -38,7 +38,7 @@ opdash 负责查。前三个是「应用自己吐出来的数据」，goscan 是
 ```sql
 -- 上个月各产品花了多少（火山）
 select ProductZh, sum(toFloat64OrZero(PayableAmount)) as amount
-from logs.volcengine_bill_details
+from logs.volcengine_bill
 where BillPeriod = '2026-08'
 group by ProductZh order by amount desc;
 
@@ -62,6 +62,7 @@ goscan                                 # 读默认路径的配置（见下）
 goscan /etc/goscan/config.yaml         # 指定配置
 goscan --check /etc/goscan/config.yaml # 只校验配置，不连库
 goscan --ddl   /etc/goscan/config.yaml # 打印建表语句，不连库
+goscan --drop-legacy /etc/goscan/config.yaml # 打印删除旧表名的迁移语句，不连库
 goscan --version
 ```
 
@@ -149,11 +150,35 @@ DDL 里除了 `CREATE TABLE IF NOT EXISTS`，还带一段幂等的 `ALTER ... AD
 已经是最新的表则什么也不做，多跑无副作用。
 
 配了 `clickhouse.cluster` 的话，一张表会渲染成两张：`<表名>_local` 存数据（`ON CLUSTER`
-一次下发到所有节点），`<表名>_distributed` 是它上面的 `Distributed`，也就是同步实际写入、
-opdash 实际查询的那张（后缀和运行时的表名解析规则一致，有测试对拍住）。`replicated: true` 时本地表用 `ReplicatedReplacingMergeTree`，需要
+一次下发到所有节点），**`<表名>` 本身是它上面的 `Distributed`**，也就是同步实际写入、
+opdash 实际查询的那张（和运行时的表名解析规则一致，有测试对拍住）。
+`replicated: true` 时本地表用 `ReplicatedReplacingMergeTree`，需要
 ClickHouse Keeper；集群是一堆无副本分片就保持 `false`。
 
+这套命名和 logpipe / tracepipe / metricpipe 是同一个口径（`app_log` + `app_log_local`），
+好处是**一个表名在单机和集群上都成立** —— opdash 那边配 `volcengine_bill` 就行，
+不用再按部署形态猜后缀。
+
 `--ddl` 不建库，`CREATE DATABASE` 由部署那一步负责（集群模式下建库也得 `ON CLUSTER`）。
+
+### 从旧表名升级
+
+旧版本里火山那张表叫 `volcengine_bill_details`，集群上的 `Distributed` 表还带
+`_distributed` 后缀。升级上来的部署先跑一遍 `--ddl` 建好新表，再用 `--drop-legacy`
+把旧的删掉：
+
+```bash
+goscan --ddl         config.yaml | clickhouse-client --host <ck> --database logs --queries-file -
+goscan --drop-legacy config.yaml | clickhouse-client --host <ck> --database logs --queries-file -
+```
+
+`--drop-legacy` 同样只打印不执行，而且只列当前配置不再使用的表名 —— 配置里仍然
+写着 `bill_table: volcengine_bill_details` 的部署，那张表不会被碰。
+
+`*_distributed` 自己不存数据，删掉只是去掉一层空壳；**`volcengine_bill_details`
+存着旧的火山账单行**，删了要等下次调度按 `max_historical_months` 重新拉回来。
+想保住历史数据就照脚本头部注释里的 `RENAME TABLE` 改名，然后把对应那条 `DROP` 去掉。
+阿里云两张表名字没变，集群上 `_local` 就是原来那张，数据不受影响。
 
 ## K8s 部署
 

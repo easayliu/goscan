@@ -23,19 +23,12 @@ func TestTableNameResolver(t *testing.T) {
 			expectedLocal:  "test_table",
 		},
 		{
+			// 集群上 Distributed 表就叫基础表名，只有本地表带后缀
 			name:           "集群模式_基础表名",
 			cluster:        "test_cluster",
 			baseTableName:  "test_table",
-			expectedQuery:  "test_table_distributed",
-			expectedInsert: "test_table_distributed",
-			expectedLocal:  "test_table_local",
-		},
-		{
-			name:           "集群模式_已有distributed后缀",
-			cluster:        "test_cluster",
-			baseTableName:  "test_table_distributed",
-			expectedQuery:  "test_table_distributed",
-			expectedInsert: "test_table_distributed",
+			expectedQuery:  "test_table",
+			expectedInsert: "test_table",
 			expectedLocal:  "test_table_local",
 		},
 		{
@@ -50,17 +43,17 @@ func TestTableNameResolver(t *testing.T) {
 			name:           "阿里云月表",
 			cluster:        "log",
 			baseTableName:  "alicloud_bill_monthly",
-			expectedQuery:  "alicloud_bill_monthly_distributed",
-			expectedInsert: "alicloud_bill_monthly_distributed",
+			expectedQuery:  "alicloud_bill_monthly",
+			expectedInsert: "alicloud_bill_monthly",
 			expectedLocal:  "alicloud_bill_monthly_local",
 		},
 		{
 			name:           "火山云账单表",
 			cluster:        "log",
-			baseTableName:  "volcengine_bill_details",
-			expectedQuery:  "volcengine_bill_details_distributed",
-			expectedInsert: "volcengine_bill_details_distributed",
-			expectedLocal:  "volcengine_bill_details_local",
+			baseTableName:  "volcengine_bill",
+			expectedQuery:  "volcengine_bill",
+			expectedInsert: "volcengine_bill",
+			expectedLocal:  "volcengine_bill_local",
 		},
 	}
 
@@ -109,8 +102,8 @@ func TestTableNameResolver_GetTablePair(t *testing.T) {
 
 	distributedTable, localTable := resolver.GetTablePair("test_table")
 
-	if distributedTable != "test_table_distributed" {
-		t.Errorf("GetTablePair() distributedTable = %v, want %v", distributedTable, "test_table_distributed")
+	if distributedTable != "test_table" {
+		t.Errorf("GetTablePair() distributedTable = %v, want %v", distributedTable, "test_table")
 	}
 
 	if localTable != "test_table_local" {
@@ -159,12 +152,12 @@ func TestTableNameResolver_GetTableInfo(t *testing.T) {
 
 	expected := map[string]string{
 		"base_table":        "test_table",
-		"distributed_table": "test_table_distributed",
+		"distributed_table": "test_table",
 		"local_table":       "test_table_local",
 		"cluster_enabled":   "true",
 		"cluster_name":      "test_cluster",
-		"insert_target":     "test_table_distributed",
-		"query_target":      "test_table_distributed",
+		"insert_target":     "test_table",
+		"query_target":      "test_table",
 	}
 
 	for key, expectedValue := range expected {
@@ -183,8 +176,8 @@ func TestTableNameResolver_ResolveCreateTableTarget(t *testing.T) {
 
 	// 测试创建分布式表
 	distributedTarget := resolver.ResolveCreateTableTarget("test_table", true)
-	if distributedTarget != "test_table_distributed" {
-		t.Errorf("ResolveCreateTableTarget(distributed=true) = %v, want %v", distributedTarget, "test_table_distributed")
+	if distributedTarget != "test_table" {
+		t.Errorf("ResolveCreateTableTarget(distributed=true) = %v, want %v", distributedTarget, "test_table")
 	}
 
 	// 测试创建本地表

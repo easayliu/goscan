@@ -6,7 +6,7 @@ import "goscan/pkg/config"
 // fields; a deployment that renames a table in its config gets the renamed
 // table out of `--ddl` as well.
 const (
-	DefaultVolcEngineBillTable  = "volcengine_bill_details"
+	DefaultVolcEngineBillTable  = "volcengine_bill"
 	DefaultAliCloudMonthlyTable = "alicloud_bill_monthly"
 	DefaultAliCloudDailyTable   = "alicloud_bill_daily"
 )

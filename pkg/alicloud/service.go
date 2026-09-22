@@ -342,8 +342,8 @@ func (s *BillService) DropTable(ctx context.Context, granularity string) error {
 		zap.String("provider", "alicloud"),
 		zap.String("table", tableName))
 
-	// Check if it's a distributed table
-	if s.isDistributedTable(tableName) {
+	// On a cluster the table is Distributed and has a _local twin per node
+	if s.isClusterMode() {
 		return s.dropDistributedTable(ctx, tableName)
 	}
 
@@ -407,9 +407,12 @@ func (s *BillService) SetTableNames(monthlyTable, dailyTable string) {
 	}
 }
 
-// isDistributedTable checks if table is distributed
-func (s *BillService) isDistributedTable(tableName string) bool {
-	return strings.HasSuffix(tableName, "_distributed")
+// isClusterMode reports whether the bill tables are deployed as a Distributed
+// table sitting on top of per-node _local tables. The table name no longer
+// tells us — the Distributed table uses the base name, same as logpipe — so
+// the ClickHouse cluster setting is what decides.
+func (s *BillService) isClusterMode() bool {
+	return s.chClient.GetClusterName() != ""
 }
 
 // dropDistributedTable drops distributed table (including local table and distributed table)
@@ -418,8 +421,8 @@ func (s *BillService) dropDistributedTable(ctx context.Context, distributedTable
 		zap.String("provider", "alicloud"),
 		zap.String("distributed_table", distributedTableName))
 
-	// Generate local table name (remove _distributed suffix and add _local)
-	localTableName := strings.TrimSuffix(distributedTableName, "_distributed") + "_local"
+	// The local table under it is the same name with a _local suffix
+	localTableName := s.chClient.GetTableNameResolver().ResolveLocalTableName(distributedTableName)
 
 	// First drop distributed table
 	logger.Info("Alibaba Cloud distributed table deletion removing distributed table",
@@ -452,8 +455,8 @@ func (s *BillService) DropOldTable(ctx context.Context, tableName string) error 
 		zap.String("provider", "alicloud"),
 		zap.String("table", tableName))
 
-	// Check if it's a distributed table
-	if s.isDistributedTable(tableName) {
+	// On a cluster the table is Distributed and has a _local twin per node
+	if s.isClusterMode() {
 		return s.dropDistributedTable(ctx, tableName)
 	}
 
@@ -504,9 +507,9 @@ func (s *BillService) CheckMonthlyDataExists(ctx context.Context, tableName, bil
 // CheckDailyDataExistsWithOptimize checks if daily table data exists for specified date (force optimize before check)
 func (s *BillService) CheckDailyDataExistsWithOptimize(ctx context.Context, tableName, billingDate string) (bool, int64, error) {
 	// For ReplacingMergeTree, execute OPTIMIZE FINAL first to force deduplication
-	if strings.Contains(tableName, "_distributed") {
-		// Distributed table: optimize local table
-		localTableName := strings.Replace(tableName, "_distributed", "_local", 1)
+	if s.isClusterMode() {
+		// Distributed table: optimize the local tables it sits on
+		localTableName := s.chClient.GetTableNameResolver().ResolveLocalTableName(tableName)
 		optimizeQuery := fmt.Sprintf("OPTIMIZE TABLE %s ON CLUSTER %s FINAL", localTableName, s.chClient.GetClusterName())
 		logger.Debug("ReplacingMergeTree optimization executing forced deduplication",
 			zap.String("provider", "alicloud"),
@@ -536,9 +539,9 @@ func (s *BillService) CheckDailyDataExistsWithOptimize(ctx context.Context, tabl
 // CheckMonthlyDataExistsWithOptimize checks if monthly table data exists for specified billing cycle (force optimize before check)
 func (s *BillService) CheckMonthlyDataExistsWithOptimize(ctx context.Context, tableName, billingCycle string) (bool, int64, error) {
 	// For ReplacingMergeTree, execute OPTIMIZE FINAL first to force deduplication
-	if strings.Contains(tableName, "_distributed") {
-		// Distributed table: optimize local table
-		localTableName := strings.Replace(tableName, "_distributed", "_local", 1)
+	if s.isClusterMode() {
+		// Distributed table: optimize the local tables it sits on
+		localTableName := s.chClient.GetTableNameResolver().ResolveLocalTableName(tableName)
 		optimizeQuery := fmt.Sprintf("OPTIMIZE TABLE %s ON CLUSTER %s FINAL", localTableName, s.chClient.GetClusterName())
 		logger.Debug("ReplacingMergeTree optimization executing forced deduplication",
 			zap.String("provider", "alicloud"),
