@@ -18,15 +18,19 @@ type dataAggregator struct {
 	chClient     *clickhouse.Client
 	directConn   driver.Conn
 	nameResolver *clickhouse.TableNameResolver
+	// tables says which table each provider's bills are in; it follows the
+	// config rather than being hardcoded here
+	tables       map[string]DatabaseTableInfo
 	queryTimeout time.Duration
 }
 
 // newDataAggregator creates a data aggregator
-func newDataAggregator(chClient *clickhouse.Client, directConn driver.Conn, nameResolver *clickhouse.TableNameResolver) *dataAggregator {
+func newDataAggregator(chClient *clickhouse.Client, directConn driver.Conn, nameResolver *clickhouse.TableNameResolver, tables map[string]DatabaseTableInfo) *dataAggregator {
 	return &dataAggregator{
 		chClient:     chClient,
 		directConn:   directConn,
 		nameResolver: nameResolver,
+		tables:       tables,
 		queryTimeout: 30 * time.Second,
 	}
 }
@@ -56,7 +60,7 @@ func (a *dataAggregator) GetCostDataForDates(ctx context.Context, dates []time.T
 	}
 
 	var allData []*RawCostData
-	allTableInfo := GetProviderTableInfo()
+	allTableInfo := a.tables
 
 	// if no provider specified, use all providers
 	if len(providers) == 0 {

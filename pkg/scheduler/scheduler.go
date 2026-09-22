@@ -250,6 +250,13 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 		logger.Info("Loading jobs from configuration file", zap.Int("count", len(ts.config.Config.Scheduler.Jobs)))
 
 		for _, configJob := range ts.config.Config.Scheduler.Jobs {
+			syncMode, normalized := config.NormalizeSyncMode(configJob.Config.SyncMode)
+			if normalized {
+				logger.Warn("Job uses a sync_mode the executor never accepted, running it as \"standard\"",
+					zap.String("job_name", configJob.Name),
+					zap.String("configured", configJob.Config.SyncMode))
+			}
+
 			if configJob.Config.CreateTable {
 				logger.Warn("job sets create_table, which no longer does anything: tables are created by the DDL Job, see `goscan --ddl`",
 					zap.String("job_name", configJob.Name))
@@ -261,7 +268,7 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 				Provider: configJob.Provider,
 				Cron:     configJob.Cron,
 				Config: JobConfig{
-					SyncMode:       configJob.Config.SyncMode,
+					SyncMode:       syncMode,
 					UseDistributed: configJob.Config.UseDistributed,
 					ForceUpdate:    configJob.Config.ForceUpdate,
 					Granularity:    configJob.Config.Granularity,

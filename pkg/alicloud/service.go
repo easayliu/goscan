@@ -28,23 +28,13 @@ func NewBillService(aliConfig *config.AliCloudConfig, chClient *clickhouse.Clien
 		return nil, fmt.Errorf("failed to create AliCloud client: %w", err)
 	}
 
-	service := &BillService{
+	return &BillService{
 		aliClient:        aliClient,
 		chClient:         chClient,
-		monthlyTableName: ddl.DefaultAliCloudMonthlyTable,
-		dailyTableName:   ddl.DefaultAliCloudDailyTable,
+		monthlyTableName: ddl.AliCloudMonthlyTableName(aliConfig),
+		dailyTableName:   ddl.AliCloudDailyTableName(aliConfig),
 		config:           aliConfig,
-	}
-
-	// Use configured table names if specified in config
-	if aliConfig.MonthlyTable != "" {
-		service.monthlyTableName = aliConfig.MonthlyTable
-	}
-	if aliConfig.DailyTable != "" {
-		service.dailyTableName = aliConfig.DailyTable
-	}
-
-	return service, nil
+	}, nil
 }
 
 // CreateMonthlyBillTable creates monthly billing table (supports automatic table name resolution)

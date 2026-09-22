@@ -19,6 +19,10 @@ func (c *Config) ValidateConfig() error {
 		return fmt.Errorf("%w: %v", ErrSchedulerConfig, err)
 	}
 
+	if err := c.validateJobCredentials(); err != nil {
+		return err
+	}
+
 	if err := c.validateWeChatConfig(); err != nil {
 		return fmt.Errorf("%w: %v", ErrWeChatConfig, err)
 	}
@@ -259,6 +263,38 @@ func validateGCPConfig(config *GCPConfig) error {
 	return nil
 }
 
+// validateJobCredentials 交叉检查：调度里配了哪朵云的任务，那朵云的凭据就必须齐全。
+//
+// 只看 cloud_providers 是判断不出来的 —— 凭据全空的块会被当成「这朵云没接」跳过，
+// 而 K8s 上 Secret 忘了填正好就是这个样子：--check 通过、Pod 正常起来，凌晨两点
+// 才发现一条账单都没同步。有定时任务指着它，就说明这朵云是要用的。
+func (c *Config) validateJobCredentials() error {
+	if c.Scheduler == nil || !c.Scheduler.Enabled {
+		return nil
+	}
+
+	for _, job := range c.Scheduler.Jobs {
+		switch job.Provider {
+		case "volcengine":
+			ve := c.GetVolcEngineConfig()
+			if ve.AccessKey == "" || ve.SecretKey == "" {
+				return fmt.Errorf("%w: 任务 %q 要同步火山引擎，但 access_key / secret_key 没配"+
+					"（容器里检查 VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY 这两个环境变量挂上没有）",
+					ErrVolcEngineConfig, job.Name)
+			}
+		case "alicloud":
+			ac := c.GetAliCloudConfig()
+			if ac.AccessKeyID == "" || ac.AccessKeySecret == "" {
+				return fmt.Errorf("%w: 任务 %q 要同步阿里云，但 access_key_id / access_key_secret 没配"+
+					"（容器里检查 ALICLOUD_ACCESS_KEY_ID、ALICLOUD_ACCESS_KEY_SECRET 这两个环境变量挂上没有）",
+					ErrAliCloudConfig, job.Name)
+			}
+		}
+	}
+
+	return nil
+}
+
 // validateSchedulerConfig 验证调度器配置
 func (c *Config) validateSchedulerConfig() error {
 	if c.Scheduler == nil {
@@ -295,10 +331,14 @@ func validateScheduledJob(job *ScheduledJob) error {
 
 	// 验证同步模式。执行器认的是 standard / sync-optimal，
 	// cost_report 不是同步模式，是通知任务借这个字段传的标记。
+	//
+	// LegacySyncModes 里那几个是这个字段以前接受的取值，执行器其实从来没认过
+	// （配了的任务每次都在运行时失败）。仍然放行是为了别让老配置在升级后卡在
+	// initContainer 的 --check 上起不来；调度器加载时会把它们折算成 standard 并告警。
 	if job.Config.SyncMode != "" {
-		validSyncModes := []string{"standard", "sync-optimal", "cost_report"}
-		if !isValidValue(job.Config.SyncMode, validSyncModes) {
-			return fmt.Errorf("%w: sync_mode必须是%v之一", ErrInvalidValue, validSyncModes)
+		valid := append([]string{"standard", "sync-optimal", "cost_report"}, LegacySyncModes...)
+		if !isValidValue(job.Config.SyncMode, valid) {
+			return fmt.Errorf("%w: sync_mode必须是%v之一", ErrInvalidValue, valid[:3])
 		}
 	}
 

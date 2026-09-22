@@ -31,7 +31,7 @@ func NewBillService(volcConfig *config.VolcEngineConfig, chClient *clickhouse.Cl
 	return &billServiceImpl{
 		volcClient: volcClient,
 		chClient:   chClient,
-		tableName:  billTableName(volcConfig),
+		tableName:  ddl.VolcEngineBillTableName(volcConfig),
 		config:     volcConfig,
 	}, nil
 }
@@ -68,14 +68,6 @@ func (s *billServiceImpl) CreateBillTable(ctx context.Context) error {
 			zap.String("table_name", actualTableName))
 		return s.chClient.CreateTable(ctx, s.tableName, schema)
 	}
-}
-
-// billTableName 返回账单表名，配置没写就用默认表名
-func billTableName(cfg *config.VolcEngineConfig) string {
-	if cfg != nil && cfg.BillTable != "" {
-		return cfg.BillTable
-	}
-	return ddl.DefaultVolcEngineBillTable
 }
 
 // getBillTableSchema 获取账单表的模式定义。列定义的唯一来源是 pkg/ddl，

@@ -97,6 +97,13 @@ jobs:
     # 部署用的两条命令都不连库，CI 里跑一遍就能挡住「示例配置校验不过」
     # 和「建表语句渲染不出来」这两类问题
     - name: Check sample config and DDL
+      # 样例配置本来就不带密钥，而 --check 会拒绝「配了同步任务却没有对应凭据」的
+      # 配置，所以这里塞占位值，校验的是结构而不是密钥
+      env:
+        VOLCENGINE_ACCESS_KEY: placeholder
+        VOLCENGINE_SECRET_KEY: placeholder
+        ALICLOUD_ACCESS_KEY_ID: placeholder
+        ALICLOUD_ACCESS_KEY_SECRET: placeholder
       run: |
         ./goscan --check configs/config.daemon.yaml
         ./goscan --ddl configs/config.daemon.yaml | grep -q "CREATE TABLE IF NOT EXISTS"

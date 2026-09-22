@@ -32,8 +32,9 @@ func (c *costCalculator) CalculateCostChanges(rawData []*RawCostData, yesterday,
 		GeneratedAt:   time.Now(),
 	}
 
-	// group data by provider
-	aggregator := newDataAggregator(nil, nil, nil)
+	// group data by provider; grouping never touches a table, so it needs
+	// neither a connection nor the table map
+	aggregator := newDataAggregator(nil, nil, nil, nil)
 	providerData := aggregator.GroupDataByProvider(rawData)
 
 	// calculate total cost

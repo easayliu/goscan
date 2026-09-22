@@ -13,14 +13,40 @@ const (
 
 // Tables returns every table goscan writes, named after the given config.
 func Tables(cfg *config.Config) []Table {
-	volc := cfg.GetVolcEngineConfig()
-	ali := cfg.GetAliCloudConfig()
-
 	return []Table{
-		VolcEngineBillTable(orDefault(volc.BillTable, DefaultVolcEngineBillTable)),
-		AliCloudMonthlyTable(orDefault(ali.MonthlyTable, DefaultAliCloudMonthlyTable)),
-		AliCloudDailyTable(orDefault(ali.DailyTable, DefaultAliCloudDailyTable)),
+		VolcEngineBillTable(VolcEngineBillTableName(cfg.GetVolcEngineConfig())),
+		AliCloudMonthlyTable(AliCloudMonthlyTableName(cfg.GetAliCloudConfig())),
+		AliCloudDailyTable(AliCloudDailyTableName(cfg.GetAliCloudConfig())),
 	}
+}
+
+// The three functions below are the only place a bill table's name is decided.
+// Everything that touches those tables — the DDL, the sync, the consistency
+// check, the cost report — has to ask here: a name resolved anywhere else means
+// a renamed table gets created in one place and read from another.
+
+// VolcEngineBillTableName is the table VolcEngine bills live in.
+func VolcEngineBillTableName(cfg *config.VolcEngineConfig) string {
+	if cfg == nil {
+		return DefaultVolcEngineBillTable
+	}
+	return orDefault(cfg.BillTable, DefaultVolcEngineBillTable)
+}
+
+// AliCloudMonthlyTableName is the table Alibaba Cloud monthly bills live in.
+func AliCloudMonthlyTableName(cfg *config.AliCloudConfig) string {
+	if cfg == nil {
+		return DefaultAliCloudMonthlyTable
+	}
+	return orDefault(cfg.MonthlyTable, DefaultAliCloudMonthlyTable)
+}
+
+// AliCloudDailyTableName is the table Alibaba Cloud daily bills live in.
+func AliCloudDailyTableName(cfg *config.AliCloudConfig) string {
+	if cfg == nil {
+		return DefaultAliCloudDailyTable
+	}
+	return orDefault(cfg.DailyTable, DefaultAliCloudDailyTable)
 }
 
 // OptionsFrom reads the ClickHouse side of the config: which database to write

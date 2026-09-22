@@ -16,6 +16,21 @@ type ScheduledJob struct {
 	Config   JobConfig `json:"config" yaml:"config"`
 }
 
+// LegacySyncModes 是 sync_mode 这个字段历史上接受过的取值。执行器只认 standard /
+// sync-optimal，所以配了这几个的任务其实一直在运行时失败；保留它们只是为了让老配置
+// 还能通过校验，调度器加载时折算成 standard。
+var LegacySyncModes = []string{"all_periods", "current_period", "range"}
+
+// NormalizeSyncMode 把历史取值折算成执行器认识的模式，第二个返回值说明是否折算过。
+func NormalizeSyncMode(mode string) (string, bool) {
+	for _, legacy := range LegacySyncModes {
+		if mode == legacy {
+			return "standard", true
+		}
+	}
+	return mode, false
+}
+
 // JobConfig represents job-specific configuration
 type JobConfig struct {
 	SyncMode       string `json:"sync_mode" yaml:"sync_mode"`
@@ -121,10 +136,11 @@ func (sj *ScheduledJob) Validate() error {
 // Validate validates job configuration
 func (jc *JobConfig) Validate() error {
 	// validate sync mode. cost_report is the notification job's marker rather
-	// than a sync mode, but it travels in the same field.
+	// than a sync mode, but it travels in the same field; LegacySyncModes are
+	// tolerated and normalised when the scheduler loads the job.
 	if jc.SyncMode != "" {
-		validSyncModes := []string{"standard", "sync-optimal", "cost_report"}
-		if !isValidValue(jc.SyncMode, validSyncModes) {
+		valid := append([]string{"standard", "sync-optimal", "cost_report"}, LegacySyncModes...)
+		if !isValidValue(jc.SyncMode, valid) {
 			return ErrInvalidValue
 		}
 	}

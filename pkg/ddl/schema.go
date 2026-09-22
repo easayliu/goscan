@@ -56,13 +56,27 @@ type Options struct {
 	Replicated bool
 }
 
-// LocalTableName is the table that actually stores the rows. It only differs
-// from Table.Name in cluster mode, where Name belongs to the Distributed table.
+// LocalTableName is the table that actually stores the rows: the plain name on
+// a single node, the per-node table under the Distributed one on a cluster.
+//
+// The two names below must agree with clickhouse.TableNameResolver, which is
+// what the sync resolves its INSERT and SELECT targets through at runtime —
+// tables created under any other name are tables nothing ever writes to.
+// ddl_test.go checks both against the resolver.
 func (t Table) LocalTableName(o Options) string {
 	if o.Cluster == "" {
 		return t.Name
 	}
 	return t.Name + "_local"
+}
+
+// TargetTableName is the table the sync writes into and queries read from: the
+// plain name on a single node, the Distributed table on a cluster.
+func (t Table) TargetTableName(o Options) string {
+	if o.Cluster == "" {
+		return t.Name
+	}
+	return t.Name + "_distributed"
 }
 
 // SchemaClause renders everything that follows the table name in a CREATE TABLE
@@ -133,12 +147,13 @@ func (t Table) CreateSQL(o Options) string {
 		return fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s`.`%s`\n%s;", o.Database, t.Name, body)
 	}
 
+	target := t.TargetTableName(o)
 	onCluster := fmt.Sprintf(" ON CLUSTER `%s`", o.Cluster)
 	return fmt.Sprintf(
 		"CREATE TABLE IF NOT EXISTS `%s`.`%s`%s\n%s;\n\n"+
 			"CREATE TABLE IF NOT EXISTS `%s`.`%s`%s\nAS `%s`.`%s`\nENGINE = Distributed(`%s`, `%s`, `%s`, rand());",
 		o.Database, local, onCluster, body,
-		o.Database, t.Name, onCluster, o.Database, local,
+		o.Database, target, onCluster, o.Database, local,
 		o.Cluster, o.Database, local)
 }
 
@@ -174,7 +189,7 @@ func (t Table) AlterSQL(o Options) string {
 	// Distributed table has a column its local tables do not, and an insert
 	// naming it fails.
 	onCluster := fmt.Sprintf(" ON CLUSTER `%s`", o.Cluster)
-	return alter(t.LocalTableName(o), onCluster) + "\n\n" + alter(t.Name, onCluster)
+	return alter(t.LocalTableName(o), onCluster) + "\n\n" + alter(t.TargetTableName(o), onCluster)
 }
 
 func columnTypeWithDefault(c Column) string {
@@ -196,8 +211,8 @@ func Render(tables []Table, o Options) string {
 	b.WriteString("-- every statement is IF NOT EXISTS, so re-running it after an upgrade\n")
 	b.WriteString("-- only backfills the columns an existing table is missing.\n")
 	if o.Cluster != "" {
-		fmt.Fprintf(&b, "-- Cluster mode (`%s`): rows live in the _local tables, the plain name\n", o.Cluster)
-		b.WriteString("-- is the Distributed table the sync writes into.\n")
+		fmt.Fprintf(&b, "-- Cluster mode (`%s`): rows live in the _local tables and the sync writes\n", o.Cluster)
+		b.WriteString("-- into the _distributed tables on top of them.\n")
 	}
 	fmt.Fprintf(&b, "-- Database `%s` must exist already.\n", o.Database)
 

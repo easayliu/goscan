@@ -292,6 +292,14 @@ func runOnce(ctx context.Context, cfg *config.Config, opts *options) int {
 		return 1
 	}
 
+	// ExecuteTaskSync hands back whatever the executor produced, and a task
+	// that succeeded without a result is not an error — the scheduler guards
+	// the same call the same way.
+	if result == nil {
+		logger.Info("Task completed")
+		return 0
+	}
+
 	logger.Info("Task completed",
 		zap.Int("records_processed", result.RecordsProcessed),
 		zap.Int("records_fetched", result.RecordsFetched),

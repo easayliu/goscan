@@ -3,6 +3,7 @@ package configutils
 import (
 	"fmt"
 	"goscan/pkg/cloudsync"
+	"goscan/pkg/ddl"
 	"time"
 )
 
@@ -140,7 +141,10 @@ func ConvertTableConfigWithProvider(from *TableConfigInput, provider string) *cl
 	switch provider {
 	case "alicloud":
 		if config.TableName == "" {
-			config.TableName = "alicloud_bill_details"
+			// alicloud_bill_details does not exist — the bills are split into a
+			// monthly and a daily table; monthly is the one a caller that names
+			// no table wants.
+			config.TableName = ddl.DefaultAliCloudMonthlyTable
 		}
 		config.PeriodField = "BillingCycle"
 		config.DateField = "BillingDate"
@@ -148,7 +152,7 @@ func ConvertTableConfigWithProvider(from *TableConfigInput, provider string) *cl
 
 	case "volcengine":
 		if config.TableName == "" {
-			config.TableName = "volcengine_bill_details"
+			config.TableName = ddl.DefaultVolcEngineBillTable
 		}
 		config.PeriodField = "BillPeriod"
 		config.DateField = "ExpenseDate"

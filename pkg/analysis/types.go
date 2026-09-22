@@ -2,6 +2,9 @@ package analysis
 
 import (
 	"time"
+
+	"goscan/pkg/config"
+	"goscan/pkg/ddl"
 )
 
 // CostAnalysisRequest represents a cost analysis request
@@ -61,12 +64,22 @@ type DatabaseTableInfo struct {
 	CurrencyColumn string `json:"currency_column"` // currency column name
 }
 
-// GetProviderTableInfo gets table information for various cloud providers
-func GetProviderTableInfo() map[string]DatabaseTableInfo {
+// GetProviderTableInfo gets table information for various cloud providers.
+//
+// The names come from the config through pkg/ddl, the same place the DDL and
+// the sync get them: reading the report from a table nobody writes into is a
+// silent "0 元" rather than an error. A nil config means the defaults.
+func GetProviderTableInfo(cfg *config.Config) map[string]DatabaseTableInfo {
+	var volc *config.VolcEngineConfig
+	var ali *config.AliCloudConfig
+	if cfg != nil {
+		volc, ali = cfg.GetVolcEngineConfig(), cfg.GetAliCloudConfig()
+	}
+
 	return map[string]DatabaseTableInfo{
 		"volcengine": {
 			Provider:       "volcengine",
-			TableName:      "volcengine_bill_details",
+			TableName:      ddl.VolcEngineBillTableName(volc),
 			DateColumn:     "ExpenseDate",
 			AmountColumn:   "PayableAmount", // use payable amount
 			ProductColumn:  "ProductZh",     // use Chinese product name
@@ -74,7 +87,7 @@ func GetProviderTableInfo() map[string]DatabaseTableInfo {
 		},
 		"alicloud_monthly": {
 			Provider:       "alicloud",
-			TableName:      "alicloud_bill_monthly",
+			TableName:      ddl.AliCloudMonthlyTableName(ali),
 			DateColumn:     "billing_date",
 			AmountColumn:   "pretax_amount",
 			ProductColumn:  "product_name",
@@ -82,7 +95,7 @@ func GetProviderTableInfo() map[string]DatabaseTableInfo {
 		},
 		"alicloud_daily": {
 			Provider:       "alicloud",
-			TableName:      "alicloud_bill_daily",
+			TableName:      ddl.AliCloudDailyTableName(ali),
 			DateColumn:     "billing_date",
 			AmountColumn:   "pretax_amount",
 			ProductColumn:  "product_name",

@@ -6,6 +6,7 @@ import (
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/cloudsync"
 	"goscan/pkg/config"
+	"goscan/pkg/ddl"
 )
 
 // VolcEngineProvider implements the CloudProvider interface for VolcEngine
@@ -87,13 +88,15 @@ func (p *VolcEngineProvider) GetTableConfig(granularity string) *cloudsync.Table
 		return nil
 	}
 
-	// Determine table names based on cluster configuration
-	tableName := "volcengine_bill_details"
+	// Determine table names based on cluster configuration. The suffixes match
+	// clickhouse.TableNameResolver and the tables `goscan --ddl` creates.
+	baseTable := ddl.VolcEngineBillTableName(p.config)
+	tableName := baseTable
 	distributedTable := ""
 
 	if p.chClient.GetClusterName() != "" {
-		distributedTable = "volcengine_bill_details_distributed"
-		tableName = "volcengine_bill_details_local" // For cleanup operations
+		distributedTable = baseTable + "_distributed"
+		tableName = baseTable + "_local" // For cleanup operations
 	}
 
 	return &cloudsync.TableConfig{
@@ -132,7 +135,7 @@ func (p *VolcEngineProvider) SyncPeriodData(ctx context.Context, period string, 
 	}
 
 	// Determine table name and distributed flag
-	tableName := "volcengine_bill_details"
+	tableName := ddl.VolcEngineBillTableName(p.config)
 	isDistributed := p.chClient.GetClusterName() != ""
 
 	// Use SmartSyncAllData method

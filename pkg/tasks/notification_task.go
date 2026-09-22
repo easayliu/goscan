@@ -67,6 +67,8 @@ func NewNotificationTaskExecutor(chClient *clickhouse.Client, cfg *config.Config
 		return nil, fmt.Errorf("%w: failed to create cost analyzer", ErrNotificationFailed)
 	}
 	analyzer.SetAlertThreshold(wechatConfig.AlertThreshold)
+	// 账单表名可能在配置里改过，报告要读同步真正写入的那几张表
+	analyzer.SetBillTables(cfg)
 
 	// 创建微信客户端
 	var wechatClient *wechat.Client

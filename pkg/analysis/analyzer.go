@@ -38,6 +38,9 @@ type CostAnalyzer struct {
 	// configuration
 	alertThreshold float64
 	queryTimeout   time.Duration
+	// tables says where each provider's bills are; SetBillTables points it at
+	// the configured names
+	tables map[string]DatabaseTableInfo
 }
 
 // QueryCacheEntry represents a query cache entry
@@ -110,10 +113,26 @@ func NewCostAnalyzerWithConfig(cfg *config.ClickHouseConfig) (*CostAnalyzer, err
 	return ca, nil
 }
 
+// SetBillTables points the analyzer at the bill tables the given config names.
+// Without it the analyzer reads the default table names, which is only right
+// for a deployment that did not rename them.
+func (ca *CostAnalyzer) SetBillTables(cfg *config.Config) {
+	ca.tables = GetProviderTableInfo(cfg)
+	ca.initComponents()
+}
+
+// billTables returns the table map, falling back to the defaults.
+func (ca *CostAnalyzer) billTables() map[string]DatabaseTableInfo {
+	if ca.tables == nil {
+		ca.tables = GetProviderTableInfo(nil)
+	}
+	return ca.tables
+}
+
 // initComponents initializes components
 func (ca *CostAnalyzer) initComponents() {
 	ca.calculator = newCostCalculator(ca.alertThreshold)
-	ca.aggregator = newDataAggregator(ca.chClient, ca.directConn, ca.nameResolver)
+	ca.aggregator = newDataAggregator(ca.chClient, ca.directConn, ca.nameResolver, ca.billTables())
 	ca.formatter = newResultFormatter()
 }
 
@@ -312,7 +331,7 @@ func (ca *CostAnalyzer) EnableDirectConnection(cfg *config.ClickHouseConfig) err
 	}
 
 	// then reinitialize aggregator (directConn is already set at this point)
-	ca.aggregator = newDataAggregator(ca.chClient, ca.directConn, ca.nameResolver)
+	ca.aggregator = newDataAggregator(ca.chClient, ca.directConn, ca.nameResolver, ca.billTables())
 
 	return nil
 }
@@ -373,7 +392,7 @@ func (ca *CostAnalyzer) initDirectConnection() error {
 	ca.connectionPooled = true
 
 	// reinitialize aggregator to use new connection
-	ca.aggregator = newDataAggregator(ca.chClient, ca.directConn, ca.nameResolver)
+	ca.aggregator = newDataAggregator(ca.chClient, ca.directConn, ca.nameResolver, ca.billTables())
 
 	logger.Info("Direct ClickHouse connection initialized successfully",
 		zap.Strings("addresses", ca.config.GetAddresses()),

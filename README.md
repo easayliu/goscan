@@ -125,7 +125,13 @@ Cron 表达式是 robfig/cron v3 的语法。**时区跟着进程的 `TZ` 走** 
 `TZ=Asia/Shanghai` 的话，"凌晨 2 点"是 UTC 的凌晨 2 点。
 
 凭据全空的 provider 块视为「这朵云没接」，`--check` 会跳过它；只填了一半
-（有 `access_key` 没有 `secret_key`）才报错。
+（有 `access_key` 没有 `secret_key`）会报错。另外 `--check` 会拿 `scheduler.jobs`
+反查：**配了某朵云的定时任务、那朵云却没有凭据，直接判失败** —— K8s 上 Secret 忘了填
+正好就是「凭据全空」的样子，不这么查的话 Pod 照常起来，凌晨两点才发现一条都没同步。
+
+`sync_mode` 现在的合法值是 `standard` / `sync-optimal`（通知任务用 `cost_report`）。
+老配置里的 `all_periods` / `current_period` / `range` 仍然能通过校验，但会在加载时
+告警并按 `standard` 执行 —— 那几个值执行器从来就没认过，配了的任务一直在运行时失败。
 
 ## 建表
 
@@ -143,8 +149,8 @@ DDL 里除了 `CREATE TABLE IF NOT EXISTS`，还带一段幂等的 `ALTER ... AD
 已经是最新的表则什么也不做，多跑无副作用。
 
 配了 `clickhouse.cluster` 的话，一张表会渲染成两张：`<表名>_local` 存数据（`ON CLUSTER`
-一次下发到所有节点），`<表名>` 是它上面的 `Distributed`，也就是同步实际写入、opdash
-实际查询的那张。`replicated: true` 时本地表用 `ReplicatedReplacingMergeTree`，需要
+一次下发到所有节点），`<表名>_distributed` 是它上面的 `Distributed`，也就是同步实际写入、
+opdash 实际查询的那张（后缀和运行时的表名解析规则一致，有测试对拍住）。`replicated: true` 时本地表用 `ReplicatedReplacingMergeTree`，需要
 ClickHouse Keeper；集群是一堆无副本分片就保持 `false`。
 
 `--ddl` 不建库，`CREATE DATABASE` 由部署那一步负责（集群模式下建库也得 `ON CLUSTER`）。

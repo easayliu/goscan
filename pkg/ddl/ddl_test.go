@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
 )
 
@@ -73,13 +74,38 @@ func TestCreateSQLCluster(t *testing.T) {
 	want := []string{
 		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_details_local` ON CLUSTER `bj_ck`",
 		"ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/logs/volcengine_bill_details_local', '{replica}')",
-		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_details` ON CLUSTER `bj_ck`",
+		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_details_distributed` ON CLUSTER `bj_ck`",
 		"AS `logs`.`volcengine_bill_details_local`",
 		"ENGINE = Distributed(`bj_ck`, `logs`, `volcengine_bill_details_local`, rand())",
 	}
 	for _, fragment := range want {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("cluster DDL missing:\n%s", fragment)
+		}
+	}
+}
+
+// The names the DDL creates have to be the names the sync resolves at runtime.
+// Getting this wrong is silent until a cluster deployment syncs for the first
+// time and every insert reports that the table does not exist, so pin the two
+// together rather than to a literal.
+func TestTableNamesMatchTheRuntimeResolver(t *testing.T) {
+	for _, cluster := range []string{"", "bj_ck"} {
+		cfg := testConfig()
+		cfg.ClickHouse.Cluster = cluster
+		opts := OptionsFrom(cfg)
+		resolver := clickhouse.NewTableNameResolver(cfg.ClickHouse)
+
+		for _, table := range Tables(cfg) {
+			if got, want := table.TargetTableName(opts), resolver.ResolveInsertTarget(table.Name); got != want {
+				t.Errorf("cluster=%q %s: DDL creates %q, the sync writes into %q", cluster, table.Name, got, want)
+			}
+			if got, want := table.TargetTableName(opts), resolver.ResolveQueryTarget(table.Name); got != want {
+				t.Errorf("cluster=%q %s: DDL creates %q, queries read %q", cluster, table.Name, got, want)
+			}
+			if got, want := table.LocalTableName(opts), resolver.ResolveLocalTableName(table.Name); got != want {
+				t.Errorf("cluster=%q %s: DDL local table %q, resolver says %q", cluster, table.Name, got, want)
+			}
 		}
 	}
 }
@@ -131,7 +157,7 @@ func TestAlterOrdersLocalBeforeDistributed(t *testing.T) {
 	sql := Tables(cfg)[0].AlterSQL(OptionsFrom(cfg))
 
 	local := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill_details_local`")
-	distributed := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill_details` ")
+	distributed := strings.Index(sql, "ALTER TABLE `logs`.`volcengine_bill_details_distributed`")
 	if local < 0 || distributed < 0 {
 		t.Fatalf("expected an ALTER for both tables, got:\n%s", sql)
 	}
@@ -156,6 +182,23 @@ func TestTableNamesFollowConfig(t *testing.T) {
 	want := []string{"volc_bills", "ali_monthly", "ali_daily"}
 	if strings.Join(names, ",") != strings.Join(want, ",") {
 		t.Errorf("table names = %v, want %v", names, want)
+	}
+}
+
+// pkg/config cannot import pkg/ddl (that would be a cycle), so the default
+// table names exist as literals in both places. Pin them together: if they ever
+// drift, the DDL Job creates one table and the sync writes into another.
+func TestDefaultsMatchTheConfigDefaults(t *testing.T) {
+	volc, ali := config.NewVolcEngineConfig(), config.NewAliCloudConfig()
+
+	if volc.BillTable != DefaultVolcEngineBillTable {
+		t.Errorf("config default %q != ddl default %q", volc.BillTable, DefaultVolcEngineBillTable)
+	}
+	if ali.MonthlyTable != DefaultAliCloudMonthlyTable {
+		t.Errorf("config default %q != ddl default %q", ali.MonthlyTable, DefaultAliCloudMonthlyTable)
+	}
+	if ali.DailyTable != DefaultAliCloudDailyTable {
+		t.Errorf("config default %q != ddl default %q", ali.DailyTable, DefaultAliCloudDailyTable)
 	}
 }
 

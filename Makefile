@@ -29,8 +29,16 @@ dev: ## Start development mode
 ddl: build ## Print ClickHouse DDL for the configured tables
 	@./bin/goscan --ddl $(CONFIG)
 
+# The sample config ships without credentials on purpose, and --check now
+# refuses a config whose scheduled jobs target a cloud with no keys. Placeholders
+# let the structural part of the check run; a real config gets its keys from the
+# environment anyway.
 check: build ## Validate the configuration without connecting to anything
-	@./bin/goscan --check $(CONFIG)
+	@VOLCENGINE_ACCESS_KEY=$${VOLCENGINE_ACCESS_KEY:-placeholder} \
+	 VOLCENGINE_SECRET_KEY=$${VOLCENGINE_SECRET_KEY:-placeholder} \
+	 ALICLOUD_ACCESS_KEY_ID=$${ALICLOUD_ACCESS_KEY_ID:-placeholder} \
+	 ALICLOUD_ACCESS_KEY_SECRET=$${ALICLOUD_ACCESS_KEY_SECRET:-placeholder} \
+	 ./bin/goscan --check $(CONFIG)
 
 # Test the application
 test: ## Run tests
