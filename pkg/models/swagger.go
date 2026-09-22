@@ -74,12 +74,45 @@ type TaskListResponse struct {
 	Count int            `json:"count" example:"5"`
 }
 
-// SyncTriggerRequest represents a sync trigger request
+// SyncTriggerRequest is the body POST /sync binds. The handler decodes into this
+// type rather than an anonymous struct so the Swagger schema cannot drift away
+// from what the endpoint actually reads.
 type SyncTriggerRequest struct {
-	Provider   string                 `json:"provider" example:"volcengine" validate:"required"`
-	BillPeriod string                 `json:"bill_period,omitempty" example:"2025-09"`
-	Parameters map[string]interface{} `json:"parameters,omitempty"`
-	Force      bool                   `json:"force,omitempty" example:"false"`
+	// Which cloud to sync. Required.
+	Provider string `json:"provider" example:"alicloud" enums:"volcengine,alicloud" validate:"required"`
+	// standard fetches every period in full, sync-optimal compares record counts
+	// and only fills the gap. Empty uses the provider default from the config.
+	SyncMode string `json:"sync_mode,omitempty" example:"sync-optimal" enums:"standard,sync-optimal"`
+	// AliCloud only, selects the target table: monthly writes alicloud_bill_monthly,
+	// daily writes alicloud_bill_daily, both writes each in one run. Ignored for
+	// VolcEngine, whose bills land in the single volcengine_bill table.
+	Granularity string `json:"granularity,omitempty" example:"both" enums:"monthly,daily,both"`
+	// A single billing period. The format also picks the granularity when the
+	// field above is empty: YYYY-MM is monthly, YYYY-MM-DD is one day.
+	BillPeriod string `json:"bill_period,omitempty" example:"2026-09"`
+	// Start of an inclusive period range, used instead of bill_period to backfill
+	// several periods in one task.
+	StartPeriod string `json:"start_period,omitempty" example:"2026-01"`
+	// End of the inclusive period range.
+	EndPeriod string `json:"end_period,omitempty" example:"2026-06"`
+	// Re-fetch periods that already have data instead of skipping them.
+	ForceUpdate bool `json:"force_update,omitempty" example:"false"`
+	// Cap on records to sync; 0 means no cap.
+	Limit int `json:"limit,omitempty" example:"0"`
+	// Write through the Distributed table instead of the local one.
+	UseDistributed bool `json:"use_distributed,omitempty" example:"false"`
+	// Create the target tables first if they are missing.
+	CreateTable bool `json:"create_table,omitempty" example:"false"`
+}
+
+// SyncTriggerResponse is what POST /sync answers with: the task is registered,
+// not finished, so the caller polls GET /tasks/{task_id} with the id returned here.
+type SyncTriggerResponse struct {
+	TaskID    string `json:"task_id" example:"6f1c8f0e-6c2a-4a1f-9a4d-1f0b7a2c3d4e"`
+	Status    string `json:"status" example:"started"`
+	Message   string `json:"message" example:"Sync triggered for provider alicloud"`
+	Provider  string `json:"provider" example:"alicloud"`
+	Timestamp string `json:"timestamp" example:"2026-09-11T08:13:24Z"`
 }
 
 // SyncStatusResponse represents sync status response

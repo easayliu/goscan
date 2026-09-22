@@ -5,7 +5,7 @@
     ],
     "swagger": "2.0",
     "info": {
-        "description": "云账单数据同步服务API文档\n支持火山云、阿里云等多云平台的账单数据自动同步到ClickHouse数据库",
+        "description": "Cloud billing data synchronization service API documentation\nSupports automatic synchronization of billing data from multi-cloud platforms like VolcEngine and Alibaba Cloud to ClickHouse database",
         "title": "Goscan API",
         "termsOfService": "http://swagger.io/terms/",
         "contact": {
@@ -52,7 +52,7 @@
         },
         "/notifications/wechat": {
             "post": {
-                "description": "Manually trigger WeChat Enterprise cost report notification, supports specifying analysis date, cloud provider list and alert threshold. Can be used for temporary notification needs outside of scheduled tasks.\n\n**请求示例：**\n```json\n{\n\"date\": \"2025-09-12\",\n\"providers\": [\"volcengine\", \"alicloud\"],\n\"alert_threshold\": 15.0,\n\"force_notify\": false,\n\"test_mode\": false\n}\n```\n\n**Field Descriptions:**\n- `date`: Analysis date, format YYYY-MM-DD, uses current date if not provided\n- `providers`: Cloud provider list, supports volcengine/alicloud/aws/azure/gcp\n- `alert_threshold`: Cost change alert threshold (percentage), range 0-100\n- `force_notify`: Whether to force send, ignores alert threshold when true\n- `test_mode`: Test mode, only tests connection without sending actual report when true",
+                "description": "Manually trigger WeChat Enterprise cost report notification, supports specifying analysis date, cloud provider list and alert threshold. Can be used for temporary notification needs outside of scheduled tasks.\n\n**Request Example:**\n```json\n{\n\"date\": \"2025-09-12\",\n\"providers\": [\"volcengine\", \"alicloud\"],\n\"alert_threshold\": 15.0,\n\"force_notify\": false,\n\"test_mode\": false\n}\n```\n\n**Field Descriptions:**\n- `date`: Analysis date, format YYYY-MM-DD, uses current date if not provided\n- `providers`: Cloud provider list, supports volcengine/alicloud/aws/azure/gcp\n- `alert_threshold`: Cost change alert threshold (percentage), range 0-100\n- `force_notify`: Whether to force send, ignores alert threshold when true\n- `test_mode`: Test mode, only tests connection without sending actual report when true",
                 "consumes": [
                     "application/json"
                 ],
@@ -541,7 +541,7 @@
                 }
             },
             "post": {
-                "description": "Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.\nSupports configuring sync mode, time range, granularity and other parameters.",
+                "description": "Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.\nSupports configuring sync mode, time range, granularity and other parameters.\nFor AliCloud the granularity field picks the target table: monthly writes alicloud_bill_monthly, daily writes alicloud_bill_daily, both writes each. When it is empty the bill_period format decides instead (YYYY-MM monthly, YYYY-MM-DD daily). VolcEngine has a single table and ignores granularity.\nThe endpoint returns as soon as the task is registered; poll GET /tasks/{task_id} for the outcome.",
                 "consumes": [
                     "application/json"
                 ],
@@ -565,13 +565,25 @@
                 ],
                 "responses": {
                     "200": {
-                        "description": "Sync task triggered successfully",
+                        "description": "Sync task accepted, poll the returned task_id",
                         "schema": {
-                            "$ref": "#/definitions/models.MessageResponse"
+                            "$ref": "#/definitions/models.SyncTriggerResponse"
                         }
                     },
                     "400": {
                         "description": "Invalid request parameters or missing cloud provider configuration",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "A sync for this provider is already running",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too many tasks in flight, retry later",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -860,36 +872,6 @@
         }
     },
     "definitions": {
-        "goscan_pkg_models.ProviderConfig": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "type": "boolean",
-                    "example": true
-                },
-                "endpoint": {
-                    "type": "string",
-                    "example": "ecs.cn-hangzhou.aliyuncs.com"
-                },
-                "has_credentials": {
-                    "description": "Note: AccessKey and SecretKey are masked for security",
-                    "type": "boolean",
-                    "example": true
-                },
-                "host": {
-                    "type": "string",
-                    "example": "billing.volcengineapi.com"
-                },
-                "region": {
-                    "type": "string",
-                    "example": "cn-north-1"
-                },
-                "timeout": {
-                    "type": "integer",
-                    "example": 30
-                }
-            }
-        },
         "models.AppConfig": {
             "type": "object",
             "properties": {
@@ -940,19 +922,19 @@
             "type": "object",
             "properties": {
                 "alicloud": {
-                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
                 },
                 "aws": {
-                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
                 },
                 "azure": {
-                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
                 },
                 "gcp": {
-                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
                 },
                 "volcengine": {
-                    "$ref": "#/definitions/goscan_pkg_models.ProviderConfig"
+                    "$ref": "#/definitions/pkg_models.ProviderConfig"
                 }
             }
         },
@@ -979,7 +961,7 @@
                 },
                 "details": {
                     "type": "string",
-                    "example": "provider字段不能为空"
+                    "example": "Provider field cannot be empty"
                 },
                 "error": {
                     "type": "boolean",
@@ -987,7 +969,7 @@
                 },
                 "message": {
                     "type": "string",
-                    "example": "参数验证失败"
+                    "example": "Parameter validation failed"
                 }
             }
         },
@@ -1038,7 +1020,7 @@
                 },
                 "description": {
                     "type": "string",
-                    "example": "每日凌晨2点同步火山云账单"
+                    "example": "Daily VolcEngine billing sync at 2 AM"
                 },
                 "enabled": {
                     "type": "boolean",
@@ -1075,7 +1057,7 @@
                 },
                 "description": {
                     "type": "string",
-                    "example": "每日凌晨2点同步火山云账单"
+                    "example": "Daily VolcEngine billing sync at 2 AM"
                 },
                 "enabled": {
                     "type": "boolean",
@@ -1120,7 +1102,7 @@
             "properties": {
                 "message": {
                     "type": "string",
-                    "example": "操作成功"
+                    "example": "Operation successful"
                 },
                 "success": {
                     "type": "boolean",
@@ -1202,7 +1184,7 @@
                 },
                 "message": {
                     "type": "string",
-                    "example": "同步完成"
+                    "example": "Sync completed"
                 },
                 "provider": {
                     "type": "string",
@@ -1249,7 +1231,7 @@
                 },
                 "message": {
                     "type": "string",
-                    "example": "同步进行中..."
+                    "example": "Syncing in progress..."
                 },
                 "progress": {
                     "type": "number",
@@ -1280,20 +1262,92 @@
             ],
             "properties": {
                 "bill_period": {
+                    "description": "A single billing period. The format also picks the granularity when the\nfield above is empty: YYYY-MM is monthly, YYYY-MM-DD is one day.",
                     "type": "string",
-                    "example": "2025-09"
+                    "example": "2026-09"
                 },
-                "force": {
+                "create_table": {
+                    "description": "Create the target tables first if they are missing.",
                     "type": "boolean",
                     "example": false
                 },
-                "parameters": {
-                    "type": "object",
-                    "additionalProperties": true
+                "end_period": {
+                    "description": "End of the inclusive period range.",
+                    "type": "string",
+                    "example": "2026-06"
+                },
+                "force_update": {
+                    "description": "Re-fetch periods that already have data instead of skipping them.",
+                    "type": "boolean",
+                    "example": false
+                },
+                "granularity": {
+                    "description": "AliCloud only, selects the target table: monthly writes alicloud_bill_monthly,\ndaily writes alicloud_bill_daily, both writes each in one run. Ignored for\nVolcEngine, whose bills land in the single volcengine_bill table.",
+                    "type": "string",
+                    "enum": [
+                        "monthly",
+                        "daily",
+                        "both"
+                    ],
+                    "example": "both"
+                },
+                "limit": {
+                    "description": "Cap on records to sync; 0 means no cap.",
+                    "type": "integer",
+                    "example": 0
+                },
+                "provider": {
+                    "description": "Which cloud to sync. Required.",
+                    "type": "string",
+                    "enum": [
+                        "volcengine",
+                        "alicloud"
+                    ],
+                    "example": "alicloud"
+                },
+                "start_period": {
+                    "description": "Start of an inclusive period range, used instead of bill_period to backfill\nseveral periods in one task.",
+                    "type": "string",
+                    "example": "2026-01"
+                },
+                "sync_mode": {
+                    "description": "standard fetches every period in full, sync-optimal compares record counts\nand only fills the gap. Empty uses the provider default from the config.",
+                    "type": "string",
+                    "enum": [
+                        "standard",
+                        "sync-optimal"
+                    ],
+                    "example": "sync-optimal"
+                },
+                "use_distributed": {
+                    "description": "Write through the Distributed table instead of the local one.",
+                    "type": "boolean",
+                    "example": false
+                }
+            }
+        },
+        "models.SyncTriggerResponse": {
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "example": "Sync triggered for provider alicloud"
                 },
                 "provider": {
                     "type": "string",
-                    "example": "volcengine"
+                    "example": "alicloud"
+                },
+                "status": {
+                    "type": "string",
+                    "example": "started"
+                },
+                "task_id": {
+                    "type": "string",
+                    "example": "6f1c8f0e-6c2a-4a1f-9a4d-1f0b7a2c3d4e"
+                },
+                "timestamp": {
+                    "type": "string",
+                    "example": "2026-09-11T08:13:24Z"
                 }
             }
         },
@@ -1353,7 +1407,7 @@
             "properties": {
                 "description": {
                     "type": "string",
-                    "example": "同步火山云账单数据"
+                    "example": "Sync VolcEngine billing data"
                 },
                 "name": {
                     "type": "string",
@@ -1390,7 +1444,7 @@
                 },
                 "description": {
                     "type": "string",
-                    "example": "同步火山云账单数据"
+                    "example": "Sync VolcEngine billing data"
                 },
                 "id": {
                     "type": "string",
@@ -1447,70 +1501,70 @@
             "type": "object",
             "properties": {
                 "duration": {
-                    "description": "执行耗时",
+                    "description": "Execution duration",
                     "type": "string",
                     "example": "2m6s"
                 },
                 "end_time": {
-                    "description": "结束时间",
+                    "description": "End time",
                     "type": "string",
                     "example": "2025-09-12T08:15:30Z"
                 },
                 "error": {
-                    "description": "错误信息",
+                    "description": "Error message",
                     "type": "string",
-                    "example": "连接超时"
+                    "example": "Connection timeout"
                 },
                 "id": {
-                    "description": "任务ID",
+                    "description": "Task ID",
                     "type": "string",
                     "example": "task_123456"
                 },
                 "message": {
-                    "description": "执行消息",
+                    "description": "Execution message",
                     "type": "string",
-                    "example": "通知发送成功"
+                    "example": "Notification sent successfully"
                 },
                 "records_processed": {
-                    "description": "处理记录数",
+                    "description": "Number of records processed",
                     "type": "integer",
                     "example": 1500
                 },
                 "start_time": {
-                    "description": "开始时间",
+                    "description": "Start time",
                     "type": "string",
                     "example": "2025-09-12T08:13:24Z"
                 },
                 "status": {
-                    "description": "执行状态",
+                    "description": "Execution status",
                     "type": "string",
                     "example": "completed"
                 }
             }
         },
         "models.WeChatNotificationRequest": {
-            "description": "企业微信费用报告通知触发请求，支持指定分析日期、云服务商和告警阈值",
+            "description": "WeChat Work cost report notification trigger request, supports specifying analysis date, cloud providers and alert threshold",
             "type": "object",
             "properties": {
                 "alert_threshold": {
-                    "description": "费用变化告警阈值（百分比），当费用变化超过此值时触发告警，默认使用系统配置值，范围：0-100",
+                    "description": "Cost change alert threshold (percentage), triggers alert when cost change exceeds this value, defaults to system configuration value, range: 0-100",
                     "type": "number",
                     "maximum": 100,
                     "minimum": 0,
                     "example": 10
                 },
                 "date": {
-                    "description": "分析日期，格式：YYYY-MM-DD，默认为当前日期。示例：2025-09-12",
+                    "description": "Analysis date, format: YYYY-MM-DD, defaults to current date. Example: 2025-09-12",
                     "type": "string",
                     "example": "2025-09-12"
                 },
                 "force_notify": {
-                    "description": "强制发送通知，设为true时即使未达到告警阈值也会发送通知，默认为false",
+                    "description": "Force send notification, when set to true will send notification even if alert threshold is not reached, defaults to false",
                     "type": "boolean",
                     "example": false
                 },
                 "providers": {
-                    "description": "要分析的云服务商列表，支持：volcengine（火山云）、alicloud（阿里云）、aws、azure、gcp，默认为 [\"volcengine\", \"alicloud\"]",
+                    "description": "List of cloud providers to analyze, supports: volcengine (VolcEngine), alicloud (Alibaba Cloud), aws, azure, gcp, defaults to [\"volcengine\", \"alicloud\"]",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -1521,7 +1575,7 @@
                     ]
                 },
                 "test_mode": {
-                    "description": "测试模式，设为true时仅测试企业微信连接而不发送实际的费用报告，默认为false",
+                    "description": "Test mode, when set to true only tests WeChat Work connection without sending actual cost report, defaults to false",
                     "type": "boolean",
                     "example": false
                 }
@@ -1531,37 +1585,37 @@
             "type": "object",
             "properties": {
                 "alert_threshold": {
-                    "description": "告警阈值",
+                    "description": "Alert threshold",
                     "type": "number",
                     "example": 10
                 },
                 "enabled": {
-                    "description": "微信通知功能是否启用",
+                    "description": "Whether WeChat notification feature is enabled",
                     "type": "boolean",
                     "example": true
                 },
                 "executor_enabled": {
-                    "description": "执行器是否启用",
+                    "description": "Whether executor is enabled",
                     "type": "boolean",
                     "example": true
                 },
                 "executor_status": {
-                    "description": "执行器状态",
+                    "description": "Executor status",
                     "type": "string",
                     "example": "ready"
                 },
                 "history_count": {
-                    "description": "历史记录数量",
+                    "description": "Number of history records",
                     "type": "integer",
                     "example": 5
                 },
                 "max_retries": {
-                    "description": "最大重试次数",
+                    "description": "Maximum retry attempts",
                     "type": "integer",
                     "example": 3
                 },
                 "mention_users": {
-                    "description": "提及用户列表",
+                    "description": "List of users to mention",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -1572,50 +1626,80 @@
                     ]
                 },
                 "recent_history": {
-                    "description": "最近通知历史",
+                    "description": "Recent notification history",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/models.WeChatNotificationHistoryEntry"
                     }
                 },
                 "retry_delay": {
-                    "description": "重试延迟时间（秒）",
+                    "description": "Retry delay time (seconds)",
                     "type": "integer",
                     "example": 5
                 },
                 "timestamp": {
-                    "description": "状态查询时间戳",
+                    "description": "Status query timestamp",
                     "type": "string",
                     "example": "2025-09-12T08:13:24Z"
                 },
                 "webhook_configured": {
-                    "description": "Webhook是否已配置",
+                    "description": "Whether Webhook is configured",
                     "type": "boolean",
                     "example": true
                 },
                 "webhook_url": {
-                    "description": "脱敏后的Webhook URL",
+                    "description": "Masked Webhook URL",
                     "type": "string",
                     "example": "https://qyapi***webhook"
                 }
             }
         },
         "models.WeChatTestRequest": {
-            "description": "企业微信Webhook连接测试请求，用于验证Webhook URL的可用性",
+            "description": "WeChat Work Webhook connection test request, used to verify Webhook URL availability",
             "type": "object",
             "properties": {
                 "custom_message": {
-                    "description": "自定义测试消息内容，最大长度500字符，默认使用系统预设的测试消息",
+                    "description": "Custom test message content, maximum length 500 characters, defaults to system preset test message",
                     "type": "string",
                     "maxLength": 500,
-                    "example": "这是一条来自费用监控系统的测试消息"
+                    "example": "This is a test message from cost monitoring system"
                 },
                 "timeout": {
-                    "description": "连接超时时间（秒），范围1-60秒，默认为10秒",
+                    "description": "Connection timeout (seconds), range 1-60 seconds, defaults to 10 seconds",
                     "type": "integer",
                     "maximum": 60,
                     "minimum": 1,
                     "example": 10
+                }
+            }
+        },
+        "pkg_models.ProviderConfig": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "endpoint": {
+                    "type": "string",
+                    "example": "ecs.cn-hangzhou.aliyuncs.com"
+                },
+                "has_credentials": {
+                    "description": "Note: AccessKey and SecretKey are masked for security",
+                    "type": "boolean",
+                    "example": true
+                },
+                "host": {
+                    "type": "string",
+                    "example": "billing.volcengineapi.com"
+                },
+                "region": {
+                    "type": "string",
+                    "example": "cn-north-1"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "example": 30
                 }
             }
         }

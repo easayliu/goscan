@@ -88,9 +88,9 @@ status: ## Show project status
 # Generate Swagger documentation
 swagger: ## Generate Swagger documentation
 	@echo "Generating Swagger documentation..."
-	@$$GOPATH/bin/swag init -g cmd/server/main.go --output docs
+	@$$(go env GOPATH)/bin/swag init -g cmd/server/main.go --output docs
 	@echo "Swagger docs generated at docs/"
 
 swagger-fmt: ## Format Swagger comments
 	@echo "Formatting Swagger comments..."
-	@$$GOPATH/bin/swag fmt
+	@$$(go env GOPATH)/bin/swag fmt

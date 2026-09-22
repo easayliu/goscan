@@ -240,11 +240,18 @@ curl -X POST http://goscan.logging.svc.cluster.local:8080/sync \
 | --- | --- |
 | `provider` | 必填，`volcengine` / `alicloud` |
 | `sync_mode` | `standard` / `sync-optimal`，不填走配置里的默认 |
-| `granularity` | 阿里云专用，`monthly` / `daily` / `both` |
-| `bill_period` | 单个账期 |
-| `start_period` `end_period` | 账期区间 |
+| `granularity` | 阿里云专用，选写哪张表：`monthly` → `alicloud_bill_monthly`，`daily` → `alicloud_bill_daily`，`both` → 两张都写 |
+| `bill_period` | 单个账期，`YYYY-MM` 或 `YYYY-MM-DD` |
+| `start_period` `end_period` | 账期区间，闭区间 |
 | `force_update` | 已有数据也重拉 |
-| `limit` | 最多同步多少条 |
+| `limit` | 最多同步多少条，0 = 不限 |
+
+火山引擎只有 `volcengine_bill` 一张表，`granularity` 对它不起作用。阿里云不传
+`granularity` 时，粒度由账期格式决定：`2026-09` 走月表，`2026-09-15` 走日表 ——
+所以按日补数有两种写法，传 `granularity: daily` 或者直接给一个 `YYYY-MM-DD` 的账期。
+
+同一份定义在 `/swagger` 上也能看到（字段说明和取值枚举由 `pkg/models.SyncTriggerRequest`
+生成，接口就是绑这个结构体，不会和文档对不上）。
 
 **接口立刻返回，同步在后台跑**，拿 `task_id` 轮询 `GET /tasks/{task_id}` 看结果：
 `status` 是 `running` / `completed` / `failed`，完成后 `result` 里有

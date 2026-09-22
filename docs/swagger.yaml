@@ -1,27 +1,5 @@
 basePath: /
 definitions:
-  goscan_pkg_models.ProviderConfig:
-    properties:
-      enabled:
-        example: true
-        type: boolean
-      endpoint:
-        example: ecs.cn-hangzhou.aliyuncs.com
-        type: string
-      has_credentials:
-        description: 'Note: AccessKey and SecretKey are masked for security'
-        example: true
-        type: boolean
-      host:
-        example: billing.volcengineapi.com
-        type: string
-      region:
-        example: cn-north-1
-        type: string
-      timeout:
-        example: 30
-        type: integer
-    type: object
   models.AppConfig:
     properties:
       log_file:
@@ -57,15 +35,15 @@ definitions:
   models.CloudProviderConfig:
     properties:
       alicloud:
-        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
+        $ref: '#/definitions/pkg_models.ProviderConfig'
       aws:
-        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
+        $ref: '#/definitions/pkg_models.ProviderConfig'
       azure:
-        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
+        $ref: '#/definitions/pkg_models.ProviderConfig'
       gcp:
-        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
+        $ref: '#/definitions/pkg_models.ProviderConfig'
       volcengine:
-        $ref: '#/definitions/goscan_pkg_models.ProviderConfig'
+        $ref: '#/definitions/pkg_models.ProviderConfig'
     type: object
   models.ConfigResponse:
     properties:
@@ -82,13 +60,13 @@ definitions:
         example: 400
         type: integer
       details:
-        example: provider字段不能为空
+        example: Provider field cannot be empty
         type: string
       error:
         example: true
         type: boolean
       message:
-        example: 参数验证失败
+        example: Parameter validation failed
         type: string
     type: object
   models.HealthCheckResponse:
@@ -119,7 +97,7 @@ definitions:
         example: 0 2 * * *
         type: string
       description:
-        example: 每日凌晨2点同步火山云账单
+        example: Daily VolcEngine billing sync at 2 AM
         type: string
       enabled:
         example: true
@@ -151,7 +129,7 @@ definitions:
         example: 0 2 * * *
         type: string
       description:
-        example: 每日凌晨2点同步火山云账单
+        example: Daily VolcEngine billing sync at 2 AM
         type: string
       enabled:
         example: true
@@ -184,7 +162,7 @@ definitions:
   models.MessageResponse:
     properties:
       message:
-        example: 操作成功
+        example: Operation successful
         type: string
       success:
         example: true
@@ -243,7 +221,7 @@ definitions:
         example: sync_123456
         type: string
       message:
-        example: 同步完成
+        example: Sync completed
         type: string
       provider:
         example: volcengine
@@ -276,7 +254,7 @@ definitions:
         example: 0
         type: integer
       message:
-        example: 同步进行中...
+        example: Syncing in progress...
         type: string
       progress:
         example: 75.5
@@ -297,19 +275,84 @@ definitions:
   models.SyncTriggerRequest:
     properties:
       bill_period:
-        example: 2025-09
+        description: |-
+          A single billing period. The format also picks the granularity when the
+          field above is empty: YYYY-MM is monthly, YYYY-MM-DD is one day.
+        example: 2026-09
         type: string
-      force:
+      create_table:
+        description: Create the target tables first if they are missing.
         example: false
         type: boolean
-      parameters:
-        additionalProperties: true
-        type: object
-      provider:
-        example: volcengine
+      end_period:
+        description: End of the inclusive period range.
+        example: 2026-06
         type: string
+      force_update:
+        description: Re-fetch periods that already have data instead of skipping them.
+        example: false
+        type: boolean
+      granularity:
+        description: |-
+          AliCloud only, selects the target table: monthly writes alicloud_bill_monthly,
+          daily writes alicloud_bill_daily, both writes each in one run. Ignored for
+          VolcEngine, whose bills land in the single volcengine_bill table.
+        enum:
+        - monthly
+        - daily
+        - both
+        example: both
+        type: string
+      limit:
+        description: Cap on records to sync; 0 means no cap.
+        example: 0
+        type: integer
+      provider:
+        description: Which cloud to sync. Required.
+        enum:
+        - volcengine
+        - alicloud
+        example: alicloud
+        type: string
+      start_period:
+        description: |-
+          Start of an inclusive period range, used instead of bill_period to backfill
+          several periods in one task.
+        example: 2026-01
+        type: string
+      sync_mode:
+        description: |-
+          standard fetches every period in full, sync-optimal compares record counts
+          and only fills the gap. Empty uses the provider default from the config.
+        enum:
+        - standard
+        - sync-optimal
+        example: sync-optimal
+        type: string
+      use_distributed:
+        description: Write through the Distributed table instead of the local one.
+        example: false
+        type: boolean
     required:
     - provider
+    type: object
+  models.SyncTriggerResponse:
+    properties:
+      message:
+        example: Sync triggered for provider alicloud
+        type: string
+      provider:
+        example: alicloud
+        type: string
+      status:
+        example: started
+        type: string
+      task_id:
+        example: 6f1c8f0e-6c2a-4a1f-9a4d-1f0b7a2c3d4e
+        type: string
+      timestamp:
+        example: "2026-09-11T08:13:24Z"
+        type: string
     type: object
   models.SystemStatus:
     properties:
@@ -346,7 +389,7 @@ definitions:
   models.TaskRequest:
     properties:
       description:
-        example: 同步火山云账单数据
+        example: Sync VolcEngine billing data
         type: string
       name:
         example: volcengine_sync_task
@@ -377,7 +420,7 @@ definitions:
         example: "2025-09-11T08:13:24Z"
         type: string
       description:
-        example: 同步火山云账单数据
+        example: Sync VolcEngine billing data
         type: string
       id:
         example: task_123456
@@ -419,58 +462,63 @@ definitions:
   models.WeChatNotificationHistoryEntry:
     properties:
       duration:
-        description: 执行耗时
+        description: Execution duration
         example: 2m6s
         type: string
       end_time:
-        description: 结束时间
+        description: End time
         example: "2025-09-12T08:15:30Z"
         type: string
       error:
-        description: 错误信息
-        example: 连接超时
+        description: Error message
+        example: Connection timeout
         type: string
       id:
-        description: 任务ID
+        description: Task ID
         example: task_123456
         type: string
       message:
-        description: 执行消息
-        example: 通知发送成功
+        description: Execution message
+        example: Notification sent successfully
         type: string
       records_processed:
-        description: 处理记录数
+        description: Number of records processed
         example: 1500
         type: integer
       start_time:
-        description: 开始时间
+        description: Start time
         example: "2025-09-12T08:13:24Z"
         type: string
       status:
-        description: 执行状态
+        description: Execution status
         example: completed
         type: string
     type: object
   models.WeChatNotificationRequest:
-    description: 企业微信费用报告通知触发请求，支持指定分析日期、云服务商和告警阈值
+    description: WeChat Work cost report notification trigger request, supports specifying
+      analysis date, cloud providers and alert threshold
     properties:
       alert_threshold:
-        description: 费用变化告警阈值（百分比），当费用变化超过此值时触发告警，默认使用系统配置值，范围：0-100
+        description: 'Cost change alert threshold (percentage), triggers alert when
+          cost change exceeds this value, defaults to system configuration value,
+          range: 0-100'
         example: 10
         maximum: 100
         minimum: 0
         type: number
       date:
-        description: 分析日期，格式：YYYY-MM-DD，默认为当前日期。示例：2025-09-12
+        description: 'Analysis date, format: YYYY-MM-DD, defaults to current date.
+          Example: 2025-09-12'
         example: "2025-09-12"
         type: string
       force_notify:
-        description: 强制发送通知，设为true时即使未达到告警阈值也会发送通知，默认为false
+        description: Force send notification, when set to true will send notification
+          even if alert threshold is not reached, defaults to false
         example: false
         type: boolean
       providers:
-        description: 要分析的云服务商列表，支持：volcengine（火山云）、alicloud（阿里云）、aws、azure、gcp，默认为
-          ["volcengine", "alicloud"]
+        description: 'List of cloud providers to analyze, supports: volcengine (VolcEngine),
+          alicloud (Alibaba Cloud), aws, azure, gcp, defaults to ["volcengine", "alicloud"]'
         example:
         - volcengine
         - alicloud
@@ -478,38 +526,39 @@ definitions:
           type: string
         type: array
       test_mode:
-        description: 测试模式，设为true时仅测试企业微信连接而不发送实际的费用报告，默认为false
+        description: Test mode, when set to true only tests WeChat Work connection
+          without sending actual cost report, defaults to false
         example: false
         type: boolean
     type: object
   models.WeChatNotificationStatusResponse:
     properties:
       alert_threshold:
-        description: 告警阈值
+        description: Alert threshold
         example: 10
         type: number
       enabled:
-        description: 微信通知功能是否启用
+        description: Whether WeChat notification feature is enabled
         example: true
         type: boolean
       executor_enabled:
-        description: 执行器是否启用
+        description: Whether executor is enabled
         example: true
         type: boolean
       executor_status:
-        description: 执行器状态
+        description: Executor status
         example: ready
         type: string
       history_count:
-        description: 历史记录数量
+        description: Number of history records
         example: 5
         type: integer
       max_retries:
-        description: 最大重试次数
+        description: Maximum retry attempts
         example: 3
         type: integer
       mention_users:
-        description: 提及用户列表
+        description: List of users to mention
         example:
         - user1
         - user2
@@ -517,40 +566,65 @@ definitions:
           type: string
         type: array
       recent_history:
-        description: 最近通知历史
+        description: Recent notification history
         items:
           $ref: '#/definitions/models.WeChatNotificationHistoryEntry'
         type: array
       retry_delay:
-        description: 重试延迟时间（秒）
+        description: Retry delay time (seconds)
         example: 5
         type: integer
       timestamp:
-        description: 状态查询时间戳
+        description: Status query timestamp
         example: "2025-09-12T08:13:24Z"
         type: string
       webhook_configured:
-        description: Webhook是否已配置
+        description: Whether Webhook is configured
         example: true
         type: boolean
       webhook_url:
-        description: 脱敏后的Webhook URL
+        description: Masked Webhook URL
         example: https://qyapi***webhook
         type: string
     type: object
   models.WeChatTestRequest:
-    description: 企业微信Webhook连接测试请求，用于验证Webhook URL的可用性
+    description: WeChat Work Webhook connection test request, used to verify Webhook
+      URL availability
     properties:
       custom_message:
-        description: 自定义测试消息内容，最大长度500字符，默认使用系统预设的测试消息
-        example: 这是一条来自费用监控系统的测试消息
+        description: Custom test message content, maximum length 500 characters, defaults
+          to system preset test message
+        example: This is a test message from cost monitoring system
         maxLength: 500
         type: string
       timeout:
-        description: 连接超时时间（秒），范围1-60秒，默认为10秒
+        description: Connection timeout (seconds), range 1-60 seconds, defaults to
+          10 seconds
         example: 10
         maximum: 60
         minimum: 1
+        type: integer
+    type: object
+  pkg_models.ProviderConfig:
+    properties:
+      enabled:
+        example: true
+        type: boolean
+      endpoint:
+        example: ecs.cn-hangzhou.aliyuncs.com
+        type: string
+      has_credentials:
+        description: 'Note: AccessKey and SecretKey are masked for security'
+        example: true
+        type: boolean
+      host:
+        example: billing.volcengineapi.com
+        type: string
+      region:
+        example: cn-north-1
+        type: string
+      timeout:
+        example: 30
         type: integer
     type: object
 host: localhost:8080
@@ -559,8 +633,8 @@ info:
     email: support@goscan.com
     name: API Support
   description: |-
-    云账单数据同步服务API文档
-    支持火山云、阿里云等多云平台的账单数据自动同步到ClickHouse数据库
+    Cloud billing data synchronization service API documentation
+    Supports automatic synchronization of billing data from multi-cloud platforms like VolcEngine and Alibaba Cloud to ClickHouse database
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
@@ -595,7 +669,7 @@ paths:
       description: |-
         Manually trigger WeChat Enterprise cost report notification, supports specifying analysis date, cloud provider list and alert threshold. Can be used for temporary notification needs outside of scheduled tasks.
 
-        **请求示例：**
+        **Request Example:**
         ```json
         {
         "date": "2025-09-12",
@@ -943,6 +1017,8 @@ paths:
       description: |-
         Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.
         Supports configuring sync mode, time range, granularity and other parameters.
+        For AliCloud the granularity field picks the target table: monthly writes alicloud_bill_monthly, daily writes alicloud_bill_daily, both writes each. When it is empty the bill_period format decides instead (YYYY-MM monthly, YYYY-MM-DD daily). VolcEngine has a single table and ignores granularity.
+        The endpoint returns as soon as the task is registered; poll GET /tasks/{task_id} for the outcome.
       parameters:
       - description: Sync request parameters including cloud provider, sync mode,
           billing period range and other configurations
@@ -955,11 +1031,19 @@ paths:
       - application/json
       responses:
         "200":
-          description: Sync task triggered successfully
+          description: Sync task accepted, poll the returned task_id
           schema:
-            $ref: '#/definitions/models.MessageResponse'
+            $ref: '#/definitions/models.SyncTriggerResponse'
         "400":
           description: Invalid request parameters or missing cloud provider configuration
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "409":
+          description: A sync for this provider is already running
+          schema:
+            $ref: '#/definitions/models.ErrorResponse'
+        "429":
+          description: Too many tasks in flight, retry later
           schema:
             $ref: '#/definitions/models.ErrorResponse'
         "500":

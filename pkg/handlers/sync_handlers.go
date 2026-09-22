@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	"goscan/pkg/logger"
-	_ "goscan/pkg/models"
+	"goscan/pkg/models"
 	"goscan/pkg/tasks"
 
 	"github.com/gin-gonic/gin"
@@ -168,27 +168,20 @@ func (h *HandlerService) DeleteTask(c *gin.Context) {
 // @Summary Manually trigger billing data sync
 // @Description Immediately trigger billing data sync operation for specified cloud provider. Supports multiple cloud providers like Volcengine, Alibaba Cloud, etc.
 // @Description Supports configuring sync mode, time range, granularity and other parameters.
+// @Description For AliCloud the granularity field picks the target table: monthly writes alicloud_bill_monthly, daily writes alicloud_bill_daily, both writes each. When it is empty the bill_period format decides instead (YYYY-MM monthly, YYYY-MM-DD daily). VolcEngine has a single table and ignores granularity.
+// @Description The endpoint returns as soon as the task is registered; poll GET /tasks/{task_id} for the outcome.
 // @Tags Data Sync
 // @Accept json
 // @Produce json
 // @Param sync body models.SyncTriggerRequest true "Sync request parameters including cloud provider, sync mode, billing period range and other configurations"
-// @Success 200 {object} models.MessageResponse "Sync task triggered successfully"
+// @Success 200 {object} models.SyncTriggerResponse "Sync task accepted, poll the returned task_id"
 // @Failure 400 {object} models.ErrorResponse "Invalid request parameters or missing cloud provider configuration"
+// @Failure 409 {object} models.ErrorResponse "A sync for this provider is already running"
+// @Failure 429 {object} models.ErrorResponse "Too many tasks in flight, retry later"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
 // @Router /sync [post]
 func (h *HandlerService) TriggerSync(c *gin.Context) {
-	var syncReq struct {
-		Provider       string `json:"provider"`
-		SyncMode       string `json:"sync_mode"`
-		UseDistributed bool   `json:"use_distributed"`
-		CreateTable    bool   `json:"create_table"`
-		ForceUpdate    bool   `json:"force_update"`
-		Granularity    string `json:"granularity,omitempty"`
-		BillPeriod     string `json:"bill_period,omitempty"`
-		StartPeriod    string `json:"start_period,omitempty"`
-		EndPeriod      string `json:"end_period,omitempty"`
-		Limit          int    `json:"limit,omitempty"`
-	}
+	var syncReq models.SyncTriggerRequest
 
 	if err := c.ShouldBindJSON(&syncReq); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
