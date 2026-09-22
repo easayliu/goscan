@@ -67,6 +67,26 @@ type RateLimiter interface {
 // ProgressCallback for tracking sync progress
 type ProgressCallback func(processed, total int64, message string)
 
+// SyncProgress is what a running sync reports about itself while it runs.
+//
+// The unit is the billing period, because that is the unit the sync actually
+// works in: it pulls one period at a time, page by page, and a manual pull is
+// usually a handful of them. Records within a period are not in here — the
+// providers do count pages internally, but only to log them, and threading that
+// out is a change in both SDK wrappers rather than in this loop.
+type SyncProgress struct {
+	// Period being pulled right now, e.g. "2026-08".
+	Period string `json:"period"`
+	// Periods already finished, and how many there are in total.
+	Done  int `json:"done"`
+	Total int `json:"total"`
+}
+
+// ProgressReporter receives SyncProgress as the sync moves from one period to
+// the next. It is called from the sync goroutine, so whoever installs it has to
+// be ready for that (the task manager updates the task under its own lock).
+type ProgressReporter func(SyncProgress)
+
 // ErrorHandler handles and categorizes errors
 type ErrorHandler interface {
 	HandleError(ctx context.Context, err error) error

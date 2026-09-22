@@ -16,6 +16,10 @@ type SyncConfig struct {
 	Limit          int      `json:"limit"`           // API request limit
 	UseDistributed bool     `json:"use_distributed"` // use distributed tables
 	MaxWorkers     int      `json:"max_workers"`     // maximum worker goroutines
+	// Progress, when set, is told which period the sync has reached. A manual
+	// pull takes minutes; without this the caller can only show a spinner and
+	// hope. Not serialised: it is a live callback, not configuration.
+	Progress ProgressReporter `json:"-"`
 }
 
 // TableConfig represents table configuration for a provider

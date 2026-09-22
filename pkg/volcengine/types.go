@@ -2,7 +2,13 @@ package volcengine
 
 import (
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
+	"go.uber.org/zap"
+
+	"goscan/pkg/logger"
 )
 
 // ListBillDetailRequest 查询账单明细请求
@@ -229,6 +235,26 @@ type BillDetail struct {
 	ExpandField        string `json:"ExpandField" db:"ExpandField"`
 }
 
+// money 把 API 返回的金额文本转成库里的 Decimal(20, 8)（见 pkg/ddl.MoneyType）。
+//
+// 账单金额不走 float64：二进制浮点累加会漂，月度汇总差一分钱就是一笔对不上的账。
+// 空值记 0——账单里大量可选金额本来就是空的；**解析不了才是要命的**，所以那种情况除了
+// 记 0 还要告警：一个无声变成 0 的金额，等到有人对账时已经查不出是哪一行了。
+func money(field, raw string) decimal.Decimal {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return decimal.Zero
+	}
+	parsed, err := decimal.NewFromString(value)
+	if err != nil {
+		logger.Warn("bill amount is not a number, stored as 0",
+			zap.String("field", field),
+			zap.String("value", value))
+		return decimal.Zero
+	}
+	return parsed
+}
+
 // ToDBMap 转换为数据库插入映射
 func (bd *BillDetail) ToDBMap() map[string]interface{} {
 	data := make(map[string]interface{})
@@ -264,39 +290,39 @@ func (bd *BillDetail) ToDBMap() map[string]interface{} {
 	data["UseDurationUnit"] = bd.UseDurationUnit
 	data["DeductionCount"] = bd.DeductionCount
 	data["DeductionUseDuration"] = bd.DeductionUseDuration
-	data["Price"] = bd.Price
+	data["Price"] = money("Price", bd.Price)
 	data["PriceUnit"] = bd.PriceUnit
 	data["PriceInterval"] = bd.PriceInterval
-	data["MarketPrice"] = bd.MarketPrice
+	data["MarketPrice"] = money("MarketPrice", bd.MarketPrice)
 	data["Formula"] = bd.Formula
 	data["MeasureInterval"] = bd.MeasureInterval
-	data["OriginalBillAmount"] = bd.OriginalBillAmount
-	data["PreferentialBillAmount"] = bd.PreferentialBillAmount
-	data["DiscountBillAmount"] = bd.DiscountBillAmount
+	data["OriginalBillAmount"] = money("OriginalBillAmount", bd.OriginalBillAmount)
+	data["PreferentialBillAmount"] = money("PreferentialBillAmount", bd.PreferentialBillAmount)
+	data["DiscountBillAmount"] = money("DiscountBillAmount", bd.DiscountBillAmount)
 	data["RoundAmount"] = bd.RoundAmount
-	data["RealValue"] = bd.RealValue
-	data["PretaxRealValue"] = bd.PretaxRealValue
-	data["SettleRealValue"] = bd.SettleRealValue
-	data["SettlePretaxRealValue"] = bd.SettlePretaxRealValue
-	data["PayableAmount"] = bd.PayableAmount
-	data["PreTaxPayableAmount"] = bd.PreTaxPayableAmount
-	data["SettlePayableAmount"] = bd.SettlePayableAmount
-	data["SettlePreTaxPayableAmount"] = bd.SettlePreTaxPayableAmount
-	data["PretaxAmount"] = bd.PretaxAmount
-	data["PosttaxAmount"] = bd.PosttaxAmount
-	data["SettlePretaxAmount"] = bd.SettlePretaxAmount
-	data["SettlePosttaxAmount"] = bd.SettlePosttaxAmount
-	data["Tax"] = bd.Tax
-	data["SettleTax"] = bd.SettleTax
+	data["RealValue"] = money("RealValue", bd.RealValue)
+	data["PretaxRealValue"] = money("PretaxRealValue", bd.PretaxRealValue)
+	data["SettleRealValue"] = money("SettleRealValue", bd.SettleRealValue)
+	data["SettlePretaxRealValue"] = money("SettlePretaxRealValue", bd.SettlePretaxRealValue)
+	data["PayableAmount"] = money("PayableAmount", bd.PayableAmount)
+	data["PreTaxPayableAmount"] = money("PreTaxPayableAmount", bd.PreTaxPayableAmount)
+	data["SettlePayableAmount"] = money("SettlePayableAmount", bd.SettlePayableAmount)
+	data["SettlePreTaxPayableAmount"] = money("SettlePreTaxPayableAmount", bd.SettlePreTaxPayableAmount)
+	data["PretaxAmount"] = money("PretaxAmount", bd.PretaxAmount)
+	data["PosttaxAmount"] = money("PosttaxAmount", bd.PosttaxAmount)
+	data["SettlePretaxAmount"] = money("SettlePretaxAmount", bd.SettlePretaxAmount)
+	data["SettlePosttaxAmount"] = money("SettlePosttaxAmount", bd.SettlePosttaxAmount)
+	data["Tax"] = money("Tax", bd.Tax)
+	data["SettleTax"] = money("SettleTax", bd.SettleTax)
 	data["TaxRate"] = bd.TaxRate
-	data["PaidAmount"] = bd.PaidAmount
-	data["UnpaidAmount"] = bd.UnpaidAmount
-	data["CreditCarriedAmount"] = bd.CreditCarriedAmount
-	data["CouponAmount"] = bd.CouponAmount
+	data["PaidAmount"] = money("PaidAmount", bd.PaidAmount)
+	data["UnpaidAmount"] = money("UnpaidAmount", bd.UnpaidAmount)
+	data["CreditCarriedAmount"] = money("CreditCarriedAmount", bd.CreditCarriedAmount)
+	data["CouponAmount"] = money("CouponAmount", bd.CouponAmount)
 	data["DiscountInfo"] = bd.DiscountInfo
-	data["SavingPlanDeductionDiscountAmount"] = bd.SavingPlanDeductionDiscountAmount
+	data["SavingPlanDeductionDiscountAmount"] = money("SavingPlanDeductionDiscountAmount", bd.SavingPlanDeductionDiscountAmount)
 	data["SavingPlanDeductionSpID"] = bd.SavingPlanDeductionSpID
-	data["SavingPlanOriginalAmount"] = bd.SavingPlanOriginalAmount
+	data["SavingPlanOriginalAmount"] = money("SavingPlanOriginalAmount", bd.SavingPlanOriginalAmount)
 	data["ReservationInstance"] = bd.ReservationInstance
 	data["Currency"] = bd.Currency
 	data["CurrencySettlement"] = bd.CurrencySettlement
@@ -309,7 +335,7 @@ func (bd *BillDetail) ToDBMap() map[string]interface{} {
 	data["SettlementType"] = bd.SettlementType
 	data["DiscountBizBillingFunction"] = bd.DiscountBizBillingFunction
 	data["DiscountBizMeasureInterval"] = bd.DiscountBizMeasureInterval
-	data["DiscountBizUnitPrice"] = bd.DiscountBizUnitPrice
+	data["DiscountBizUnitPrice"] = money("DiscountBizUnitPrice", bd.DiscountBizUnitPrice)
 	data["DiscountBizUnitPriceInterval"] = bd.DiscountBizUnitPriceInterval
 	data["OwnerID"] = bd.OwnerID
 	data["OwnerUserName"] = bd.OwnerUserName

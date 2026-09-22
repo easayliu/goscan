@@ -430,7 +430,7 @@ func (c *CommonDataCleaner) calculatePartitionValue(period, conditionField, prov
 	switch provider {
 	case "alicloud":
 		if conditionField == "billing_cycle" {
-			// Monthly table: PARTITION BY toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))
+			// Monthly table: PARTITION BY toYYYYMM(parseDateTimeBestEffortOrZero(concat(billing_cycle, '-01')))
 			// period = "2025-08" -> partition = "202508"
 			return strings.ReplaceAll(period, "-", ""), true
 		} else if conditionField == "billing_date" {
@@ -440,7 +440,7 @@ func (c *CommonDataCleaner) calculatePartitionValue(period, conditionField, prov
 		}
 	case "volcengine":
 		if conditionField == "BillPeriod" {
-			// VolcEngine table: PARTITION BY toYYYYMM(toDate(ExpenseDate))
+			// VolcEngine table: PARTITION BY toYYYYMM(toDate(parseDateTimeBestEffortOrZero(ExpenseDate)))
 			// period = "2025-08" -> partition = "202508"
 			return strings.ReplaceAll(period, "-", ""), true
 		}

@@ -3,6 +3,8 @@ package tasks
 import (
 	"context"
 	"time"
+
+	"goscan/pkg/cloudsync"
 )
 
 // TaskType represents the type of task
@@ -47,17 +49,31 @@ type TaskConfig struct {
 
 // Task represents a running or completed task
 type Task struct {
-	ID        string             `json:"id"`
-	Type      TaskType           `json:"type"`
-	Provider  string             `json:"provider"`
-	Status    TaskStatus         `json:"status"`
-	StartTime time.Time          `json:"start_time"`
-	EndTime   time.Time          `json:"end_time"`
-	Duration  time.Duration      `json:"duration"`
-	Config    TaskConfig         `json:"config"`
-	Result    *TaskResult        `json:"result,omitempty"`
-	Error     string             `json:"error,omitempty"`
-	Cancel    context.CancelFunc `json:"-"`
+	ID        string        `json:"id"`
+	Type      TaskType      `json:"type"`
+	Provider  string        `json:"provider"`
+	Status    TaskStatus    `json:"status"`
+	StartTime time.Time     `json:"start_time"`
+	EndTime   time.Time     `json:"end_time"`
+	Duration  time.Duration `json:"duration"`
+	Config    TaskConfig    `json:"config"`
+	// Progress is where a running sync has got to. It is replaced wholesale on
+	// every update and never modified in place: readers hold the manager's read
+	// lock only long enough to copy the pointer, and serialise afterwards.
+	Progress *TaskProgress      `json:"progress,omitempty"`
+	Result   *TaskResult        `json:"result,omitempty"`
+	Error    string             `json:"error,omitempty"`
+	Cancel   context.CancelFunc `json:"-"`
+}
+
+// TaskProgress says how far a sync has got, in billing periods — the unit the
+// sync works in. A caller showing a progress bar can take Done/Total; Period
+// names the one in flight, which is the part people actually read.
+type TaskProgress struct {
+	Period    string    `json:"period,omitempty"`
+	Done      int       `json:"done"`
+	Total     int       `json:"total"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // TaskResult holds the result of a completed task
@@ -116,6 +132,10 @@ type SyncConfig struct {
 	StartPeriod    string
 	EndPeriod      string
 	Limit          int
+	// Progress, when set, is called as the sync moves from one period to the
+	// next. The task manager points it at the task so /tasks/{id} can answer
+	// "how far along is it" instead of just "still running".
+	Progress cloudsync.ProgressReporter
 }
 
 // TableConfig holds table creation configuration

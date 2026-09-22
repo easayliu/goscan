@@ -284,12 +284,14 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 	dateWhereExpr := info.DateColumn
 
 	if info.Provider == "volcengine" {
-		// date field: string to Date type (for both SELECT and WHERE)
-		dateSelectExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
-		dateWhereExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
-		// amount field: string to Float64 type
-		amountSumExpr = fmt.Sprintf("SUM(toFloat64OrZero(%s))", info.AmountColumn)
-		amountWhereExpr = fmt.Sprintf("toFloat64OrZero(%s)", info.AmountColumn)
+		// The date column is a String the API sends; toDate() alone throws on an
+		// empty one, which would fail the whole report rather than one row.
+		dateSelectExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
+		dateWhereExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
+		// Amounts are Decimal since the 2026-09 schema change (they used to be
+		// String, hence the old toFloat64OrZero); the report wants a float.
+		amountSumExpr = fmt.Sprintf("SUM(toFloat64(%s))", info.AmountColumn)
+		amountWhereExpr = fmt.Sprintf("toFloat64(%s)", info.AmountColumn)
 	}
 
 	// build postpaid filter condition
@@ -348,12 +350,14 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 	dateWhereExpr := info.DateColumn
 
 	if info.Provider == "volcengine" {
-		// date field: string to Date type (for both SELECT and WHERE)
-		dateSelectExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
-		dateWhereExpr = fmt.Sprintf("toDate(%s)", info.DateColumn)
-		// amount field: string to Float64 type
-		amountSumExpr = fmt.Sprintf("SUM(toFloat64OrZero(%s))", info.AmountColumn)
-		amountWhereExpr = fmt.Sprintf("toFloat64OrZero(%s)", info.AmountColumn)
+		// The date column is a String the API sends; toDate() alone throws on an
+		// empty one, which would fail the whole report rather than one row.
+		dateSelectExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
+		dateWhereExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
+		// Amounts are Decimal since the 2026-09 schema change (they used to be
+		// String, hence the old toFloat64OrZero); the report wants a float.
+		amountSumExpr = fmt.Sprintf("SUM(toFloat64(%s))", info.AmountColumn)
+		amountWhereExpr = fmt.Sprintf("toFloat64(%s)", info.AmountColumn)
 	}
 
 	// build postpaid filter condition

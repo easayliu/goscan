@@ -60,7 +60,7 @@ func TestCreateSQLSingleNode(t *testing.T) {
 			t.Errorf("single node DDL should not mention %q", unwanted)
 		}
 	}
-	if !strings.Contains(sql, "ENGINE = ReplacingMergeTree") {
+	if !strings.Contains(sql, "ENGINE = ReplacingMergeTree(updated_at)") {
 		t.Error("engine missing from single node DDL")
 	}
 }
@@ -73,10 +73,10 @@ func TestCreateSQLCluster(t *testing.T) {
 
 	want := []string{
 		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill_local` ON CLUSTER `bj_ck`",
-		"ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/logs/volcengine_bill_local', '{replica}')",
+		"ENGINE = ReplicatedReplacingMergeTree('/clickhouse/tables/{shard}/logs/volcengine_bill_local', '{replica}', updated_at)",
 		"CREATE TABLE IF NOT EXISTS `logs`.`volcengine_bill` ON CLUSTER `bj_ck`",
 		"AS `logs`.`volcengine_bill_local`",
-		"ENGINE = Distributed(`bj_ck`, `logs`, `volcengine_bill_local`, rand())",
+		"ENGINE = Distributed(`bj_ck`, `logs`, `volcengine_bill_local`, cityHash64(BillPeriod, ExpenseDate, InstanceNo, ExpenseBeginTime, Product, ElementCode, BillDetailId))",
 	}
 	for _, fragment := range want {
 		if !strings.Contains(sql, fragment) {
@@ -120,7 +120,7 @@ func TestClusterWithoutReplication(t *testing.T) {
 	if strings.Contains(sql, "Replicated") {
 		t.Error("replicated: false still produced a Replicated engine")
 	}
-	if !strings.Contains(sql, "ENGINE = ReplacingMergeTree()") {
+	if !strings.Contains(sql, "ENGINE = ReplacingMergeTree(updated_at)") {
 		t.Errorf("local engine changed:\n%s", sql[:200])
 	}
 	if !strings.Contains(sql, "ENGINE = Distributed(") {
@@ -222,7 +222,7 @@ func TestSchemaClauseIsSelfContained(t *testing.T) {
 	if !strings.HasPrefix(clause, "(") {
 		t.Error("clause must open with the column list")
 	}
-	for _, fragment := range []string{"ENGINE = ReplacingMergeTree()", "PARTITION BY toYYYYMMDD(billing_date)", "ORDER BY (billing_date"} {
+	for _, fragment := range []string{"ENGINE = ReplacingMergeTree(updated_at)", "PARTITION BY toYYYYMMDD(billing_date)", "ORDER BY (billing_date"} {
 		if !strings.Contains(clause, fragment) {
 			t.Errorf("clause missing %q", fragment)
 		}
@@ -231,6 +231,94 @@ func TestSchemaClauseIsSelfContained(t *testing.T) {
 	// ENGINE keyword to reuse the column list.
 	if strings.Index(clause, "ENGINE") != strings.LastIndex(clause, "ENGINE") {
 		t.Error("ENGINE appears more than once, the column/engine split would cut in the wrong place")
+	}
+}
+
+// orderByColumns lists the sorting key的列名, for the tests below.
+func orderByColumns(table Table) []string {
+	var out []string
+	for _, key := range strings.Split(strings.Trim(table.OrderBy, "()"), ",") {
+		out = append(out, strings.TrimSpace(key))
+	}
+	return out
+}
+
+// An amount must never take part in the sorting key. The cloud corrects bills
+// after the fact (refunds, recomputed discounts, invoice adjustments); with the
+// amount in the key, the corrected row gets a different key and settles NEXT TO
+// the old one instead of replacing it, and the period is billed twice.
+func TestSortingKeyCarriesNoAmount(t *testing.T) {
+	for _, table := range Tables(testConfig()) {
+		types := make(map[string]string, len(table.Columns))
+		for _, col := range table.Columns {
+			types[col.Name] = col.Type
+		}
+		for _, key := range orderByColumns(table) {
+			switch types[key] {
+			case MoneyType, "Float64":
+				t.Errorf("%s: ORDER BY includes the amount column %q", table.Name, key)
+			}
+		}
+	}
+}
+
+// ReplacingMergeTree keeps the row with the highest version. Without one it
+// keeps an arbitrary row, so a re-pull of a corrected period could resurrect the
+// stale amount.
+func TestEngineVersionsRowsByUpdatedAt(t *testing.T) {
+	for _, table := range Tables(testConfig()) {
+		if !strings.Contains(table.Engine, "ReplacingMergeTree(updated_at)") {
+			t.Errorf("%s: engine is %q, want ReplacingMergeTree(updated_at)", table.Name, table.Engine)
+		}
+		found := false
+		for _, col := range table.Columns {
+			if col.Name == "updated_at" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: engine versions on updated_at, which is not a column", table.Name)
+		}
+	}
+}
+
+// The sharding key has to be a function of the sorting key and nothing else.
+// Any other expression (rand() above all) can send the two copies of a re-pulled
+// row to different shards, where no merge and no FINAL will ever see them
+// together — the deduplication the engine promises silently stops applying.
+func TestShardingKeyIsDerivedFromTheSortingKey(t *testing.T) {
+	for _, table := range Tables(testConfig()) {
+		want := "cityHash64(" + strings.Trim(table.OrderBy, "()") + ")"
+		if table.ShardBy != want {
+			t.Errorf("%s: sharding key %q, want %q", table.Name, table.ShardBy, want)
+		}
+	}
+}
+
+// Partition expressions run on String columns the provider fills in. The
+// throwing parsers take the whole INSERT down when one row comes back with an
+// empty date, which is a bad way to learn that a provider left a field out.
+func TestPartitionKeysParseLeniently(t *testing.T) {
+	for _, table := range Tables(testConfig()) {
+		for _, forbidden := range []string{"toDate(ExpenseDate)", "parseDateTimeBestEffort("} {
+			if strings.Contains(table.PartitionBy, forbidden) {
+				t.Errorf("%s: PARTITION BY %q still uses the throwing %q", table.Name, table.PartitionBy, forbidden)
+			}
+		}
+	}
+}
+
+// Amounts are Decimal, not String and not Float64: see MoneyType.
+func TestAmountColumnsAreDecimal(t *testing.T) {
+	amounts := []string{"PayableAmount", "PaidAmount", "OriginalBillAmount", "PretaxAmount", "CouponAmount", "Price"}
+	types := make(map[string]string)
+	for _, col := range VolcEngineBillTable("volcengine_bill").Columns {
+		types[col.Name] = col.Type
+	}
+	for _, name := range amounts {
+		if types[name] != MoneyType {
+			t.Errorf("%s is %q, want %s", name, types[name], MoneyType)
+		}
 	}
 }
 

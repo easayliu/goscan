@@ -2,6 +2,17 @@ package ddl
 
 import "goscan/pkg/config"
 
+// MoneyType is what every amount column is stored as.
+//
+// Not String: the API sends decimal text and keeping it verbatim meant every
+// sum had to go through toFloat64OrZero, no index or ORDER BY could use the
+// column, and it compressed badly. Not Float64 either — money summed as binary
+// floating point drifts, and a monthly total that is off by a cent is a bill
+// nobody can reconcile. Decimal(20, 8) holds twelve integer digits, which is
+// more headroom than any invoice we will see, and eight decimals, enough for
+// the per-unit prices billed at 0.00000001.
+const MoneyType = "Decimal(20, 8)"
+
 // Default table names. They are also the defaults of the matching config
 // fields; a deployment that renames a table in its config gets the renamed
 // table out of `--ddl` as well.
@@ -63,29 +74,56 @@ func OptionsFrom(cfg *config.Config) Options {
 	}
 }
 
+// volcEngineBillKey identifies one billing item: the period it belongs to, what
+// was billed and which line of the bill it is. BillDetailId is the API's own id
+// for that line; the columns before it keep the key a useful query prefix (every
+// query starts from a period) and keep rows apart should the id ever come back
+// empty.
+//
+// No amount takes part in it. Amounts are what gets corrected — a refund, a
+// recomputed discount, an invoice adjustment — and a corrected row must replace
+// the old one instead of settling next to it.
+const volcEngineBillKey = "BillPeriod, ExpenseDate, InstanceNo, ExpenseBeginTime, Product, ElementCode, BillDetailId"
+
 // VolcEngineBillTable is the VolcEngine bill detail table. Its columns keep the
 // API's own PascalCase names so a row can be matched against the raw response.
 func VolcEngineBillTable(name string) Table {
 	return Table{
-		Name:        name,
-		Comment:     "VolcEngine bill details, one row per billing item",
-		Columns:     volcEngineBillColumns,
-		Engine:      "ReplacingMergeTree",
-		PartitionBy: "toYYYYMM(toDate(ExpenseDate))",
-		OrderBy:     "(BillPeriod, ExpenseDate, InstanceNo, ExpenseBeginTime, Product, ElementCode, PayableAmount)",
+		Name:    name,
+		Comment: "VolcEngine bill details, one row per billing item",
+		Columns: volcEngineBillColumns,
+		// updated_at is the version: the row pulled last wins, which is what
+		// makes a re-pull of a corrected period converge instead of double count.
+		Engine: "ReplacingMergeTree(updated_at)",
+		// ExpenseDate is a String from the API. toDate() on an empty one throws
+		// and takes the whole INSERT with it, so parse leniently: a row the
+		// provider sent without a date lands in the 1970-01 partition instead of
+		// failing the batch.
+		PartitionBy: "toYYYYMM(toDate(parseDateTimeBestEffortOrZero(ExpenseDate)))",
+		OrderBy:     "(" + volcEngineBillKey + ")",
+		ShardBy:     "cityHash64(" + volcEngineBillKey + ")",
 		Settings:    "index_granularity = 8192",
 	}
 }
 
+// aliCloudBillKey identifies one Alibaba Cloud bill line within a period. There
+// is no single id in the response, so the identity is spelled out: whose account,
+// which product and instance, under which billing arrangement, and which split /
+// adjustment record it is. As with VolcEngine, no amount is part of it.
+const aliCloudBillKey = "product_code, instance_id, bill_account_id, subscription_type, billing_type, product_detail_code, split_item_id, adjust_type"
+
 // AliCloudMonthlyTable is the Alibaba Cloud monthly bill table.
 func AliCloudMonthlyTable(name string) Table {
 	return Table{
-		Name:        name,
-		Comment:     "Alibaba Cloud bills at monthly granularity",
-		Columns:     aliCloudMonthlyColumns,
-		Engine:      "ReplacingMergeTree()",
-		PartitionBy: "toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))",
-		OrderBy:     "(billing_cycle, product_code, instance_id, bill_account_id, subscription_type, payment_amount)",
+		Name:    name,
+		Comment: "Alibaba Cloud bills at monthly granularity",
+		Columns: aliCloudMonthlyColumns,
+		Engine:  "ReplacingMergeTree(updated_at)",
+		// billing_cycle is a String; an empty one used to blow up
+		// parseDateTimeBestEffort and with it the whole INSERT.
+		PartitionBy: "toYYYYMM(parseDateTimeBestEffortOrZero(concat(billing_cycle, '-01')))",
+		OrderBy:     "(billing_cycle, " + aliCloudBillKey + ")",
+		ShardBy:     "cityHash64(billing_cycle, " + aliCloudBillKey + ")",
 	}
 }
 
@@ -95,9 +133,10 @@ func AliCloudDailyTable(name string) Table {
 		Name:        name,
 		Comment:     "Alibaba Cloud bills at daily granularity",
 		Columns:     aliCloudDailyColumns,
-		Engine:      "ReplacingMergeTree()",
+		Engine:      "ReplacingMergeTree(updated_at)",
 		PartitionBy: "toYYYYMMDD(billing_date)",
-		OrderBy:     "(billing_date, product_code, instance_id, bill_account_id, subscription_type, payment_amount)",
+		OrderBy:     "(billing_date, " + aliCloudBillKey + ")",
+		ShardBy:     "cityHash64(billing_date, " + aliCloudBillKey + ")",
 	}
 }
 
@@ -154,39 +193,39 @@ var volcEngineBillColumns = []Column{
 	{Name: "UseDurationUnit", Type: "String"},
 	{Name: "DeductionCount", Type: "String"},
 	{Name: "DeductionUseDuration", Type: "String"},
-	{Name: "Price", Type: "String", Section: "价格信息字段"},
+	{Name: "Price", Type: MoneyType, Section: "价格信息字段"},
 	{Name: "PriceUnit", Type: "String"},
 	{Name: "PriceInterval", Type: "String"},
-	{Name: "MarketPrice", Type: "String"},
+	{Name: "MarketPrice", Type: MoneyType},
 	{Name: "MeasureInterval", Type: "String"},
 	{Name: "Formula", Type: "String"},
-	{Name: "OriginalBillAmount", Type: "String", Section: "金额信息字段"},
-	{Name: "PreferentialBillAmount", Type: "String"},
-	{Name: "DiscountBillAmount", Type: "String"},
+	{Name: "OriginalBillAmount", Type: MoneyType, Section: "金额信息字段"},
+	{Name: "PreferentialBillAmount", Type: MoneyType},
+	{Name: "DiscountBillAmount", Type: MoneyType},
 	{Name: "RoundAmount", Type: "Float64"},
-	{Name: "PayableAmount", Type: "String"},
-	{Name: "PreTaxPayableAmount", Type: "String"},
-	{Name: "SettlePayableAmount", Type: "String"},
-	{Name: "SettlePreTaxPayableAmount", Type: "String"},
-	{Name: "PretaxAmount", Type: "String"},
-	{Name: "PosttaxAmount", Type: "String"},
-	{Name: "SettlePretaxAmount", Type: "String"},
-	{Name: "SettlePosttaxAmount", Type: "String"},
-	{Name: "Tax", Type: "String"},
-	{Name: "SettleTax", Type: "String"},
+	{Name: "PayableAmount", Type: MoneyType},
+	{Name: "PreTaxPayableAmount", Type: MoneyType},
+	{Name: "SettlePayableAmount", Type: MoneyType},
+	{Name: "SettlePreTaxPayableAmount", Type: MoneyType},
+	{Name: "PretaxAmount", Type: MoneyType},
+	{Name: "PosttaxAmount", Type: MoneyType},
+	{Name: "SettlePretaxAmount", Type: MoneyType},
+	{Name: "SettlePosttaxAmount", Type: MoneyType},
+	{Name: "Tax", Type: MoneyType},
+	{Name: "SettleTax", Type: MoneyType},
 	{Name: "TaxRate", Type: "String"},
-	{Name: "PaidAmount", Type: "String"},
-	{Name: "UnpaidAmount", Type: "String"},
-	{Name: "CreditCarriedAmount", Type: "String"},
-	{Name: "RealValue", Type: "String", Section: "实际价值和结算信息"},
-	{Name: "PretaxRealValue", Type: "String"},
-	{Name: "SettleRealValue", Type: "String"},
-	{Name: "SettlePretaxRealValue", Type: "String"},
-	{Name: "CouponAmount", Type: "String", Section: "优惠和抵扣信息"},
+	{Name: "PaidAmount", Type: MoneyType},
+	{Name: "UnpaidAmount", Type: MoneyType},
+	{Name: "CreditCarriedAmount", Type: MoneyType},
+	{Name: "RealValue", Type: MoneyType, Section: "实际价值和结算信息"},
+	{Name: "PretaxRealValue", Type: MoneyType},
+	{Name: "SettleRealValue", Type: MoneyType},
+	{Name: "SettlePretaxRealValue", Type: MoneyType},
+	{Name: "CouponAmount", Type: MoneyType, Section: "优惠和抵扣信息"},
 	{Name: "DiscountInfo", Type: "String"},
-	{Name: "SavingPlanDeductionDiscountAmount", Type: "String"},
+	{Name: "SavingPlanDeductionDiscountAmount", Type: MoneyType},
 	{Name: "SavingPlanDeductionSpID", Type: "String"},
-	{Name: "SavingPlanOriginalAmount", Type: "String"},
+	{Name: "SavingPlanOriginalAmount", Type: MoneyType},
 	{Name: "ReservationInstance", Type: "String"},
 	{Name: "Currency", Type: "String", Section: "货币信息"},
 	{Name: "CurrencySettlement", Type: "String"},
@@ -198,7 +237,7 @@ var volcEngineBillColumns = []Column{
 	{Name: "Tag", Type: "String"},
 	{Name: "DiscountBizBillingFunction", Type: "String", Section: "折扣相关业务信息"},
 	{Name: "DiscountBizMeasureInterval", Type: "String"},
-	{Name: "DiscountBizUnitPrice", Type: "String"},
+	{Name: "DiscountBizUnitPrice", Type: MoneyType},
 	{Name: "DiscountBizUnitPriceInterval", Type: "String"},
 	{Name: "MainContractNumber", Type: "String", Section: "其他业务信息"},
 	{Name: "OriginalOrderNo", Type: "String"},

@@ -100,6 +100,9 @@ func (e *AliCloudSyncExecutor) ValidateConfig(ctx context.Context, config *SyncC
 func (e *AliCloudSyncExecutor) ExecuteSync(ctx context.Context, config *SyncConfig) (*SyncResult, error) {
 	// Convert to cloudsync config and delegate to base executor
 	cloudSyncConfig := e.convertToCloudSyncConfig(config)
+	// configutils builds the config from a plain input struct; the progress
+	// reporter is a live callback, so it is attached here rather than there.
+	cloudSyncConfig.Progress = config.Progress
 	cloudSyncResult, err := e.BaseCloudSyncExecutor.ExecuteSync(ctx, cloudSyncConfig)
 	if err != nil {
 		return nil, err

@@ -50,6 +50,9 @@ func (e *VolcEngineSyncExecutor) ValidateConfig(ctx context.Context, config *Syn
 func (e *VolcEngineSyncExecutor) ExecuteSync(ctx context.Context, config *SyncConfig) (*SyncResult, error) {
 	// Convert to cloudsync.SyncConfig
 	cloudSyncConfig := e.convertToCloudSyncConfig(config)
+	// configutils builds the config from a plain input struct; the progress
+	// reporter is a live callback, so it is attached here rather than there.
+	cloudSyncConfig.Progress = config.Progress
 
 	// Execute sync using base executor
 	result, err := e.BaseCloudSyncExecutor.ExecuteSync(ctx, cloudSyncConfig)

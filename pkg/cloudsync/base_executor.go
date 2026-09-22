@@ -200,6 +200,12 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 	var totalRecords, totalInserted int
 	var allErrors []error
 
+	report := func(done int, period string) {
+		if config.Progress != nil {
+			config.Progress(SyncProgress{Period: period, Done: done, Total: len(periods)})
+		}
+	}
+
 	for i, period := range periods {
 		logger.Info("syncing period",
 			zap.String("provider", e.provider.GetProviderName()),
@@ -207,6 +213,9 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 			zap.String("granularity", period.Granularity),
 			zap.Int("current", i+1),
 			zap.Int("total", len(periods)))
+		// Report before the period starts, so the caller sees which one is in
+		// flight rather than only which ones are already done.
+		report(i, period.Period)
 
 		// Create sync options
 		syncOptions := &SyncOptions{
@@ -233,6 +242,8 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 			zap.String("period", period.Period),
 			zap.String("granularity", period.Granularity))
 	}
+
+	report(len(periods), "")
 
 	// If all periods failed
 	if len(allErrors) == len(periods) {

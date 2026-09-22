@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/clickhouse"
+	"goscan/pkg/cloudsync"
 	"goscan/pkg/config"
 	"goscan/pkg/logger"
 	"sync"
@@ -335,6 +336,9 @@ func (tm *TaskManagerImpl) executeSyncTask(ctx context.Context, task *Task) (*Ta
 		StartPeriod:    task.Config.StartPeriod,
 		EndPeriod:      task.Config.EndPeriod,
 		Limit:          task.Config.Limit,
+		Progress: func(p cloudsync.SyncProgress) {
+			tm.updateTaskProgress(task, p)
+		},
 	}
 
 	// Tables are not created here on purpose: schema changes belong to
@@ -392,6 +396,22 @@ func (tm *TaskManagerImpl) updateTaskStatus(task *Task, status TaskStatus) {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 	task.Status = status
+}
+
+// updateTaskProgress records how far the sync has got.
+//
+// The progress value is replaced, never edited in place: GetTask hands its
+// caller the *Task itself and the HTTP handler serialises it after the lock is
+// gone, so anything a running sync writes has to be immutable once published.
+func (tm *TaskManagerImpl) updateTaskProgress(task *Task, p cloudsync.SyncProgress) {
+	tm.tasksMutex.Lock()
+	defer tm.tasksMutex.Unlock()
+	task.Progress = &TaskProgress{
+		Period:    p.Period,
+		Done:      p.Done,
+		Total:     p.Total,
+		UpdatedAt: time.Now(),
+	}
 }
 
 // finishTask completes a task

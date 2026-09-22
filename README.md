@@ -32,12 +32,11 @@ opdash 负责查。前三个是「应用自己吐出来的数据」，goscan 是
 对不上的那些只能丢掉或者塞进备注里，真要对账时反而查不回原始值。要跨云汇总就在
 查询里对齐那几个关键列。
 
-一个坑：**火山那张表的金额是 `String`**（API 原样返回，避免精度和空值问题），
-按金额排序、求和要先转：
+**金额一律是 `Decimal(20, 8)`**，直接求和即可：
 
 ```sql
 -- 上个月各产品花了多少（火山）
-select ProductZh, sum(toFloat64OrZero(PayableAmount)) as amount
+select ProductZh, sum(PayableAmount) as amount
 from logs.volcengine_bill
 where BillPeriod = '2026-08'
 group by ProductZh order by amount desc;
@@ -49,8 +48,25 @@ where billing_cycle = '2026-08'
 group by product_name order by amount desc;
 ```
 
-三张表都是 `ReplacingMergeTree`：同一个账期重复拉不会翻倍，但去重发生在后台 merge，
-刚写完就查要加 `final` 或者等一次 merge。
+火山的金额过去按 API 原样存成 `String`，每次求和都要 `toFloat64OrZero`，排序与跳数索引都用不上；
+2026-09 起改为 `Decimal`：金额不能走二进制浮点，月度汇总差一分钱就是一笔对不上的账。
+
+### 去重是怎么保证的
+
+三张表都是 `ReplacingMergeTree(updated_at)`，去重键就是各自的排序键，三件事共同成立才真的不会翻倍：
+
+* **排序键只放业务身份，不含任何金额**。云厂商会在月中修正账单（退款、优惠重算、发票折扣），
+  金额若是键的一部分，修正后的行与旧行键不同，两行都会留下，账期直接算两遍。火山用 API 自带的
+  `BillDetailId`，阿里云没有单一 id，用「账号 + 产品 + 实例 + 计费方式 + 拆分 / 调整记录」拼出身份。
+* **版本列是 `updated_at`**，后拉到的那一份胜出；没有版本列时引擎只会任取一行，重拉反而可能把旧金额留下。
+* **集群上的分片键是 `cityHash64(<排序键>)`，不是 `rand()`**。`ReplacingMergeTree` 的去重只发生在分片内，
+  `rand()` 会把同一行的两次写入丢到不同分片，后台 merge 和 `FINAL` 都收不掉——这正是账单金额翻倍最隐蔽的一条路。
+
+去重仍然发生在后台 merge，**刚写完就查要加 `final` 或等一次 merge**。
+
+> 2026-09 的这次结构调整不能原地升级：引擎、排序键、分区键和列类型都是建表时定死的，
+> `CREATE TABLE IF NOT EXISTS` 对已存在的表不起作用。老表要先 `DROP` 再按新 DDL 建，然后重新同步
+> ——账单随时可以按账期重拉，代价只是一次同步。
 
 表结构的唯一定义在 [`pkg/ddl`](pkg/ddl)，建表语句由它渲染，同步写入也用它 ——
 加一列只改一个地方，两边不会各改各的。
