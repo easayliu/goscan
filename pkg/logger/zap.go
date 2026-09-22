@@ -87,30 +87,15 @@ func InitLogger(isDevelopment bool, logPath string, logLevel ...string) error {
 	return nil
 }
 
-// NewProductionLogger creates a production-ready logger with log rotation
+// NewProductionLogger creates a production logger. It always writes to stdout;
+// a non-empty logPath additionally writes rotated JSON to that file.
+//
+// An empty logPath means stdout only, which is what the config comment promises
+// and what a container wants — the collector reads stdout, and a writable
+// directory inside the image is one more thing that can be missing. For the same
+// reason a log file that cannot be opened is a warning rather than a fatal
+// error: losing the file is bad, refusing to start is worse.
 func NewProductionLogger(logPath string, level zapcore.Level) (*zap.Logger, error) {
-	// Set default log path
-	if logPath == "" {
-		logPath = "./logs/app.log"
-	}
-
-	// Create log directory if it doesn't exist
-	if err := createLogDir(logPath); err != nil {
-		return nil, fmt.Errorf("failed to create log directory: %w", err)
-	}
-
-	// Log rotation configuration
-	w := zapcore.AddSync(&lumberjack.Logger{
-		Filename:   logPath,
-		MaxSize:    100, // megabytes
-		MaxBackups: 5,
-		MaxAge:     30, // days
-		Compress:   true,
-	})
-
-	// Console output for errors
-	consoleDebugging := zapcore.Lock(os.Stdout)
-
 	// Production environment encoder configuration
 	encoderConfig := zap.NewProductionEncoderConfig()
 	encoderConfig.TimeKey = "timestamp"
@@ -128,34 +113,38 @@ func NewProductionLogger(logPath string, level zapcore.Level) (*zap.Logger, erro
 		enc.AppendString(formatCallerPath(caller))
 	}
 
-	// Create JSON encoder for file
-	jsonEncoder := zapcore.NewJSONEncoder(encoderConfig)
-
-	// Create console encoder for stdout
-	consoleEncoder := zapcore.NewConsoleEncoder(encoderConfig)
-
 	// Set up atomic level for dynamic adjustment
 	atomicLevel = zap.NewAtomicLevelAt(level)
 
-	// File core: Info level and above (no sampling to avoid losing logs)
-	fileCore := zapcore.NewCore(
-		jsonEncoder,
-		w,
-		atomicLevel,
-	)
+	cores := []zapcore.Core{
+		zapcore.NewCore(
+			zapcore.NewConsoleEncoder(encoderConfig),
+			zapcore.Lock(os.Stdout),
+			atomicLevel,
+		),
+	}
 
-	// Console core: same level as file for consistency
-	consoleCore := zapcore.NewCore(
-		consoleEncoder,
-		consoleDebugging,
-		level,
-	)
-
-	// Combine cores
-	core := zapcore.NewTee(fileCore, consoleCore)
+	if logPath != "" {
+		if err := createLogDir(logPath); err != nil {
+			// stderr, not the logger: the logger is what we are building.
+			fmt.Fprintf(os.Stderr, "logger: cannot write to %s, logging to stdout only: %v\n", logPath, err)
+		} else {
+			cores = append(cores, zapcore.NewCore(
+				zapcore.NewJSONEncoder(encoderConfig),
+				zapcore.AddSync(&lumberjack.Logger{
+					Filename:   logPath,
+					MaxSize:    100, // megabytes
+					MaxBackups: 5,
+					MaxAge:     30, // days
+					Compress:   true,
+				}),
+				atomicLevel,
+			))
+		}
+	}
 
 	// Add caller information and stack trace
-	logger := zap.New(core,
+	logger := zap.New(zapcore.NewTee(cores...),
 		zap.AddCaller(),
 		zap.AddCallerSkip(1), // Skip wrapper function to show actual caller
 		zap.AddStacktrace(zapcore.ErrorLevel),

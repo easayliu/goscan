@@ -142,7 +142,14 @@ func run(opts *options) int {
 		return 0
 	}
 
-	if err := logger.InitLogger(true, ""); err != nil {
+	// Log the way the config asks: production means JSON, and app.log_file
+	// decides whether anything is written to disk at all (empty = stdout only,
+	// which is what the container wants — logpipe reads stdout).
+	appCfg := cfg.App
+	if appCfg == nil {
+		appCfg = config.NewAppConfig()
+	}
+	if err := logger.InitLogger(appCfg.Environment != "production", appCfg.LogFile, appCfg.LogLevel); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		return 1
 	}

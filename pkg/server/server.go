@@ -47,17 +47,9 @@ type HTTPServer struct {
 
 // NewHTTPServer creates a new HTTP server instance
 func NewHTTPServer(ctx context.Context, config *Config) (*HTTPServer, error) {
-	// Initialize zap logger
+	// The logger is set up once in main, from the same config; re-initialising
+	// it here only meant the process changed log format halfway through startup.
 	isDev := config.Config.App.Environment != "production"
-	logPath := config.Config.App.LogFile
-	// Use relative path as default to avoid permission issues
-	if logPath == "" {
-		logPath = "./logs/app.log"
-	}
-
-	if err := logger.InitLogger(isDev, logPath, config.Config.App.LogLevel); err != nil {
-		return nil, fmt.Errorf("failed to initialize logger: %w", err)
-	}
 
 	logger.Info("Initializing HTTP server",
 		zap.String("address", config.Address),
