@@ -9,6 +9,8 @@ type SyncConfig struct {
 	SyncMode       string   `json:"sync_mode"`       // "standard" | "sync-optimal"
 	BillPeriod     string   `json:"bill_period"`     // billing period (YYYY-MM or YYYY-MM-DD)
 	Periods        []string `json:"periods"`         // multiple periods for batch sync
+	StartPeriod    string   `json:"start_period"`    // inclusive range start, expanded into periods
+	EndPeriod      string   `json:"end_period"`      // inclusive range end
 	Granularity    string   `json:"granularity"`     // "monthly" | "daily" | "both"
 	ForceUpdate    bool     `json:"force_update"`    // force update existing data
 	AutoClean      bool     `json:"auto_clean"`      // automatically clean inconsistent data

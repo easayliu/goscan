@@ -6,7 +6,8 @@ import (
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/cloudsync"
 	"goscan/pkg/config"
-	"time"
+	"goscan/pkg/utils/dateutils"
+	"strings"
 )
 
 // AliCloudProvider implements the CloudProvider interface for Alibaba Cloud
@@ -149,8 +150,15 @@ func (p *AliCloudProvider) CreateTables(ctx context.Context, config *cloudsync.T
 	return nil
 }
 
-// SyncPeriodData synchronizes data for a specific period
-func (p *AliCloudProvider) SyncPeriodData(ctx context.Context, period string, options *cloudsync.SyncOptions) error {
+// SyncPeriodData synchronizes one period into the table the granularity picks.
+//
+// The two tables hold different things: alicloud_bill_monthly is one row per
+// instance per billing cycle, alicloud_bill_daily is one row per instance per
+// day. Which one a pull fills is therefore the caller's choice, not something
+// to be inferred — inferring it from the period string is only the fallback for
+// a caller that passes a bare period and no granularity, as `bill_period`
+// without `granularity` does over HTTP.
+func (p *AliCloudProvider) SyncPeriodData(ctx context.Context, period, granularity string, options *cloudsync.SyncOptions) error {
 	if err := p.initBillService(); err != nil {
 		return fmt.Errorf("failed to initialize bill service: %w", err)
 	}
@@ -163,20 +171,33 @@ func (p *AliCloudProvider) SyncPeriodData(ctx context.Context, period string, op
 		MaxWorkers:       options.MaxWorkers,
 	}
 
-	// Determine granularity from period format
+	if granularity == "" {
+		var err error
+		if granularity, err = dateutils.DetermineGranularityFromPeriod(period); err != nil {
+			return fmt.Errorf("invalid period format: %s", period)
+		}
+	}
+
 	var err error
-	if _, parseErr := time.Parse("2006-01-02", period); parseErr == nil {
-		// Daily format (YYYY-MM-DD)
-		err = p.billService.SyncSpecificDayBillData(ctx, period, aliOptions)
-	} else if _, parseErr := time.Parse("2006-01", period); parseErr == nil {
-		// Monthly format (YYYY-MM)
+	switch strings.ToLower(granularity) {
+	case dateutils.GranularityMonthly:
 		err = p.billService.SyncMonthlyBillData(ctx, period, aliOptions)
-	} else {
-		return fmt.Errorf("invalid period format: %s", period)
+	case dateutils.GranularityDaily:
+		// A YYYY-MM-DD period is that one day; a YYYY-MM period is every day in
+		// the month. Both end up in the daily table.
+		if dateutils.IsValidBillingDate(period) {
+			err = p.billService.SyncSpecificDayBillData(ctx, period, aliOptions)
+		} else {
+			err = p.billService.SyncDailyBillData(ctx, period, aliOptions)
+		}
+	case dateutils.GranularityBoth:
+		err = p.billService.SyncBothGranularityData(ctx, period, aliOptions)
+	default:
+		return fmt.Errorf("unsupported granularity: %s", granularity)
 	}
 
 	if err != nil {
-		return fmt.Errorf("failed to sync period %s: %w", period, err)
+		return fmt.Errorf("failed to sync period %s (%s): %w", period, granularity, err)
 	}
 
 	return nil

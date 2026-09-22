@@ -9,8 +9,14 @@ import (
 
 // SyncConfigInput represents input for sync configuration conversion
 type SyncConfigInput struct {
-	SyncMode       string
+	SyncMode string
+	// BillPeriod is a single period; StartPeriod/EndPeriod are an inclusive
+	// range. Leaving all three out means the current month. They have to be
+	// carried through here — dropping them is how a request to backfill six
+	// months used to sync only the current one.
 	BillPeriod     string
+	StartPeriod    string
+	EndPeriod      string
 	Granularity    string
 	ForceUpdate    bool
 	UseDistributed bool
@@ -75,6 +81,8 @@ func ConvertSyncConfig(from *SyncConfigInput) *cloudsync.SyncConfig {
 	return &cloudsync.SyncConfig{
 		SyncMode:       syncMode,
 		BillPeriod:     from.BillPeriod,
+		StartPeriod:    from.StartPeriod,
+		EndPeriod:      from.EndPeriod,
 		Granularity:    granularity,
 		ForceUpdate:    from.ForceUpdate,
 		AutoClean:      true, // Always enable auto-clean for consistency

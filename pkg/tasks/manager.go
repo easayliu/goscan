@@ -407,10 +407,11 @@ func (tm *TaskManagerImpl) updateTaskProgress(task *Task, p cloudsync.SyncProgre
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 	task.Progress = &TaskProgress{
-		Period:    p.Period,
-		Done:      p.Done,
-		Total:     p.Total,
-		UpdatedAt: time.Now(),
+		Period:      p.Period,
+		Granularity: p.Granularity,
+		Done:        p.Done,
+		Total:       p.Total,
+		UpdatedAt:   time.Now(),
 	}
 }
 

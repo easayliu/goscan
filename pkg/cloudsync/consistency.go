@@ -84,25 +84,17 @@ func (c *DefaultConsistencyChecker) CheckPeriodConsistency(ctx context.Context, 
 func (c *DefaultConsistencyChecker) FindInconsistentPeriods(ctx context.Context, config *SyncConfig) ([]*PeriodInfo, error) {
 	var periods []*PeriodInfo
 
-	if config.SyncMode == "sync-optimal" {
-		// For sync-optimal mode, check predefined periods
+	if config.SyncMode == "sync-optimal" && !hasExplicitPeriods(config) {
+		// Nothing was asked for in particular, so sync-optimal picks the two
+		// periods that move: the current-ish month and yesterday.
 		periods = c.calculatePeriodsToCheck(config)
 	} else {
-		// For standard mode, only check the specified period
-		if config.BillPeriod == "" {
-			config.BillPeriod = time.Now().Format("2006-01")
-		}
-
-		granularities := []string{config.Granularity}
-		if config.Granularity == "both" {
-			granularities = []string{"monthly", "daily"}
-		}
-
-		for _, granularity := range granularities {
-			periods = append(periods, &PeriodInfo{
-				Period:      config.BillPeriod,
-				Granularity: granularity,
-			})
+		// The caller named the periods — a manual backfill from opdash, or a
+		// standard run. Check exactly those, granularities included, so
+		// "2026-04..2026-09, both" checks twelve entries and not one.
+		var err error
+		if periods, err = periodsToSync(c.provider, config); err != nil {
+			return nil, err
 		}
 	}
 

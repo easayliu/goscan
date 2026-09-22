@@ -22,7 +22,10 @@ type CloudProvider interface {
 
 	// Business logic specific methods
 	CreateTables(ctx context.Context, config *TableConfig) error
-	SyncPeriodData(ctx context.Context, period string, options *SyncOptions) error
+	// SyncPeriodData pulls one period into the table the granularity selects.
+	// Granularity is "monthly" or "daily"; empty means "read it off the period
+	// format", which is what a caller that only knows a period string wants.
+	SyncPeriodData(ctx context.Context, period, granularity string, options *SyncOptions) error
 }
 
 // DataProcessor processes bill data for database insertion
@@ -77,6 +80,10 @@ type ProgressCallback func(processed, total int64, message string)
 type SyncProgress struct {
 	// Period being pulled right now, e.g. "2026-08".
 	Period string `json:"period"`
+	// Which table that period is going into: "monthly" or "daily". A run over
+	// both granularities visits every period twice, so the period alone does
+	// not say what is happening.
+	Granularity string `json:"granularity,omitempty"`
 	// Periods already finished, and how many there are in total.
 	Done  int `json:"done"`
 	Total int `json:"total"`

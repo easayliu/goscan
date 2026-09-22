@@ -128,8 +128,13 @@ func (p *VolcEngineProvider) CreateTables(ctx context.Context, config *cloudsync
 	return nil
 }
 
-// SyncPeriodData synchronizes data for a specific period
-func (p *VolcEngineProvider) SyncPeriodData(ctx context.Context, period string, options *cloudsync.SyncOptions) error {
+// SyncPeriodData synchronizes data for a specific period.
+//
+// The granularity is accepted and ignored: VolcEngine returns one bill detail
+// row per instance per day and they all go into volcengine_bill, so there is no
+// second table to pick. GetTableConfig says as much by answering nil for
+// anything but "monthly", which keeps the executor from asking twice.
+func (p *VolcEngineProvider) SyncPeriodData(ctx context.Context, period, _ string, options *cloudsync.SyncOptions) error {
 	if err := p.initBillService(); err != nil {
 		return fmt.Errorf("failed to initialize bill service: %w", err)
 	}

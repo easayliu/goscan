@@ -323,3 +323,60 @@ func ValidatePeriodDateConsistency(billingCycle, billingDate string) error {
 
 	return nil
 }
+
+// MaxPeriodsInRange caps how many periods one range may expand into. A manual
+// backfill is a handful of months; a typo like 2018-01..2026-09 at daily
+// granularity would otherwise queue thousands of API-bound periods into a
+// single task that nobody can cancel halfway.
+const MaxPeriodsInRange = 400
+
+// ExpandPeriodRange turns an inclusive start..end range into the list of
+// periods the sync should walk, one entry per period.
+//
+// The step follows the format of the endpoints: YYYY-MM walks months, and
+// YYYY-MM-DD walks days. Both ends have to use the same one — a range from a
+// month to a day has no single answer, and guessing it would silently sync
+// something other than what was asked for. Either end may be left empty, in
+// which case the other is the whole range.
+func ExpandPeriodRange(start, end string) ([]string, error) {
+	start, end = strings.TrimSpace(start), strings.TrimSpace(end)
+	switch {
+	case start == "" && end == "":
+		return nil, nil
+	case start == "":
+		start = end
+	case end == "":
+		end = start
+	}
+
+	from, startGranularity, err := ParseBillPeriod(start)
+	if err != nil {
+		return nil, fmt.Errorf("invalid start period: %w", err)
+	}
+	to, endGranularity, err := ParseBillPeriod(end)
+	if err != nil {
+		return nil, fmt.Errorf("invalid end period: %w", err)
+	}
+	if startGranularity != endGranularity {
+		return nil, fmt.Errorf("period range must use one format on both ends, got %s and %s", start, end)
+	}
+	if from.After(to) {
+		return nil, fmt.Errorf("start period %s is after end period %s", start, end)
+	}
+
+	var periods []string
+	for current := from; !current.After(to); {
+		periods = append(periods, FormatBillPeriod(current, startGranularity))
+		if len(periods) > MaxPeriodsInRange {
+			return nil, fmt.Errorf("period range %s..%s expands to more than %d periods, narrow it down",
+				start, end, MaxPeriodsInRange)
+		}
+		if startGranularity == GranularityDaily {
+			current = current.AddDate(0, 0, 1)
+		} else {
+			current = current.AddDate(0, 1, 0)
+		}
+	}
+
+	return periods, nil
+}

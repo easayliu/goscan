@@ -253,9 +253,20 @@ curl -X POST http://goscan.logging.svc.cluster.local:8080/sync \
 同一份定义在 `/swagger` 上也能看到（字段说明和取值枚举由 `pkg/models.SyncTriggerRequest`
 生成，接口就是绑这个结构体，不会和文档对不上）。
 
+`force_update` 管的是「已经有数据的账期要不要再拉一遍」：不勾时先比对该账期在库里的条数
+和接口报的条数，一致就跳过、不一致就先清掉再拉；勾上则不做这次比对，要什么账期拉什么账期。
+勾上它时 `sync-optimal` 按 `standard` 走 —— 那个模式本身就是「只补缺的」，和「都重拉」
+凑在一起只能二选一，以显式勾上的那个为准。
+
+账期区间和粒度是**乘起来**的：`2026-01` 至 `2026-06` 配 `granularity: both`，
+一次任务要拉 12 趟 —— 6 个账期各拉一趟月表、一趟日表。日表按天逐日调用云厂商接口，
+因此补一个月的日账单比补一个月的月账单慢得多，补历史时留足时间。
+
 **接口立刻返回，同步在后台跑**，拿 `task_id` 轮询 `GET /tasks/{task_id}` 看结果：
 `status` 是 `running` / `completed` / `failed`，完成后 `result` 里有
-`records_processed`、`duration`，失败的话 `error` 里是原因。
+`records_processed`、`duration`，失败的话 `error` 里是原因。`progress` 报的是
+「拉到第几趟」——`period` 是当前账期，`granularity` 是这一趟写哪张表，
+`done` / `total` 的单位就是上面那个乘出来的趟数。
 
 状态码就是 opdash 那边要分的几种情况：
 

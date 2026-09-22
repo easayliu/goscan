@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"goscan/pkg/logger"
+	"goscan/pkg/utils/dateutils"
 	"strings"
 	"time"
 
@@ -40,7 +41,14 @@ func (sm *syncManager) SyncData(ctx context.Context, req *SyncRequest) (*SyncRes
 	case "MONTHLY":
 		err = sm.syncMonthlyBillDataImpl(ctx, req.Period, req.Options)
 	case "DAILY":
-		err = sm.syncSpecificDayBillDataImpl(ctx, req.Period, req.Options)
+		// The daily table takes both shapes of period: one day syncs that day,
+		// a whole cycle syncs every day in it. Only accepting YYYY-MM-DD here
+		// is what left SyncDailyBillData unreachable.
+		if dateutils.IsValidBillingDate(req.Period) {
+			err = sm.syncSpecificDayBillDataImpl(ctx, req.Period, req.Options)
+		} else {
+			err = sm.syncDailyBillDataImpl(ctx, req.Period, req.Options)
+		}
 	case "BOTH":
 		err = sm.syncBothGranularityDataImpl(ctx, req.Period, req.Options)
 	default:
@@ -142,13 +150,14 @@ func (sm *syncManager) validateSyncRequest(req *SyncRequest) error {
 	case "MONTHLY":
 		return validator.ValidateBillingCycle(req.Period)
 	case "DAILY":
-		return validator.ValidateBillingDate(req.Period)
-	case "BOTH":
-		// BOTH 粒度的特殊格式处理
-		if !strings.Contains(req.Period, ",") {
-			return NewValidationError("period", req.Period,
-				"BOTH granularity requires period format: 'yesterday:YYYY-MM-DD,last_month:YYYY-MM'")
+		if dateutils.IsValidBillingDate(req.Period) {
+			return nil
 		}
+		return validator.ValidateBillingCycle(req.Period)
+	case "BOTH":
+		// Both granularities are driven off one billing cycle: the monthly pull
+		// takes it as is, the daily one walks the days inside it.
+		return validator.ValidateBillingCycle(req.Period)
 	}
 
 	return nil

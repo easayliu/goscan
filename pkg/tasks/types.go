@@ -70,10 +70,14 @@ type Task struct {
 // sync works in. A caller showing a progress bar can take Done/Total; Period
 // names the one in flight, which is the part people actually read.
 type TaskProgress struct {
-	Period    string    `json:"period,omitempty"`
-	Done      int       `json:"done"`
-	Total     int       `json:"total"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Period string `json:"period,omitempty"`
+	// Granularity names the table that period is going into ("monthly" or
+	// "daily"). A run over both visits every period twice, so without it the
+	// bar looks like it is repeating itself.
+	Granularity string    `json:"granularity,omitempty"`
+	Done        int       `json:"done"`
+	Total       int       `json:"total"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // TaskResult holds the result of a completed task

@@ -108,7 +108,11 @@ func (e *BaseCloudSyncExecutor) ExecuteSync(ctx context.Context, config *SyncCon
 	var result *SyncResult
 	var err error
 
-	if config.SyncMode == "sync-optimal" {
+	// sync-optimal means "pull only what is missing", which is the very thing
+	// force_update switches off. Obeying both at once obeys neither, so an
+	// explicit force wins and the run pulls every period it was given —
+	// otherwise the flag is silently a no-op in that mode.
+	if config.SyncMode == "sync-optimal" && !config.ForceUpdate {
 		result, err = e.executeOptimalSync(ctx, config)
 	} else {
 		result, err = e.executeStandardSync(ctx, config)
@@ -170,18 +174,25 @@ func (e *BaseCloudSyncExecutor) executeOptimalSync(ctx context.Context, config *
 // executeStandardSync executes standard sync mode
 func (e *BaseCloudSyncExecutor) executeStandardSync(ctx context.Context, config *SyncConfig) (*SyncResult, error) {
 	// Determine periods to sync
-	periods := e.determinePeriods(config)
-
-	// Handle force update mode
-	if config.ForceUpdate {
-		periodsToSync, err := e.handleForceUpdate(ctx, periods, config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to handle force update: %w", err)
-		}
-		periods = periodsToSync
+	periods, err := e.determinePeriods(config)
+	if err != nil {
+		return nil, err
 	}
 
-	// If no periods to sync after force update check
+	// force_update means "pull these periods again even though the rows are
+	// already there", so it is the absence of the flag that allows a period to
+	// be skipped, never its presence. Reading it the other way round is what
+	// made the checkbox do the opposite of its label: ticking "已有数据也重新拉取"
+	// used to skip precisely the periods it was meant to refetch, and leaving
+	// it unticked pulled every period whether or not the data was already in.
+	if !config.ForceUpdate {
+		periods, err = e.skipConsistentPeriods(ctx, periods, config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to work out which periods need syncing: %w", err)
+		}
+	}
+
+	// Everything asked for is already in the database
 	if len(periods) == 0 {
 		return &SyncResult{
 			Success:          true,
@@ -200,10 +211,15 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 	var totalRecords, totalInserted int
 	var allErrors []error
 
-	report := func(done int, period string) {
-		if config.Progress != nil {
-			config.Progress(SyncProgress{Period: period, Done: done, Total: len(periods)})
+	report := func(done int, period *PeriodInfo) {
+		if config.Progress == nil {
+			return
 		}
+		p := SyncProgress{Done: done, Total: len(periods)}
+		if period != nil {
+			p.Period, p.Granularity = period.Period, period.Granularity
+		}
+		config.Progress(p)
 	}
 
 	for i, period := range periods {
@@ -215,7 +231,7 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 			zap.Int("total", len(periods)))
 		// Report before the period starts, so the caller sees which one is in
 		// flight rather than only which ones are already done.
-		report(i, period.Period)
+		report(i, period)
 
 		// Create sync options
 		syncOptions := &SyncOptions{
@@ -226,7 +242,7 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 		}
 
 		// Sync this period
-		err := e.provider.SyncPeriodData(ctx, period.Period, syncOptions)
+		err := e.provider.SyncPeriodData(ctx, period.Period, period.Granularity, syncOptions)
 		if err != nil {
 			allErrors = append(allErrors, fmt.Errorf("period %s: %w", period.Period, err))
 			logger.Error("period sync failed",
@@ -243,7 +259,7 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 			zap.String("granularity", period.Granularity))
 	}
 
-	report(len(periods), "")
+	report(len(periods), nil)
 
 	// If all periods failed
 	if len(allErrors) == len(periods) {
@@ -332,34 +348,107 @@ func (e *BaseCloudSyncExecutor) GetSupportedSyncModes() []string {
 	return []string{"standard", "sync-optimal"}
 }
 
-// determinePeriods determines which periods to sync for standard mode
-func (e *BaseCloudSyncExecutor) determinePeriods(config *SyncConfig) []*PeriodInfo {
-	var periods []*PeriodInfo
-
-	// Use specified period or default to current month
-	period := config.BillPeriod
-	if period == "" {
-		period = time.Now().Format("2006-01")
-	}
-
-	// Determine granularities
-	granularities := []string{config.Granularity}
-	if config.Granularity == "both" {
-		granularities = []string{"monthly", "daily"}
-	}
-
-	for _, granularity := range granularities {
-		periods = append(periods, &PeriodInfo{
-			Period:      period,
-			Granularity: granularity,
-		})
-	}
-
-	return periods
+// determinePeriods works out which (period, granularity) pairs a run has to
+// sync, and is the only place that answer is computed — sync-optimal mode reads
+// the same list when it is told which periods to look at.
+//
+// Every period is crossed with every granularity, because for AliCloud the
+// granularity picks the table: "both" over four months is eight pulls, four
+// into the monthly table and four into the daily one. Skipping the cross
+// product is how a run asked for month + day used to write the monthly table
+// twice and leave the daily one empty.
+func (e *BaseCloudSyncExecutor) determinePeriods(config *SyncConfig) ([]*PeriodInfo, error) {
+	return periodsToSync(e.provider, config)
 }
 
-// handleForceUpdate handles force update logic for standard mode
-func (e *BaseCloudSyncExecutor) handleForceUpdate(ctx context.Context, periods []*PeriodInfo, config *SyncConfig) ([]*PeriodInfo, error) {
+// periodsToSync is determinePeriods without the executor, so the consistency
+// checker can answer "which periods did the caller ask for" the same way.
+func periodsToSync(provider CloudProvider, config *SyncConfig) ([]*PeriodInfo, error) {
+	periods, err := resolvePeriods(config)
+	if err != nil {
+		return nil, err
+	}
+
+	var out []*PeriodInfo
+	for _, period := range periods {
+		for _, granularity := range granularitiesFor(provider, period, config.Granularity) {
+			out = append(out, &PeriodInfo{Period: period, Granularity: granularity})
+		}
+	}
+
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no period to sync: %s supports none of the requested granularities",
+			provider.GetProviderName())
+	}
+
+	return out, nil
+}
+
+// hasExplicitPeriods reports whether the caller named the periods rather than
+// leaving the choice to the defaults.
+func hasExplicitPeriods(config *SyncConfig) bool {
+	return len(config.Periods) > 0 || config.StartPeriod != "" ||
+		config.EndPeriod != "" || config.BillPeriod != ""
+}
+
+// resolvePeriods picks the period list out of the config: an explicit list
+// first, then a start..end range, then a single period, and failing all of
+// those the current month.
+func resolvePeriods(config *SyncConfig) ([]string, error) {
+	if len(config.Periods) > 0 {
+		return config.Periods, nil
+	}
+
+	periods, err := dateutils.ExpandPeriodRange(config.StartPeriod, config.EndPeriod)
+	if err != nil {
+		return nil, fmt.Errorf("invalid period range: %w", err)
+	}
+	if len(periods) > 0 {
+		return periods, nil
+	}
+
+	if config.BillPeriod != "" {
+		return []string{config.BillPeriod}, nil
+	}
+	return []string{time.Now().Format(dateutils.LayoutYearMonth)}, nil
+}
+
+// granularitiesFor says which tables one period goes into.
+//
+// A period written as YYYY-MM-DD is a single day, so it can only be daily —
+// there is no monthly bill for one day, and honouring "both" there would fail
+// half the pulls. Granularities the provider has no table for are dropped:
+// VolcEngine keeps one table and answers nil for "daily", so asking it for
+// "both" syncs its one table once instead of twice.
+func granularitiesFor(provider CloudProvider, period, granularity string) []string {
+	var wanted []string
+	switch {
+	case dateutils.IsValidBillingDate(period):
+		wanted = []string{dateutils.GranularityDaily}
+	case granularity == dateutils.GranularityBoth:
+		wanted = []string{dateutils.GranularityMonthly, dateutils.GranularityDaily}
+	case granularity == "":
+		wanted = []string{dateutils.GranularityMonthly}
+	default:
+		wanted = []string{granularity}
+	}
+
+	supported := make([]string, 0, len(wanted))
+	for _, g := range wanted {
+		if provider.GetTableConfig(g) != nil {
+			supported = append(supported, g)
+		}
+	}
+	return supported
+}
+
+// skipConsistentPeriods drops the periods whose row count already matches what
+// the API reports, and cleans the ones that do not match so the pull replaces
+// them instead of merging into them.
+//
+// A period that cannot be checked is kept: re-pulling costs API quota, missing
+// a month costs the numbers on the page.
+func (e *BaseCloudSyncExecutor) skipConsistentPeriods(ctx context.Context, periods []*PeriodInfo, config *SyncConfig) ([]*PeriodInfo, error) {
 	var periodsNeedSync []*PeriodInfo
 
 	for _, period := range periods {

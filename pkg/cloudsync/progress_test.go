@@ -7,17 +7,20 @@ import (
 )
 
 // stubProvider is a CloudProvider that does nothing but remember which periods
-// it was asked to sync, and fail the ones it is told to.
+// it was asked to sync, and fail the ones it is told to. granularities, when
+// set, is the list it claims a table for — that is how a provider says it has
+// only one table, the way VolcEngine does.
 type stubProvider struct {
-	synced []string
-	failOn map[string]bool
+	synced        []string
+	syncedPairs   []string
+	failOn        map[string]bool
+	granularities []string
 }
 
 func (p *stubProvider) GetProviderName() string                          { return "stub" }
 func (p *stubProvider) ValidateCredentials(context.Context) error        { return nil }
 func (p *stubProvider) Close() error                                     { return nil }
 func (p *stubProvider) GetPeriodField() string                           { return "period" }
-func (p *stubProvider) GetTableConfig(string) *TableConfig               { return &TableConfig{} }
 func (p *stubProvider) CreateTables(context.Context, *TableConfig) error { return nil }
 
 func (p *stubProvider) GetAPIDataCount(context.Context, string, string) (int64, error) {
@@ -28,8 +31,21 @@ func (p *stubProvider) FetchBillData(context.Context, *FetchRequest) (*FetchResu
 	return &FetchResult{}, nil
 }
 
-func (p *stubProvider) SyncPeriodData(_ context.Context, period string, _ *SyncOptions) error {
+func (p *stubProvider) GetTableConfig(granularity string) *TableConfig {
+	if p.granularities == nil {
+		return &TableConfig{}
+	}
+	for _, g := range p.granularities {
+		if g == granularity {
+			return &TableConfig{}
+		}
+	}
+	return nil
+}
+
+func (p *stubProvider) SyncPeriodData(_ context.Context, period, granularity string, _ *SyncOptions) error {
 	p.synced = append(p.synced, period)
+	p.syncedPairs = append(p.syncedPairs, period+" "+granularity)
 	if p.failOn[period] {
 		return fmt.Errorf("period %s failed", period)
 	}
@@ -58,9 +74,9 @@ func TestSyncPeriodsReportsProgress(t *testing.T) {
 	}
 
 	want := []SyncProgress{
-		{Period: "2026-07", Done: 0, Total: 3},
-		{Period: "2026-08", Done: 1, Total: 3},
-		{Period: "2026-09", Done: 2, Total: 3},
+		{Period: "2026-07", Granularity: "monthly", Done: 0, Total: 3},
+		{Period: "2026-08", Granularity: "monthly", Done: 1, Total: 3},
+		{Period: "2026-09", Granularity: "monthly", Done: 2, Total: 3},
 		{Period: "", Done: 3, Total: 3},
 	}
 	if len(seen) != len(want) {

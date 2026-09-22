@@ -48,6 +48,8 @@ func (e *AliCloudSyncExecutor) convertToCloudSyncConfig(config *SyncConfig) *clo
 	input := &configutils.SyncConfigInput{
 		SyncMode:       config.SyncMode,
 		BillPeriod:     config.BillPeriod,
+		StartPeriod:    config.StartPeriod,
+		EndPeriod:      config.EndPeriod,
 		Granularity:    config.Granularity,
 		ForceUpdate:    config.ForceUpdate,
 		UseDistributed: config.UseDistributed,
