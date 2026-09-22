@@ -17,6 +17,12 @@ type ClickHouseConfig struct {
 	Debug    bool     `json:"debug" yaml:"debug"`
 	Cluster  string   `json:"cluster" yaml:"cluster"`
 	Protocol string   `json:"protocol" yaml:"protocol"` // native, http
+
+	// Replicated makes `goscan --ddl` build the per-node table with its
+	// Replicated* engine. Only meaningful together with Cluster, and it needs
+	// ClickHouse Keeper / ZooKeeper: a cluster of plain unreplicated shards
+	// must leave it false.
+	Replicated bool `json:"replicated" yaml:"replicated"`
 }
 
 func NewClickHouseConfig() *ClickHouseConfig {
@@ -41,6 +47,8 @@ func NewClickHouseConfig() *ClickHouseConfig {
 		Debug:    getEnvBool("CLICKHOUSE_DEBUG", false),
 		Cluster:  getEnv("CLICKHOUSE_CLUSTER", ""),
 		Protocol: protocol,
+
+		Replicated: getEnvBool("CLICKHOUSE_REPLICATED", false),
 	}
 }
 

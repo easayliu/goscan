@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"goscan/pkg/config"
 	"goscan/pkg/logger"
@@ -59,7 +60,6 @@ type ScheduledJob struct {
 type JobConfig struct {
 	SyncMode       string `json:"sync_mode"`
 	UseDistributed bool   `json:"use_distributed"`
-	CreateTable    bool   `json:"create_table"`
 	ForceUpdate    bool   `json:"force_update"`
 	Granularity    string `json:"granularity,omitempty"` // For AliCloud
 }
@@ -250,6 +250,11 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 		logger.Info("Loading jobs from configuration file", zap.Int("count", len(ts.config.Config.Scheduler.Jobs)))
 
 		for _, configJob := range ts.config.Config.Scheduler.Jobs {
+			if configJob.Config.CreateTable {
+				logger.Warn("job sets create_table, which no longer does anything: tables are created by the DDL Job, see `goscan --ddl`",
+					zap.String("job_name", configJob.Name))
+			}
+
 			// Convert ScheduledJob from configuration file to scheduler's ScheduledJob
 			job := &ScheduledJob{
 				Name:     configJob.Name,
@@ -258,7 +263,6 @@ func (ts *TaskScheduler) loadConfiguredJobs() error {
 				Config: JobConfig{
 					SyncMode:       configJob.Config.SyncMode,
 					UseDistributed: configJob.Config.UseDistributed,
-					CreateTable:    configJob.Config.CreateTable,
 					ForceUpdate:    configJob.Config.ForceUpdate,
 					Granularity:    configJob.Config.Granularity,
 				},
@@ -299,7 +303,6 @@ func (ts *TaskScheduler) getDefaultJobs() []*ScheduledJob {
 			Provider: "volcengine",
 			Config: JobConfig{
 				SyncMode:    "sync-optimal",
-				CreateTable: true,
 				ForceUpdate: true,
 			},
 		})
@@ -313,7 +316,6 @@ func (ts *TaskScheduler) getDefaultJobs() []*ScheduledJob {
 			Provider: "alicloud",
 			Config: JobConfig{
 				SyncMode:    "sync-optimal",
-				CreateTable: true,
 				ForceUpdate: true,
 				Granularity: "both",
 			},
@@ -366,15 +368,26 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 				Config: tasks.TaskConfig{
 					SyncMode:       job.Config.SyncMode,
 					UseDistributed: job.Config.UseDistributed,
-					CreateTable:    job.Config.CreateTable,
 					ForceUpdate:    job.Config.ForceUpdate,
 					Granularity:    job.Config.Granularity,
 				},
 			}
 		}
 
-		// Execute task
-		result, err := ts.taskMgr.ExecuteTask(ts.ctx, taskReq)
+		// Wait for the task instead of firing and forgetting: ExecuteTask
+		// returns as soon as the task is accepted, so the job status and the
+		// line logged below would describe a sync that has not run yet.
+		result, err := ts.taskMgr.ExecuteTaskSync(ts.ctx, taskReq)
+		if errors.Is(err, tasks.ErrTaskAlreadyRunning) {
+			// The previous run of this provider has not finished — a manual
+			// sync from the UI, or a job that takes longer than its interval.
+			// Skipping is right: two runs would pull the same periods twice.
+			logger.Warn("Skipping scheduled job, a run for this provider is still in flight",
+				zap.String("job_name", job.Name),
+				zap.Error(err))
+			ts.updateJobStatus(job, JobStatusScheduled)
+			return
+		}
 		if err != nil {
 			logger.Error("Scheduled job failed", zap.String("job_name", job.Name), zap.Error(err))
 			ts.updateJobStatus(job, JobStatusFailed)

@@ -84,11 +84,20 @@ jobs:
         go install github.com/swaggo/swag/cmd/swag@latest
         swag init -g cmd/server/main.go --output docs
     
+    # 和 Dockerfile 一致：CGO_ENABLED=0 的静态二进制
     - name: Build binary (Linux amd64)
       env:
         GOOS: linux
         GOARCH: amd64
-        CGO_ENABLED: 1
+        CGO_ENABLED: 0
       run: |
-        go build -ldflags "-s -w" -o goscan cmd/server/main.go
+        go build -ldflags "-s -w" -o goscan ./cmd/server
         echo "✅ Build successful for linux/amd64"
+
+    # 部署用的两条命令都不连库，CI 里跑一遍就能挡住「示例配置校验不过」
+    # 和「建表语句渲染不出来」这两类问题
+    - name: Check sample config and DDL
+      run: |
+        ./goscan --check configs/config.daemon.yaml
+        ./goscan --ddl configs/config.daemon.yaml | grep -q "CREATE TABLE IF NOT EXISTS"
+        CLICKHOUSE_CLUSTER=bj_ck ./goscan --ddl configs/config.daemon.yaml | grep -q "ENGINE = Distributed"

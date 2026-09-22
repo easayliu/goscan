@@ -1,0 +1,215 @@
+// Package ddl holds the canonical ClickHouse schema of every bill table goscan
+// writes, plus the rendering of those definitions into SQL.
+//
+// The definitions live here and nowhere else: `goscan --ddl` prints them for the
+// DDL Job to apply, and the provider services build their CREATE TABLE clause
+// from the same structs. A column added in one place therefore cannot drift from
+// the table the sync actually writes into.
+package ddl
+
+import (
+	"fmt"
+	"strings"
+)
+
+// Column is one ClickHouse column of a bill table.
+type Column struct {
+	Name    string
+	Type    string
+	Default string // DEFAULT expression, empty when the column has none
+	Section string // group heading emitted above this column, for readability
+	Comment string // trailing comment
+}
+
+// definition renders the column as it appears inside CREATE TABLE.
+func (c Column) definition() string {
+	def := fmt.Sprintf("%s %s", c.Name, c.Type)
+	if c.Default != "" {
+		def += " DEFAULT " + c.Default
+	}
+	return def
+}
+
+// Table is the canonical definition of one bill table.
+type Table struct {
+	// Name is the base table name. In cluster mode the local table gets a
+	// _local suffix and this name belongs to the Distributed table on top of it.
+	Name        string
+	Comment     string // what the table holds, emitted above CREATE TABLE
+	Columns     []Column
+	Engine      string // engine of the table that stores the data
+	PartitionBy string
+	OrderBy     string
+	Settings    string
+}
+
+// Options describes the ClickHouse the DDL is rendered for.
+type Options struct {
+	Database string
+	// Cluster is the ClickHouse cluster name (the one in system.clusters, not
+	// the k8s cluster). Empty means a single node: one plain table, no
+	// ON CLUSTER, no Distributed table.
+	Cluster string
+	// Replicated turns the local table into its Replicated* engine. It needs
+	// ClickHouse Keeper / ZooKeeper; clusters made of unreplicated shards must
+	// set it to false.
+	Replicated bool
+}
+
+// LocalTableName is the table that actually stores the rows. It only differs
+// from Table.Name in cluster mode, where Name belongs to the Distributed table.
+func (t Table) LocalTableName(o Options) string {
+	if o.Cluster == "" {
+		return t.Name
+	}
+	return t.Name + "_local"
+}
+
+// SchemaClause renders everything that follows the table name in a CREATE TABLE
+// statement: the column list, the engine and the layout. This is the form the
+// ClickHouse client's CreateTable helpers take.
+func (t Table) SchemaClause() string {
+	var b strings.Builder
+	b.WriteString("(\n")
+	for i, col := range t.Columns {
+		if col.Section != "" {
+			if i > 0 {
+				b.WriteString("\n")
+			}
+			fmt.Fprintf(&b, "\t-- %s\n", col.Section)
+		}
+		fmt.Fprintf(&b, "\t%s", col.definition())
+		if i < len(t.Columns)-1 {
+			b.WriteString(",")
+		}
+		if col.Comment != "" {
+			fmt.Fprintf(&b, " -- %s", col.Comment)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString(")\n")
+	fmt.Fprintf(&b, "ENGINE = %s\n", t.Engine)
+	fmt.Fprintf(&b, "PARTITION BY %s\n", t.PartitionBy)
+	fmt.Fprintf(&b, "ORDER BY %s", t.OrderBy)
+	if t.Settings != "" {
+		fmt.Fprintf(&b, "\nSETTINGS %s", t.Settings)
+	}
+	return b.String()
+}
+
+// engineFor returns the engine of the data-holding table. On a replicated
+// cluster the plain MergeTree family engine becomes its Replicated* twin;
+// {shard} and {replica} are ClickHouse's own macros, expanded per node from
+// each server's <macros> config, not something to substitute here.
+func (t Table) engineFor(o Options) string {
+	if o.Cluster == "" || !o.Replicated {
+		return t.Engine
+	}
+	local := t.LocalTableName(o)
+	name, args, _ := strings.Cut(t.Engine, "(")
+	name = strings.TrimSpace(name)
+	path := fmt.Sprintf("'/clickhouse/tables/{shard}/%s/%s', '{replica}'", o.Database, local)
+	// ReplacingMergeTree() and ReplacingMergeTree(version) both keep their
+	// arguments, they just move behind the keeper path.
+	if rest := strings.TrimSpace(strings.TrimSuffix(args, ")")); rest != "" {
+		path += ", " + rest
+	}
+	return fmt.Sprintf("Replicated%s(%s)", name, path)
+}
+
+// CreateSQL renders the CREATE TABLE statements: one on a single node, two on a
+// cluster (the local table that stores the rows, then the Distributed table the
+// sync writes into and queries read from).
+func (t Table) CreateSQL(o Options) string {
+	local := t.LocalTableName(o)
+	body := t.SchemaClause()
+	// The engine and the layout come from SchemaClause; on a cluster only the
+	// engine line differs, so swap that one line out.
+	body = strings.Replace(body,
+		fmt.Sprintf("ENGINE = %s\n", t.Engine),
+		fmt.Sprintf("ENGINE = %s\n", t.engineFor(o)), 1)
+
+	if o.Cluster == "" {
+		return fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s`.`%s`\n%s;", o.Database, t.Name, body)
+	}
+
+	onCluster := fmt.Sprintf(" ON CLUSTER `%s`", o.Cluster)
+	return fmt.Sprintf(
+		"CREATE TABLE IF NOT EXISTS `%s`.`%s`%s\n%s;\n\n"+
+			"CREATE TABLE IF NOT EXISTS `%s`.`%s`%s\nAS `%s`.`%s`\nENGINE = Distributed(`%s`, `%s`, `%s`, rand());",
+		o.Database, local, onCluster, body,
+		o.Database, t.Name, onCluster, o.Database, local,
+		o.Cluster, o.Database, local)
+}
+
+// AlterSQL renders the statements that bring an existing table up to the
+// definition above: every column is added IF NOT EXISTS, in place, so running
+// the DDL again after an upgrade backfills what a table is missing and does
+// nothing at all when it is already current.
+func (t Table) AlterSQL(o Options) string {
+	alter := func(target, onCluster string) string {
+		actions := make([]string, 0, len(t.Columns))
+		previous := ""
+		for _, col := range t.Columns {
+			// Keep new columns in their defined position rather than letting
+			// them pile up at the end. AFTER only rewrites metadata, and the
+			// column it names either already exists or was added just above.
+			where := "FIRST"
+			if previous != "" {
+				where = fmt.Sprintf("AFTER `%s`", previous)
+			}
+			actions = append(actions, fmt.Sprintf("ADD COLUMN IF NOT EXISTS `%s` %s %s",
+				col.Name, columnTypeWithDefault(col), where))
+			previous = col.Name
+		}
+		return fmt.Sprintf("ALTER TABLE `%s`.`%s`%s\n    %s;",
+			o.Database, target, onCluster, strings.Join(actions, ",\n    "))
+	}
+
+	if o.Cluster == "" {
+		return alter(t.Name, "")
+	}
+
+	// The local table first: the other way round there is a moment where the
+	// Distributed table has a column its local tables do not, and an insert
+	// naming it fails.
+	onCluster := fmt.Sprintf(" ON CLUSTER `%s`", o.Cluster)
+	return alter(t.LocalTableName(o), onCluster) + "\n\n" + alter(t.Name, onCluster)
+}
+
+func columnTypeWithDefault(c Column) string {
+	if c.Default != "" {
+		return fmt.Sprintf("%s DEFAULT %s", c.Type, c.Default)
+	}
+	return c.Type
+}
+
+// Render returns the complete DDL script for the given tables: the CREATE
+// statements followed by the idempotent ALTERs. It never touches ClickHouse —
+// the output is meant to be piped into clickhouse-client.
+//
+// CREATE DATABASE is deliberately not part of it: creating the database needs
+// ON CLUSTER too, and whether to create it at all is the operator's call.
+func Render(tables []Table, o Options) string {
+	var b strings.Builder
+	b.WriteString("-- Generated by `goscan --ddl`. Safe to apply repeatedly:\n")
+	b.WriteString("-- every statement is IF NOT EXISTS, so re-running it after an upgrade\n")
+	b.WriteString("-- only backfills the columns an existing table is missing.\n")
+	if o.Cluster != "" {
+		fmt.Fprintf(&b, "-- Cluster mode (`%s`): rows live in the _local tables, the plain name\n", o.Cluster)
+		b.WriteString("-- is the Distributed table the sync writes into.\n")
+	}
+	fmt.Fprintf(&b, "-- Database `%s` must exist already.\n", o.Database)
+
+	for _, t := range tables {
+		b.WriteString("\n")
+		if t.Comment != "" {
+			fmt.Fprintf(&b, "\n-- %s\n", t.Comment)
+		}
+		b.WriteString(t.CreateSQL(o))
+		b.WriteString("\n\n")
+		b.WriteString(t.AlterSQL(o))
+		b.WriteString("\n")
+	}
+	return b.String()
+}

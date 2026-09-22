@@ -82,7 +82,9 @@ func (tm *TaskManagerImpl) ExecuteTask(ctx context.Context, req *TaskRequest) (*
 	task := tm.createTask(req)
 
 	// Add to task list
-	tm.addTask(task)
+	if err := tm.addTask(task); err != nil {
+		return nil, err
+	}
 
 	// Execute task asynchronously
 	go tm.executeTaskInternal(ctx, task)
@@ -96,6 +98,34 @@ func (tm *TaskManagerImpl) ExecuteTask(ctx context.Context, req *TaskRequest) (*
 		Success:   true,
 		Message:   "Task started successfully",
 	}, nil
+}
+
+// ExecuteTaskSync runs a task on the calling goroutine and returns only once it
+// has finished. ExecuteTask answers the moment the task is accepted, which is
+// what the HTTP API wants (it polls for the result afterwards) but not what a
+// caller that has to report the outcome wants: a cron job logging "completed"
+// before the sync has fetched a single row, or a one-shot `goscan --once` whose
+// exit code has to say whether the data landed.
+func (tm *TaskManagerImpl) ExecuteTaskSync(ctx context.Context, req *TaskRequest) (*TaskResult, error) {
+	if req.ID == "" {
+		req.ID = uuid.New().String()
+	}
+
+	if err := tm.checkTaskLimit(); err != nil {
+		return nil, err
+	}
+
+	task := tm.createTask(req)
+	if err := tm.addTask(task); err != nil {
+		return nil, err
+	}
+
+	tm.executeTaskInternal(ctx, task)
+
+	if task.Status == TaskStatusFailed {
+		return task.Result, fmt.Errorf("task %s failed: %s", task.ID, task.Error)
+	}
+	return task.Result, nil
 }
 
 // GetTask retrieves a specific task
@@ -227,11 +257,31 @@ func (tm *TaskManagerImpl) createTask(req *TaskRequest) *Task {
 	}
 }
 
-// addTask adds task to list
-func (tm *TaskManagerImpl) addTask(task *Task) {
+// addTask registers the task, refusing one whose provider is already busy.
+//
+// Two syncs of the same cloud running at once pull and write the same periods
+// twice: harmless in the end (the tables are ReplacingMergeTree) but a waste of
+// API quota, and the pair of them report progress that is impossible to read.
+// It happens easily enough — someone triggers a sync from the UI while the cron
+// job is still running, or clicks the button twice. The check lives here, under
+// the same lock as the insert, so the manual path and the scheduled one cannot
+// slip past each other.
+func (tm *TaskManagerImpl) addTask(task *Task) error {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
+
+	for _, existing := range tm.tasks {
+		if existing.Provider != task.Provider || existing.Type != task.Type {
+			continue
+		}
+		if existing.Status == TaskStatusPending || existing.Status == TaskStatusRunning {
+			return fmt.Errorf("%w: %s %s task %s", ErrTaskAlreadyRunning,
+				task.Provider, task.Type, existing.ID)
+		}
+	}
+
 	tm.tasks[task.ID] = task
+	return nil
 }
 
 // executeTaskInternal internal task execution
@@ -287,12 +337,13 @@ func (tm *TaskManagerImpl) executeSyncTask(ctx context.Context, task *Task) (*Ta
 		Limit:          task.Config.Limit,
 	}
 
-	// If table creation is needed, create tables first
+	// Tables are not created here on purpose: schema changes belong to
+	// `goscan --ddl` and the DDL Job that applies it, so a sync run needs no
+	// DDL privileges and can never alter a production table by accident.
 	if task.Config.CreateTable {
-		tableConfig := tm.createTableConfig(task)
-		if err := executor.CreateTables(ctx, tableConfig); err != nil {
-			return nil, fmt.Errorf("failed to create tables: %w", err)
-		}
+		logger.Warn("create_table is ignored: apply `goscan --ddl` with the DDL Job instead",
+			zap.String("task_id", task.ID),
+			zap.String("provider", task.Provider))
 	}
 
 	// Execute sync
@@ -317,32 +368,6 @@ func (tm *TaskManagerImpl) executeNotificationTask(ctx context.Context, task *Ta
 	}
 
 	return result, nil
-}
-
-// createTableConfig creates table configuration
-func (tm *TaskManagerImpl) createTableConfig(task *Task) *TableConfig {
-	useDistributed := task.Config.UseDistributed || tm.config.ClickHouse.Cluster != ""
-
-	var localTableName, distributedTableName string
-	switch task.Provider {
-	case "volcengine":
-		localTableName = "volcengine_bill_details_local"
-		distributedTableName = "volcengine_bill_details_distributed"
-	case "alicloud":
-		// Alibaba Cloud table names are managed by billService, use generic names here
-		localTableName = "alicloud_bill_details_local"
-		distributedTableName = "alicloud_bill_details_distributed"
-	default:
-		localTableName = fmt.Sprintf("%s_bill_details_local", task.Provider)
-		distributedTableName = fmt.Sprintf("%s_bill_details_distributed", task.Provider)
-	}
-
-	return &TableConfig{
-		UseDistributed:       useDistributed,
-		LocalTableName:       localTableName,
-		DistributedTableName: distributedTableName,
-		ClusterName:          tm.config.ClickHouse.Cluster,
-	}
 }
 
 // convertSyncResult converts sync result

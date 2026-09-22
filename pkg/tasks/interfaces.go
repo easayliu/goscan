@@ -76,8 +76,11 @@ type DataValidator interface {
 
 // TaskManager 定义任务管理器接口
 type TaskManager interface {
-	// ExecuteTask 执行任务
+	// ExecuteTask 异步执行任务，立即返回受理结果
 	ExecuteTask(ctx context.Context, req *TaskRequest) (*TaskResult, error)
+
+	// ExecuteTaskSync 同步执行任务，任务跑完才返回，结果反映真实成败
+	ExecuteTaskSync(ctx context.Context, req *TaskRequest) (*TaskResult, error)
 
 	// GetTask 获取任务信息
 	GetTask(taskID string) (*Task, error)

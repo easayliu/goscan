@@ -289,6 +289,10 @@ jobs:
         context: .
         platforms: linux/amd64,linux/arm64
         push: true
+        # 不传的话镜像里 `goscan --version` 会一直报 dev，
+        # 线上按版本号找代码就会找错
+        build-args: |
+          VERSION=${{ github.ref_name }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha

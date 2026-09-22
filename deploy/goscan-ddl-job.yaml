@@ -1,0 +1,89 @@
+# 建库建表。Deployment 之前跑一次；之后每次改了配置里的表名 / cluster、或者升级到
+# 带新列的版本（云厂商账单加字段的时候）再重跑一次，DDL 里带着幂等的 ALTER 段，
+# 老表缺的列会被补齐，多跑无副作用。
+#
+# 为什么要单独一个 Job：goscan 自己从不执行 DDL，`--ddl` 只把建表语句打到 stdout
+# （不连库，所以哪儿都能跑）。同步进程因此不需要建表权限，也不会在生产库里悄悄改
+# 表结构 —— 账单表一改就是几十列，误改比没建更麻烦。
+#
+# 两段式：initContainer 用 goscan 镜像渲染 DDL 到 emptyDir，主容器用 ClickHouse
+# 镜像执行 —— goscan 镜像里既没有 clickhouse-client 也没有 curl。
+#
+# 配置来源是 Deployment 同一个 ConfigMap，所以建出来的表一定和同步写入的那张一致。
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: goscan-ddl
+  namespace: logging
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: render-ddl
+          # 和 Deployment 用同一个 tag，否则可能渲染出跟同步端不一致的列
+          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              goscan --ddl /etc/goscan/config.yaml > /shared/ddl.sql
+              echo "--- 即将执行 ---"
+              cat /shared/ddl.sql
+          volumeMounts:
+            - name: config
+              mountPath: /etc/goscan
+              readOnly: true
+            - name: shared
+              mountPath: /shared
+      containers:
+        - name: apply-ddl
+          # 建议换成你们集群自己的 CK 版本镜像
+          image: clickhouse/clickhouse-server:24.8
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ch() {
+                clickhouse-client --host "$CH_HOST" --user "$CH_USER" \
+                  --password "$CH_PASSWORD" "$@"
+              }
+              # --ddl 只建表不建库，这句必须留着。集群模式下建库也要 ON CLUSTER，
+              # 否则只在被连上的那个节点建出来，其他节点的本地表会因为库不存在而失败。
+              if [ -n "$CH_CLUSTER" ]; then
+                ch --query "CREATE DATABASE IF NOT EXISTS \`$CH_DATABASE\` ON CLUSTER \`$CH_CLUSTER\`"
+              else
+                ch --query "CREATE DATABASE IF NOT EXISTS \`$CH_DATABASE\`"
+              fi
+              # 一张表在集群模式下是本地表 + Distributed 表两条语句，再加上 ALTER，
+              # 所以用 --queries-file 而不是 --query
+              ch --queries-file /shared/ddl.sql
+              echo "建表完成"
+          env:
+            # 下面几项要和 ConfigMap 里 clickhouse 段的 hosts / database / cluster /
+            # username / password 一致
+            - name: CH_HOST
+              value: clickhouse-log.logck.svc.cluster.local
+            - name: CH_DATABASE
+              value: logs
+            # ConfigMap 里配了 cluster 的话这里填同一个集群名，留空 = 单机
+            - name: CH_CLUSTER
+              value: ""
+            - name: CH_USER
+              value: default
+            - name: CH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: goscan-credentials
+                  key: clickhouse-password
+          volumeMounts:
+            - name: shared
+              mountPath: /shared
+      volumes:
+        - name: config
+          configMap:
+            name: goscan-config
+        - name: shared
+          emptyDir: {}

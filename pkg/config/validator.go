@@ -61,37 +61,57 @@ func (c *Config) validateCloudProvidersConfig() error {
 
 	cp := c.CloudProviders
 
-	if cp.VolcEngine != nil {
+	// 一个凭据全空的 provider 块就是「这朵云没接」，跳过不校验：示例配置和
+	// 部署用的 ConfigMap 都会把五朵云的块都列出来，只填其中一两朵。
+	// 填了一半的（比如只有 access_key 没有 secret_key）照样报错。
+
+	if credentialsPresent(cp.VolcEngine != nil, func() bool {
+		return cp.VolcEngine.AccessKey != "" || cp.VolcEngine.SecretKey != ""
+	}) {
 		if err := validateVolcEngineConfig(cp.VolcEngine); err != nil {
 			return fmt.Errorf("%w: %v", ErrVolcEngineConfig, err)
 		}
 	}
 
-	if cp.AliCloud != nil {
+	if credentialsPresent(cp.AliCloud != nil, func() bool {
+		return cp.AliCloud.AccessKeyID != "" || cp.AliCloud.AccessKeySecret != ""
+	}) {
 		if err := validateAliCloudConfig(cp.AliCloud); err != nil {
 			return fmt.Errorf("%w: %v", ErrAliCloudConfig, err)
 		}
 	}
 
-	if cp.AWS != nil {
+	if credentialsPresent(cp.AWS != nil, func() bool {
+		return cp.AWS.AccessKey != "" || cp.AWS.SecretKey != ""
+	}) {
 		if err := validateAWSConfig(cp.AWS); err != nil {
 			return fmt.Errorf("%w: %v", ErrAWSConfig, err)
 		}
 	}
 
-	if cp.Azure != nil {
+	if credentialsPresent(cp.Azure != nil, func() bool {
+		return cp.Azure.ClientID != "" || cp.Azure.ClientSecret != "" ||
+			cp.Azure.TenantID != "" || cp.Azure.SubscriptionID != ""
+	}) {
 		if err := validateAzureConfig(cp.Azure); err != nil {
 			return fmt.Errorf("%w: %v", ErrAzureConfig, err)
 		}
 	}
 
-	if cp.GCP != nil {
+	if credentialsPresent(cp.GCP != nil, func() bool {
+		return cp.GCP.ProjectID != "" || cp.GCP.ServiceAccountKey != ""
+	}) {
 		if err := validateGCPConfig(cp.GCP); err != nil {
 			return fmt.Errorf("%w: %v", ErrGCPConfig, err)
 		}
 	}
 
 	return nil
+}
+
+// credentialsPresent 判断一个 provider 块是否需要校验：块存在，且至少填了一项凭据。
+func credentialsPresent(present bool, anyCredential func() bool) bool {
+	return present && anyCredential()
 }
 
 // validateVolcEngineConfig 验证火山引擎配置
@@ -273,9 +293,10 @@ func validateScheduledJob(job *ScheduledJob) error {
 		return fmt.Errorf("%w: %s", ErrInvalidCron, job.Cron)
 	}
 
-	// 验证同步模式
+	// 验证同步模式。执行器认的是 standard / sync-optimal，
+	// cost_report 不是同步模式，是通知任务借这个字段传的标记。
 	if job.Config.SyncMode != "" {
-		validSyncModes := []string{"all_periods", "current_period", "range"}
+		validSyncModes := []string{"standard", "sync-optimal", "cost_report"}
 		if !isValidValue(job.Config.SyncMode, validSyncModes) {
 			return fmt.Errorf("%w: sync_mode必须是%v之一", ErrInvalidValue, validSyncModes)
 		}

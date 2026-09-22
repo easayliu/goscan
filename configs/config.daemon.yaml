@@ -1,78 +1,90 @@
-
-# 本文件展示了如何配置 goscan daemon 服务
+# goscan 配置样例。K8s 上的那份在 deploy/goscan-deployment.yaml 的 ConfigMap 里，
+# 结构完全一样。
+#
+#   goscan --check configs/config.daemon.yaml   # 只校验，不连库
+#   goscan --ddl   configs/config.daemon.yaml   # 打印建表语句，不连库
+#   goscan         configs/config.daemon.yaml   # 启动（内置 cron + HTTP API）
+#
+# 每一项都能用环境变量覆盖（CLICKHOUSE_* / VOLCENGINE_* / ALICLOUD_* / WECHAT_*），
+# 所以密钥不用写进这个文件，容器里由 Secret 注入即可。
 
 clickhouse:
   hosts:
     - localhost
-  port: 9000  # Native协议端口，HTTP协议使用8123
-  database: default
+  port: 9000 # native 协议端口；protocol 改成 http 时用 8123
+  database: default # 和 log / trace / metric 同库时填 logs
   username: default
   password: ""
   debug: false
-  cluster: ""  # 集群名称，用于分布式表
-  protocol: "native"  # 协议类型：native 或 http
+  protocol: "native" # native 或 http
+  # ClickHouse 集群名（system.clusters 里的那个，不是 k8s 集群）。填了之后
+  # `--ddl` 建的是「本地表 + Distributed 表」两张，写入和查询都走 Distributed 表。
+  cluster: ""
+  # 集群里的本地表用 Replicated* 引擎，需要 ClickHouse Keeper / ZooKeeper。
+  # 集群是一堆无副本分片时保持 false。
+  replicated: false
 
 server:
   port: 8080
   address: "0.0.0.0"
 
+# 内置 cron 调度。K8s 上也是这一套：一个常驻 Deployment 自己按点跑，
+# 不用 CronJob。改了这里 Pod 重启后生效。
 scheduler:
   enabled: true
   jobs:
-    # 火山云每日同步任务
+    # 火山云每日同步
     - name: "volcengine_daily_sync"
       provider: "volcengine"
-      cron: "0 2 * * *"  # 每天凌晨2点执行
+      cron: "0 2 * * *"
       config:
-        sync_mode: "sync-optimal"
+        sync_mode: "sync-optimal" # standard | sync-optimal
         use_distributed: false
-        create_table: true
-        clean_before: true
+        force_update: true
 
-    # 阿里云每日同步任务
+    # 阿里云每日同步
     - name: "alicloud_daily_sync"
       provider: "alicloud"
-      cron: "0 3 * * *"  # 每天凌晨3点执行
+      cron: "0 3 * * *"
       config:
         sync_mode: "sync-optimal"
         use_distributed: false
-        create_table: true
-        clean_before: true
-        granularity: "both"
+        force_update: true
+        granularity: "both" # monthly | daily | both
 
-    # 企业微信费用报告通知任务
+    # 企业微信费用日报
     - name: "daily_cost_report_notification"
       provider: "notification"
-      cron: "30 8 * * *"  # 每天早上8点30分执行
+      cron: "30 8 * * *"
       config:
         sync_mode: "cost_report"
 
 runtime:
   max_concurrent_tasks: 3
-  task_timeout: 3600  # 任务超时时间（秒）
-  graceful_shutdown_timeout: 30  # 优雅关闭超时时间（秒）
+  task_timeout: 3600 # 单个任务超时（秒）
+  graceful_shutdown_timeout: 30 # 优雅关闭超时（秒）
 
-# 多云服务商配置
+# 多云服务商配置。凭据全空的块视为「这朵云没接」，--check 会跳过它；
+# 只填一半（有 access_key 没有 secret_key）才会报错。
 cloud_providers:
-  # 火山云配置
   volcengine:
-    access_key: ""    # 火山云访问密钥 ID
-    secret_key: ""    # 火山云访问密钥
+    access_key: "" # 建议走 VOLCENGINE_ACCESS_KEY 环境变量
+    secret_key: "" # 建议走 VOLCENGINE_SECRET_KEY 环境变量
     region: "cn-north-1"
     host: "billing.volcengineapi.com"
     timeout: 30
     batch_size: 50
     max_retries: 5
     retry_delay: 3
+    bill_table: "volcengine_bill_details"
     default_sync_mode: "all_periods"
     max_historical_months: 12
     auto_detect_periods: true
     skip_empty_periods: true
 
-  # 阿里云配置
   alicloud:
-    access_key_id: ""     # 阿里云访问密钥 ID
-    access_key_secret: "" # 阿里云访问密钥
+    access_key_id: "" # 建议走 ALICLOUD_ACCESS_KEY_ID 环境变量
+    access_key_secret: "" # 建议走 ALICLOUD_ACCESS_KEY_SECRET 环境变量
     region: "cn-hangzhou"
     endpoint: ""
     timeout: 30
@@ -89,14 +101,13 @@ cloud_providers:
     auto_detect_periods: true
     skip_empty_periods: true
 
-  # AWS 配置（即将支持）
+  # 以下三朵云还没接，留着占位
   aws:
     access_key: ""
     secret_key: ""
     region: "us-east-1"
     timeout: 30
 
-  # Azure 配置（即将支持）
   azure:
     client_id: ""
     client_secret: ""
@@ -104,52 +115,34 @@ cloud_providers:
     subscription_id: ""
     timeout: 30
 
-  # GCP 配置（即将支持）
   gcp:
     project_id: ""
     service_account_key: ""
     timeout: 30
 
-# 企业微信通知配置
+# 企业微信通知
 wechat:
-  # 企业微信机器人webhook地址（必填）
-  webhook_url: ""
-  # 是否启用微信通知（默认：false）
+  webhook_url: "" # 建议走 WECHAT_WEBHOOK_URL 环境变量
   enabled: false
-  # @用户列表（可选，用于@特定用户或@all）
   mention_users: []
-  # 费用异常告警阈值，百分比（默认：20.0，表示变化超过20%时告警）
-  alert_threshold: 20.0
-  # 最大重试次数（默认：3）
+  alert_threshold: 20.0 # 费用变化超过这个百分比就告警
   max_retries: 3
-  # 重试延迟，秒（默认：2）
   retry_delay: 2
-  # 通知格式：markdown/template_card/auto（默认：auto）
-  notification_format: "auto"
-  # 是否以图片形式发送报告（默认：false）
-  # 设置为true可以生成包含完整产品明细的PNG图片报告
+  notification_format: "auto" # markdown | template_card | auto
+  # 以图片形式发送报告，能带上完整的产品明细
   send_as_image: false
-  
-  # 图片生成配置
   image_config:
-    # 图片宽度（像素，默认：1200）
     width: 1200
-    # 图表高度（像素，默认：300）
     chart_height: 300
-    # 是否显示所有产品明细（默认：true）
     show_all_products: true
-    # 是否包含图表（默认：true）
     include_charts: true
-    # 字体大小（默认：14）
     font_size: 14
-    # 标题字体大小（默认：20）
     title_font_size: 20
-    # 表格字体大小（默认：12）
     table_font_size: 12
-    # 最大文件大小限制（MB，默认：2）
     max_size_mb: 2.0
 
 app:
   environment: production
   log_level: info
-  log_file: "./logs/goscan.log"
+  # 留空就只打到 stdout，容器里交给 logpipe 采走
+  log_file: ""

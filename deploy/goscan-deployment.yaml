@@ -1,0 +1,264 @@
+# goscan：多云账单同步。和 logpipe / tracepipe / metricpipe / opdash 同一个
+# namespace、同一个 ClickHouse，账单表落在同一个库里，opdash 那边直接查得到。
+#
+#   kubectl apply -f deploy/goscan-ddl-job.yaml      # 先建表
+#   kubectl apply -f deploy/goscan-deployment.yaml   # 再起同步
+#   kubectl -n logging port-forward svc/goscan 8080:8080   # 本地看一眼 /health、/tasks
+#
+# 调度是 goscan 自己的 cron（配置里的 scheduler.jobs），不是 K8s CronJob：
+# 账期补数、失败重试、任务并发上限这些逻辑都在进程里，交给 K8s 反而要把状态
+# 摊到一堆互相看不见的 Pod 上。因此这里是一个常驻 Deployment，副本恒为 1。
+#
+# 手工补一段历史账期：常规做法是调下面这个 Service 的 POST /sync（opdash 就是这么接的）
+#
+#   curl -X POST http://goscan.logging.svc.cluster.local:8080/sync \
+#     -H 'Content-Type: application/json' \
+#     -d '{"provider":"alicloud","start_period":"2026-01","end_period":"2026-06"}'
+#
+# 集群外或者服务没起来时，也可以起一个一次性 Pod：
+#
+#   kubectl -n logging run goscan-backfill --rm -it --restart=Never \
+#     --image=harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest -- \
+#     --once /etc/goscan/config.yaml --provider alicloud --start 2026-01 --end 2026-06
+#
+# （真要这么跑得把下面的 ConfigMap / Secret 也挂上，`kubectl -n logging create job
+#   goscan-backfill --from=cronjob/...` 之类更顺手；参数形式就是上面这样。）
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: goscan-credentials
+  namespace: logging
+type: Opaque
+stringData:
+  # 云厂商的账单只读密钥。配置文件里对应的字段留空，由这里注入 ——
+  # ConfigMap 是明文的，密钥不该进去
+  volcengine-access-key: ""
+  volcengine-secret-key: ""
+  alicloud-access-key-id: ""
+  alicloud-access-key-secret: ""
+  # 写账单表的 ClickHouse 账号
+  clickhouse-password: ""
+  # 企业微信机器人 webhook，不发日报就留空
+  wechat-webhook-url: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: goscan-config
+  namespace: logging
+data:
+  config.yaml: |
+    # 完整注释见仓库根目录的 configs/config.daemon.yaml。
+    # 这里只留部署要改的那些，密钥一律留空，由 Secret 以环境变量注入。
+
+    clickhouse:
+      hosts:
+        - clickhouse-log.logck.svc.cluster.local
+      port: 9000
+      # 和 logpipe / tracepipe / metricpipe 同库，opdash 一个连接查得全
+      database: logs
+      username: default
+      password: ""
+      protocol: "native"
+      # ClickHouse 集群名。填了就建「本地表 + Distributed 表」，
+      # 改了这里要同步改 goscan-ddl-job.yaml 的 CH_CLUSTER
+      cluster: ""
+      # 本地表用 Replicated* 引擎，需要 Keeper；无副本分片的集群保持 false
+      replicated: false
+
+    server:
+      port: 8080
+      address: "0.0.0.0"
+
+    scheduler:
+      enabled: true
+      jobs:
+        - name: "volcengine_daily_sync"
+          provider: "volcengine"
+          cron: "0 2 * * *"
+          config:
+            sync_mode: "sync-optimal"
+            force_update: true
+
+        - name: "alicloud_daily_sync"
+          provider: "alicloud"
+          cron: "0 3 * * *"
+          config:
+            sync_mode: "sync-optimal"
+            force_update: true
+            granularity: "both"
+
+        - name: "daily_cost_report_notification"
+          provider: "notification"
+          cron: "30 8 * * *"
+          config:
+            sync_mode: "cost_report"
+
+    runtime:
+      max_concurrent_tasks: 3
+      task_timeout: 3600
+      graceful_shutdown_timeout: 30
+
+    cloud_providers:
+      volcengine:
+        access_key: ""
+        secret_key: ""
+        region: "cn-north-1"
+        host: "billing.volcengineapi.com"
+        timeout: 30
+        batch_size: 50
+        max_retries: 5
+        retry_delay: 3
+        bill_table: "volcengine_bill_details"
+        default_sync_mode: "all_periods"
+        max_historical_months: 12
+        auto_detect_periods: true
+        skip_empty_periods: true
+
+      alicloud:
+        access_key_id: ""
+        access_key_secret: ""
+        region: "cn-hangzhou"
+        timeout: 30
+        batch_size: 100
+        max_retries: 5
+        retry_delay: 2
+        default_granularity: "monthly"
+        monthly_table: "alicloud_bill_monthly"
+        daily_table: "alicloud_bill_daily"
+        default_sync_mode: "all_periods"
+        max_historical_months: 18
+        auto_detect_periods: true
+        skip_empty_periods: true
+
+    wechat:
+      # webhook 填进 goscan-credentials 之后再把 enabled 改成 true：
+      # 开着却没有 webhook 的话 --check 不过，Pod 起不来
+      webhook_url: ""
+      enabled: false
+      alert_threshold: 20.0
+      notification_format: "auto"
+      send_as_image: false
+
+    app:
+      environment: production
+      log_level: info
+      # 不写文件：日志打到 stdout，由 logpipe 采走
+      log_file: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: goscan
+  namespace: logging
+spec:
+  replicas: 1
+  # 两个副本各自跑一份 cron 会把同一个账期拉两遍。滚动更新时新旧 Pod 会短暂
+  # 并存，所以用 Recreate：先停旧的再起新的
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: goscan
+  template:
+    metadata:
+      labels:
+        app: goscan
+    spec:
+      terminationGracePeriodSeconds: 60
+      # 配置错了（云厂商密钥没挂上、cron 写错）就别起来，省得半夜才发现没同步。
+      # --check 不连库，起不来的原因只会是配置本身
+      initContainers:
+        - name: check-config
+          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest
+          args: ["--check", "/etc/goscan/config.yaml"]
+          envFrom:
+            - configMapRef:
+                name: goscan-env
+          env: &credentials
+            - name: VOLCENGINE_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: volcengine-access-key }
+            - name: VOLCENGINE_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: volcengine-secret-key }
+            - name: ALICLOUD_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: alicloud-access-key-id }
+            - name: ALICLOUD_ACCESS_KEY_SECRET
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: alicloud-access-key-secret }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: clickhouse-password }
+            - name: WECHAT_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: wechat-webhook-url }
+          volumeMounts:
+            - name: config
+              mountPath: /etc/goscan
+              readOnly: true
+      containers:
+        - name: goscan
+          # 打 v* tag 由 CI 推到 GHCR，见 README「发布」
+          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest
+          args: ["/etc/goscan/config.yaml"]
+          envFrom:
+            - configMapRef:
+                name: goscan-env
+          env: *credentials
+          ports:
+            - name: http
+              containerPort: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # 账单按页拉、按批写，内存和账单条数无关；出图的日报会短时多占一些
+              cpu: "1"
+              memory: 1Gi
+          # 健康检查只看进程活着、HTTP 起来了。同步任务是否成功看 /tasks，
+          # 拉不到账单不该把 Pod 重启掉 —— 重启只会让它从头再拉一遍
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+          volumeMounts:
+            - name: config
+              mountPath: /etc/goscan
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: goscan-config
+---
+# 时区和日志级别这类「改一下就想立刻生效」的开关放这里，不用动上面那份 YAML。
+# 容器里没有 /etc/localtime，TZ 不设的话 cron 的「凌晨 2 点」是 UTC 的凌晨 2 点
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: goscan-env
+  namespace: logging
+data:
+  TZ: Asia/Shanghai
+  LOG_LEVEL: info
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: goscan
+  namespace: logging
+spec:
+  selector:
+    app: goscan
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

@@ -1,182 +1,295 @@
-# Goscan - 云账单数据同步工具
+# goscan
 
-现代化的多云账单同步后端服务，帮助企业将火山引擎、阿里云等云服务商的费用数据自动落库到 ClickHouse，并提供完整的 API、调度与告警能力。
+多云账单同步入库。和 [logpipe](../log)、[tracepipe](../trace)、[metricpipe](../metric) 同一套部署口径，
+写进同一个 ClickHouse 库，[opdash](../opdash) 一个连接就能把日志、链路、指标和**花了多少钱**一起查：
+**把火山引擎、阿里云的账单按账期拉下来，批量写进 ClickHouse。**
 
-## 目录
-
-- [项目简介](#项目简介)
-- [功能亮点](#功能亮点)
-- [快速开始](#快速开始)
-- [配置指南](#配置指南)
-- [架构与目录说明](#架构与目录说明)
-- [开发与运维](#开发与运维)
-- [常见问题](#常见问题)
-- [文档与资源](#文档与资源)
-- [贡献指南](#贡献指南)
-- [许可证](#许可证)
-
-## 项目简介
-
-Goscan 旨在提供一个可插拔、可观测的云账单数据同步平台：
-
-- 🧩 支撑多云账单接入，统一落地到 ClickHouse，便于后续分析与可视化。
-- 🔄 通过 RESTful API 与定时任务调度，保障账单数据按需、按时同步。
-- 📣 支持企业微信 Markdown 通知，实现费用日报与异常提醒。
-
-## 功能亮点
-
-- 🌐 **高性能 API**：基于 Gin 框架，实现标准化 RESTful 接口。
-- ☁️ **多云适配**：当前支持火山引擎与阿里云，后续计划扩展 AWS / Azure / GCP。
-- 📊 **可观测性**：提供任务状态、健康检查与执行日志，便于运维监控。
-- ⏰ **定时调度**：内置 Cron 调度器，可配置分钟级同步策略。
-- 🗄️ **高效存储**：账单数据写入 ClickHouse，配置管理使用嵌入式 SQLite。
-- 💬 **企微通知**：支持 Markdown v2，推送日报、异常与指标信息。
-- 🔐 **安全治理**：密钥隔离、错误处理友好，符合生产环境要求。
-
-## 快速开始
-
-### 环境要求
-
-- Go 1.24 及以上
-- ClickHouse 数据库实例
-- Linux、macOS 或 Windows 运行环境
-
-### 安装部署
-
-```bash
-# 1. 克隆仓库
-git clone <repository-url>
-cd goscan
-
-# 2. 安装 Go 依赖
-go mod download
-
-# 3. 准备配置
-cp config.daemon.yaml config.yaml
-vim config.yaml  # 修改云账号、数据库等信息
-
-# 4. 构建二进制
-make build
-
-# 5. 启动服务
-./bin/goscan
-
-# 6. 验证服务
-curl http://localhost:8080/api/v1/health
+```text
+  ┌──────────────┐        ┌──────────────────────┐        ┌────────────┐
+  │   云厂商 API   │  分页  │      内置 cron        │ 批量写  │ ClickHouse │
+  │ 火山 / 阿里云  ├───────▶│ 按账期拉 / 重试 / 补数 ├───────▶│  账单明细表 │
+  └──────────────┘        └──────────────────────┘        └────────────┘
+                                    │
+                                    └──▶ 企业微信费用日报（可出图）
 ```
 
-若使用 Docker，可参考 `Dockerfile` 进行镜像构建与部署。
+四兄弟的分工：logpipe 采日志、tracepipe 采 trace、metricpipe 采指标、goscan 拉账单，
+opdash 负责查。前三个是「应用自己吐出来的数据」，goscan 是「去云厂商那儿拉回来的数据」——
+所以它不是常驻监听端口的采集器，而是按账期定时去拉。
 
-## 配置指南
+## 数据表
 
-完整配置示例参见 [`config.daemon.yaml`](config.daemon.yaml)。以下为关键项说明：
+三张表，都在配置里的 `clickhouse.database`（部署用的是 `logs`，和另外三个项目同库）：
+
+| 表 | 内容 | 时间列 | 金额列 |
+| --- | --- | --- | --- |
+| `volcengine_bill_details` | 火山引擎账单明细，一行一个计费项 | `BillPeriod`（账期 `2026-09`）/ `ExpenseDate` | `PayableAmount` 等 |
+| `alicloud_bill_monthly` | 阿里云月度账单 | `billing_cycle`（`2026-09`） | `pretax_amount` / `payment_amount` |
+| `alicloud_bill_daily` | 阿里云日度账单 | `billing_date`（`Date`） | 同上 |
+
+两朵云的列名口径跟着各自的 API 走 —— 火山是 PascalCase、阿里云是 snake_case，
+没有强行统一：账单字段有几十个且各家含义并不一一对应，硬映射成一套「通用列」，
+对不上的那些只能丢掉或者塞进备注里，真要对账时反而查不回原始值。要跨云汇总就在
+查询里对齐那几个关键列。
+
+一个坑：**火山那张表的金额是 `String`**（API 原样返回，避免精度和空值问题），
+按金额排序、求和要先转：
+
+```sql
+-- 上个月各产品花了多少（火山）
+select ProductZh, sum(toFloat64OrZero(PayableAmount)) as amount
+from logs.volcengine_bill_details
+where BillPeriod = '2026-08'
+group by ProductZh order by amount desc;
+
+-- 上个月各产品花了多少（阿里云）
+select product_name, sum(payment_amount) as amount
+from logs.alicloud_bill_monthly
+where billing_cycle = '2026-08'
+group by product_name order by amount desc;
+```
+
+三张表都是 `ReplacingMergeTree`：同一个账期重复拉不会翻倍，但去重发生在后台 merge，
+刚写完就查要加 `final` 或者等一次 merge。
+
+表结构的唯一定义在 [`pkg/ddl`](pkg/ddl)，建表语句由它渲染，同步写入也用它 ——
+加一列只改一个地方，两边不会各改各的。
+
+## 启动
+
+```bash
+goscan                                 # 读默认路径的配置（见下）
+goscan /etc/goscan/config.yaml         # 指定配置
+goscan --check /etc/goscan/config.yaml # 只校验配置，不连库
+goscan --ddl   /etc/goscan/config.yaml # 打印建表语句，不连库
+goscan --version
+```
+
+不带配置文件时按 `./config.yaml` → `~/.goscan/config.yaml` → `/etc/goscan/config.yaml` 的顺序找。
+**显式指定的路径找不到会直接报错退出** —— 容器里挂错了 ConfigMap 就该起不来，
+而不是拿一份没有任何密钥的默认配置假装在跑。
+
+`Ctrl-C` / `SIGTERM` 是优雅退出：在跑的同步任务先跑完，最多等 30 秒。
+
+### 跑一次就退出
+
+补历史账期、手工重拉某个月，用 `--once`，账期这些维度由参数指定，不用改配置：
+
+```bash
+goscan --once config.yaml --provider volcengine                      # 按配置的默认模式拉一次
+goscan --once config.yaml --provider alicloud --period 2026-08       # 指定账期
+goscan --once config.yaml --provider alicloud --start 2026-01 --end 2026-06 --granularity both
+goscan --once config.yaml --provider notification                    # 只发一次企微日报
+```
+
+退出码反映任务本身的成败，脚本和 `kubectl wait` 都能直接判断。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--provider` | `volcengine` / `alicloud` / `notification` |
+| `--mode` | `standard`（老老实实按账期拉）/ `sync-optimal`（按数据量比对，只补差的那部分） |
+| `--granularity` | 阿里云专用：`monthly` / `daily` / `both` |
+| `--period` | 单个账期，`YYYY-MM` 或 `YYYY-MM-DD` |
+| `--start` `--end` | 账期区间 |
+| `--limit` | 最多同步多少条，0 = 不限 |
+| `--force` | 已有数据也重新拉 |
+
+## 配置
+
+完整带注释的样例在 [`configs/config.daemon.yaml`](configs/config.daemon.yaml)。要紧的是这几段：
 
 ```yaml
-# ClickHouse 连接
 clickhouse:
-  hosts:
-    - localhost
-  port: 9000
-  username: default
-  password: ""
-  database: default
+  hosts: [clickhouse-log.logck.svc.cluster.local]
+  port: 9000            # native 协议；protocol 改 http 时用 8123
+  database: logs        # 和 logpipe / tracepipe / metricpipe 同库
+  cluster: ""           # 填了就建「本地表 + Distributed 表」
+  replicated: false     # 本地表用 Replicated* 引擎，需要 Keeper
 
-# 支持的云服务商
-providers:
-  volcengine:
-    access_key: "YOUR_VOLC_KEY"
-    secret_key: "YOUR_VOLC_SECRET"
-  alicloud:
-    access_key_id: "YOUR_ALI_KEY"
-    access_key_secret: "YOUR_ALI_SECRET"
-
-# 企业微信机器人
-wechat:
-  webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR_KEY"
-
-# 调度配置示例
-scheduler:
+scheduler:              # 调度是 goscan 自己的 cron，不是 K8s CronJob
   enabled: true
-  cron: "0 0 * * *"  # 每天 00:00 执行
+  jobs:
+    - name: "alicloud_daily_sync"
+      provider: "alicloud"
+      cron: "0 3 * * *"
+      config:
+        sync_mode: "sync-optimal"
+        granularity: "both"
 ```
 
-- 提前在 ClickHouse 中创建数据库与表结构。
-- 对于生产环境，建议通过环境变量或密钥管理系统注入敏感配置。
-- Cron 表达式遵循 robfig/cron v3 语法，可支持到秒级调度。
+**每一项都能用环境变量覆盖**，优先级是环境变量 > 配置文件：
+`CLICKHOUSE_*`、`VOLCENGINE_*`、`ALICLOUD_*`、`WECHAT_*`、`SERVER_*`、`LOG_LEVEL`。
+密钥因此不用写进配置文件，容器里由 Secret 注入就行（见 `deploy/`）。
 
-## 架构与目录说明
+Cron 表达式是 robfig/cron v3 的语法。**时区跟着进程的 `TZ` 走** —— 容器里不设
+`TZ=Asia/Shanghai` 的话，"凌晨 2 点"是 UTC 的凌晨 2 点。
 
-### 技术栈
+凭据全空的 provider 块视为「这朵云没接」，`--check` 会跳过它；只填了一半
+（有 `access_key` 没有 `secret_key`）才报错。
 
-- Gin：HTTP API 与路由
-- ClickHouse Go Driver：账单数据存储
-- SQLite：轻量配置存储
-- robfig/cron：定时任务调度
-- Swagger 2.0：接口文档生成
-- slog：结构化日志
+## 建表
 
-### 目录结构
-
-```
-goscan/
-├── cmd/server/          # 服务入口 main 程序
-├── internal/            # 内部共享逻辑（不对外暴露）
-├── pkg/
-│   ├── alicloud/        # 阿里云账单 SDK 封装
-│   ├── volcengine/      # 火山引擎账单 SDK 封装
-│   ├── clickhouse/      # ClickHouse 客户端与表结构
-│   ├── analysis/        # 费用分析与指标计算
-│   ├── scheduler/       # 调度与任务管理
-│   ├── handlers/        # API 分层处理逻辑
-│   └── wechat/          # 企业微信通知模块
-├── docs/                # Swagger 等文档输出
-├── examples/            # 配置与调用示例
-├── config.daemon.yaml   # 默认配置模板
-└── Makefile             # 常用开发脚本
-```
-
-## 开发与运维
+goscan **自己从不执行 DDL**，`--ddl` 只把建表语句打到 stdout：
 
 ```bash
-# 本地开发热启动
-make dev
-
-# 代码格式化
-make fmt
-
-# 运行单元测试
-make test
-
-# 生成 Swagger 文档（需安装 swag）
-swag init -g cmd/server/main.go
+goscan --ddl config.yaml | clickhouse-client --host <ck> --database logs --queries-file -
 ```
 
-- 日志默认输出到标准输出，可通过配置定向到文件。
-- 生产环境部署建议结合 systemd、Supervisor 或容器编排系统。
-- 监控建议对接 Prometheus/Alertmanager 或企业微信的自定义告警。
+这样同步进程不需要建表权限，也不会在生产库里悄悄改表结构 —— 账单表一改就是几十列，
+误改比没建更麻烦。K8s 上这一步是独立的 Job，见下。
+
+DDL 里除了 `CREATE TABLE IF NOT EXISTS`，还带一段幂等的 `ALTER ... ADD COLUMN IF NOT EXISTS`：
+云厂商给账单加了字段、goscan 跟着加了列之后，**重跑一遍 DDL 就把老表缺的列按原位补上**，
+已经是最新的表则什么也不做，多跑无副作用。
+
+配了 `clickhouse.cluster` 的话，一张表会渲染成两张：`<表名>_local` 存数据（`ON CLUSTER`
+一次下发到所有节点），`<表名>` 是它上面的 `Distributed`，也就是同步实际写入、opdash
+实际查询的那张。`replicated: true` 时本地表用 `ReplicatedReplacingMergeTree`，需要
+ClickHouse Keeper；集群是一堆无副本分片就保持 `false`。
+
+`--ddl` 不建库，`CREATE DATABASE` 由部署那一步负责（集群模式下建库也得 `ON CLUSTER`）。
+
+## K8s 部署
+
+```bash
+kubectl apply -f deploy/goscan-ddl-job.yaml      # 先建库建表
+kubectl apply -f deploy/goscan-deployment.yaml   # 再起同步
+```
+
+* [`deploy/goscan-ddl-job.yaml`](deploy/goscan-ddl-job.yaml)：两段式 Job。initContainer 用
+  goscan 镜像把 DDL 渲染到 emptyDir，主容器用 ClickHouse 镜像执行（goscan 镜像里没有
+  clickhouse-client）。配置来源和 Deployment 是同一个 ConfigMap，所以建出来的表一定
+  和同步写入的那张一致。升级到带新列的版本后重跑一次。
+* [`deploy/goscan-deployment.yaml`](deploy/goscan-deployment.yaml)：ConfigMap + Secret +
+  Deployment + Service。**副本恒为 1、`strategy: Recreate`** —— 两个副本各自跑一份 cron
+  会把同一个账期拉两遍，滚动更新时新旧 Pod 并存也一样，所以先停旧的再起新的。
+  initContainer 跑 `--check`：配置错了（密钥没挂上、cron 写错）就别起来，
+  省得半夜才发现没同步。
+
+和 logpipe / tracepipe / opdash 放同一个 namespace（`logging`）、连同一个 ClickHouse。
+探针只看进程和 HTTP：拉不到账单不该把 Pod 重启掉，重启只会让它从头再拉一遍；
+同步成没成看 `/tasks`。
+
+手动补数不用改 Deployment：常规做法是从 opdash 触发（见下面「手动同步」），
+没有 opdash 或者集群外操作时再起个一次性 Pod 跑 `--once`。
+
+## 手动同步（给 opdash 对接）
+
+日常同步由内置 cron 跑，**手动补一次由 opdash 触发**：集群内直接调
+`http://goscan.logging.svc.cluster.local:8080`，不用 kubectl、不用改配置。
+
+触发一次同步，参数就是账期这些维度：
+
+```bash
+curl -X POST http://goscan.logging.svc.cluster.local:8080/sync \
+  -H 'Content-Type: application/json' \
+  -d '{"provider":"alicloud","sync_mode":"sync-optimal","granularity":"both",
+       "start_period":"2026-01","end_period":"2026-06","force_update":true}'
+
+{"task_id":"6f1c…","status":"started","provider":"alicloud","timestamp":"…"}
+```
+
+| 字段 | 说明 |
+| --- | --- |
+| `provider` | 必填，`volcengine` / `alicloud` |
+| `sync_mode` | `standard` / `sync-optimal`，不填走配置里的默认 |
+| `granularity` | 阿里云专用，`monthly` / `daily` / `both` |
+| `bill_period` | 单个账期 |
+| `start_period` `end_period` | 账期区间 |
+| `force_update` | 已有数据也重拉 |
+| `limit` | 最多同步多少条 |
+
+**接口立刻返回，同步在后台跑**，拿 `task_id` 轮询 `GET /tasks/{task_id}` 看结果：
+`status` 是 `running` / `completed` / `failed`，完成后 `result` 里有
+`records_processed`、`duration`，失败的话 `error` 里是原因。
+
+状态码就是 opdash 那边要分的几种情况：
+
+| 状态码 | 含义 | 界面上该怎么办 |
+| --- | --- | --- |
+| `200` | 已受理 | 拿 task_id 轮询 |
+| `409` | **这朵云已经有同步在跑** | 提示「正在同步中」，别重复发 |
+| `429` | 并发任务数到上限 | 稍后再试 |
+| `400` | 参数不对 | 报错信息直接显示 |
+
+409 是服务端的去重：同一朵云同时只允许一个同步任务，重复点按钮、或者手工触发
+撞上 cron 的那一次都会被挡下来 —— 两个任务并行拉同一批账期只是浪费 API 配额，
+进度还互相看不懂。cron 遇到上一轮还没跑完时同样跳过这一次，日志里是
+`Skipping scheduled job`。
+
+opdash 是只读服务，这条写路径建议由它的后端代调（浏览器不直连 goscan），
+认证沿用 opdash 自己的登录，goscan 这边不再单独做一套。
+
+其余接口（运维看状态用）：
+
+| 路径 | 干什么 |
+| --- | --- |
+| `GET /health` | 健康检查，探针用 |
+| `GET /tasks`、`GET /tasks/:id` | 任务列表和单个任务的结果 |
+| `POST /tasks` | 和 `POST /sync` 等价的通用入口，可自带 `id` 让重试幂等 |
+| `GET /sync`、`GET /sync/history` | 同步状态与历史 |
+| `GET /scheduler/status`、`GET /scheduler/jobs` | 调度器和任务计划 |
+| `POST /scheduler/jobs/:id/trigger` | 手工触发某个已配置的 job |
+| `POST /notifications/wechat`、`POST /notifications/wechat/test` | 手工发一次企微报告、测试 webhook |
+| `GET /swagger/index.html` | 完整接口文档 |
+
+## 发布
+
+打 `v*` tag 由 CI 构建镜像推到 GHCR（`.github/workflows/release.yml`），同时出各平台的二进制。
+镜像里的版本号来自构建参数 `VERSION`，`goscan --version` 报的就是 tag。
+
+## 开发
+
+```bash
+make build        # 构建（CGO_ENABLED=0，和镜像里那份一致）
+make check        # 校验 configs/config.daemon.yaml
+make ddl          # 打印建表语句
+make test         # 跑测试
+make dev          # 直接 go run
+make swagger      # 重新生成 Swagger 文档（需要 swag）
+```
+
+`make` 的 `CONFIG=` 可以换配置文件：`make ddl CONFIG=/etc/goscan/config.yaml`。
+
+目录：
+
+```text
+cmd/server/      入口：命令行解析、常驻模式、--once
+pkg/ddl/         三张表的列定义 + 建表语句渲染（表结构的唯一来源）
+pkg/config/      配置结构、默认值、环境变量覆盖、校验
+pkg/scheduler/   内置 cron
+pkg/tasks/       任务编排：同步任务、通知任务
+pkg/volcengine/  火山引擎账单 API 封装
+pkg/alicloud/    阿里云账单 API 封装
+pkg/clickhouse/  ClickHouse 客户端、表名解析（单机 / 集群）
+pkg/analysis/    费用分析、日报出图
+pkg/wechat/      企业微信通知
+deploy/          K8s 清单
+```
 
 ## 常见问题
 
-- **端口被占用**：使用 `./bin/goscan -port <新端口>` 覆盖默认端口。
-- **ClickHouse 无法连接**：确认数据库服务可达，检查 host、port、用户和防火墙策略。
-- **调度未触发**：确认 `scheduler.enabled` 为 `true` 且 Cron 表达式合法，可通过 API 查看任务状态。
-- **企微通知失败**：检查 webhook 是否仍然有效，必要时重置机器人 Key。
+**改了配置没生效** —— ConfigMap 更新不会自动重启 Pod，`kubectl -n logging rollout restart deploy/goscan`。
 
-## 文档与资源
+**同步没按点跑** —— 先看 `TZ`（容器默认 UTC），再看 `scheduler.enabled` 和 cron 表达式，
+然后 `GET /scheduler/jobs` 看下一次触发时间。
 
-- [`docs/`](docs/)：Swagger 生成的接口文档
-- [`API_USAGE.md`](API_USAGE.md)：API 调用示例
-- [`WECHAT_NOTIFICATION.md`](WECHAT_NOTIFICATION.md)：企业微信通知配置说明
-- [`CHANGELOG.md`](CHANGELOG.md)：版本记录与特性变更
+**表不存在** —— 同步进程不建表，跑 `deploy/goscan-ddl-job.yaml` 或者把 `--ddl` 的输出
+喂给 clickhouse-client。配置里写了 `create_table` 的老 job 会在启动时告警，那个字段
+已经不起作用了。
 
-## 贡献指南
+**升级后少列** —— 重跑一次 DDL Job，ALTER 段会把缺的列补上。
 
-欢迎提交 Issue、Pull Request 或功能建议。建议在提交前：
+**账单金额对不上** —— 火山那张表的金额列是 `String`，直接 `sum()` 得到 0，要
+`sum(toFloat64OrZero(PayableAmount))`；另外 `ReplacingMergeTree` 的去重在后台 merge，
+刚同步完就核对要加 `final`。
 
-1. 先讨论需求或问题，确认实现路径。
-2. 提交代码前运行 `make test` 与基础静态检查。
-3. 为新增能力补充文档、示例或测试用例。
+**触发同步返回 409** —— 这朵云已经有同步在跑（手动的或 cron 的），等它跑完再来。
+`GET /sync` 看在跑几个，`GET /tasks` 看是哪一个。
+
+**企微通知失败** —— webhook 是否还有效；`wechat.enabled` 开着但 webhook 为空时
+`--check` 不过，Pod 会起不来。
 
 ## 许可证
 
-本项目采用 MIT 协议，详见 [LICENSE](LICENSE)。
+MIT。

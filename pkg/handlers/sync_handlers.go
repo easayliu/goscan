@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -9,6 +10,7 @@ import (
 	"goscan/pkg/tasks"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -68,39 +70,29 @@ func (h *HandlerService) CreateTask(c *gin.Context) {
 		}
 	}
 
+	// Callers may supply their own id (to make a retry idempotent from their
+	// side); otherwise mint one here so it can go back in the response.
+	if taskReq.ID == "" {
+		taskReq.ID = uuid.New().String()
+	}
+
 	logger.Info("Creating task",
 		zap.String("task_id", taskReq.ID),
 		zap.String("type", string(taskReq.Type)),
 		zap.String("provider", taskReq.Provider))
 
-	// Execute task asynchronously
-	go h.executeTaskAsync(&taskReq)
+	// Runs in the background on the application context; the response only says
+	// the task was accepted, GET /tasks/{id} says how it went.
+	if _, err := h.taskMgr.ExecuteTask(h.ctx, &taskReq); err != nil {
+		respondTaskRejected(c, err, taskReq.Provider)
+		return
+	}
 
 	c.JSON(http.StatusCreated, buildTaskResponse(
 		taskReq.ID,
 		"started",
 		"Task started successfully",
 	))
-}
-
-// executeTaskAsync executes task asynchronously
-func (h *HandlerService) executeTaskAsync(taskReq *tasks.TaskRequest) {
-	result, err := h.taskMgr.ExecuteTask(h.ctx, taskReq)
-	if err != nil {
-		LogErrorWithContext(err, "Task execution failed",
-			"task_id", taskReq.ID,
-			"provider", taskReq.Provider,
-			"type", taskReq.Type)
-	} else if result != nil {
-		logger.Info("Task completed successfully",
-			zap.String("task_id", taskReq.ID),
-			zap.String("provider", taskReq.Provider),
-			zap.Duration("duration", result.Duration))
-	} else {
-		logger.Info("Task completed successfully",
-			zap.String("task_id", taskReq.ID),
-			zap.String("provider", taskReq.Provider))
-	}
 }
 
 // GetTask returns a specific task
@@ -220,8 +212,11 @@ func (h *HandlerService) TriggerSync(c *gin.Context) {
 		zap.String("provider", syncReq.Provider),
 		zap.String("sync_mode", syncReq.SyncMode))
 
-	// Create task request
+	// Create task request. The id is minted here rather than inside the task
+	// manager so it can go back in the response: whoever triggered the sync
+	// (opdash, curl, a script) polls GET /tasks/{id} for the outcome.
 	taskReq := &tasks.TaskRequest{
+		ID:       uuid.New().String(),
 		Type:     tasks.TaskTypeSync,
 		Provider: syncReq.Provider,
 		Config: tasks.TaskConfig{
@@ -237,8 +232,13 @@ func (h *HandlerService) TriggerSync(c *gin.Context) {
 		},
 	}
 
-	// Execute task asynchronously
-	go h.executeSyncTaskAsync(taskReq, syncReq.Provider)
+	// ExecuteTask only registers the task and returns; the sync itself runs in
+	// the background on the application context, not the request one — the
+	// response is sent long before the bills are in.
+	if _, err := h.taskMgr.ExecuteTask(h.ctx, taskReq); err != nil {
+		respondTaskRejected(c, err, syncReq.Provider)
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"task_id":   taskReq.ID,
@@ -249,23 +249,28 @@ func (h *HandlerService) TriggerSync(c *gin.Context) {
 	})
 }
 
-// executeSyncTaskAsync executes sync task asynchronously
-func (h *HandlerService) executeSyncTaskAsync(taskReq *tasks.TaskRequest, provider string) {
-	result, err := h.taskMgr.ExecuteTask(h.ctx, taskReq)
-	if err != nil {
-		LogErrorWithContext(err, "Manual sync failed",
-			"task_id", taskReq.ID,
-			"provider", provider)
-	} else if result != nil {
-		logger.Info("Manual sync completed",
-			zap.String("task_id", taskReq.ID),
-			zap.String("provider", provider),
-			zap.Duration("duration", result.Duration))
-	} else {
-		logger.Info("Manual sync completed",
-			zap.String("task_id", taskReq.ID),
-			zap.String("provider", provider))
+// respondTaskRejected turns a refusal from the task manager into a status code
+// a caller can act on: 409 means "wait for the run in flight", 429 means "try
+// again shortly", anything else is ours to fix.
+func respondTaskRejected(c *gin.Context, err error, provider string) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, tasks.ErrTaskAlreadyRunning):
+		status = http.StatusConflict
+	case errors.Is(err, tasks.ErrTooManyTasks):
+		status = http.StatusTooManyRequests
 	}
+
+	logger.Warn("Task was not accepted",
+		zap.String("provider", provider),
+		zap.Int("status", status),
+		zap.Error(err))
+
+	c.JSON(status, gin.H{
+		"error":    true,
+		"message":  err.Error(),
+		"provider": provider,
+	})
 }
 
 // GetSyncStatus returns current sync status

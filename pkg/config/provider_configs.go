@@ -24,6 +24,9 @@ type VolcEngineConfig struct {
 	RateLimit   int    `json:"rate_limit" yaml:"rate_limit"`     // QPS 限制
 	EnableDebug bool   `json:"enable_debug" yaml:"enable_debug"` // 启用调试模式
 
+	// === 表名配置 ===
+	BillTable string `json:"bill_table" yaml:"bill_table"` // 账单明细表名
+
 	// === 历史数据同步配置 ===
 	DefaultSyncMode     string `json:"default_sync_mode" yaml:"default_sync_mode"`         // all_periods, current_period, range
 	MaxHistoricalMonths int    `json:"max_historical_months" yaml:"max_historical_months"` // 最多同步几个月的历史数据，0表示无限制
@@ -99,6 +102,9 @@ func NewVolcEngineConfig() *VolcEngineConfig {
 		RetryDelay:  getEnvInt("VOLCENGINE_RETRY_DELAY", 1),
 		RateLimit:   getEnvInt("VOLCENGINE_RATE_LIMIT", 10),
 		EnableDebug: getEnvBool("VOLCENGINE_DEBUG", false),
+
+		// 表名配置默认值
+		BillTable: getEnv("VOLCENGINE_BILL_TABLE", "volcengine_bill_details"),
 
 		// 历史数据同步配置默认值
 		DefaultSyncMode:     getEnv("VOLCENGINE_DEFAULT_SYNC_MODE", "all_periods"),
@@ -277,6 +283,7 @@ func mergeVolcEngineEnvVars(config *Config) {
 		"VOLCENGINE_MAX_HISTORICAL_MONTHS": &ve.MaxHistoricalMonths,
 		"VOLCENGINE_DEFAULT_START_PERIOD":  &ve.DefaultStartPeriod,
 		"VOLCENGINE_DEFAULT_END_PERIOD":    &ve.DefaultEndPeriod,
+		"VOLCENGINE_BILL_TABLE":            &ve.BillTable,
 	}
 
 	applyEnvMappings(envMappings)

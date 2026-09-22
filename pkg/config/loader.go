@@ -163,6 +163,9 @@ func mergeClickHouseEnvVars(config *Config) {
 	if debug := os.Getenv("CLICKHOUSE_DEBUG"); debug != "" {
 		config.ClickHouse.Debug = debug == "true" || debug == "1"
 	}
+	if replicated := os.Getenv("CLICKHOUSE_REPLICATED"); replicated != "" {
+		config.ClickHouse.Replicated = replicated == "true" || replicated == "1"
+	}
 }
 
 // mergeServerEnvVars 合并Server环境变量

@@ -1,36 +1,46 @@
-.PHONY: build run dev clean test swagger swagger-fmt help
+.PHONY: build run dev ddl check clean test deps fmt lint status swagger swagger-fmt help
+
+CONFIG ?= configs/config.daemon.yaml
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 # Default target
 help: ## Show this help message
 	@echo "Available targets:"
 	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-15s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-# Build Go binary
+# Build Go binary. CGO is off so the binary matches the one in the image.
 build: ## Build the server application
 	@echo "Building Go server binary..."
-	@CGO_ENABLED=1 go build -o bin/goscan cmd/server/main.go
+	@CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/goscan ./cmd/server
 
 # Run the application
 run: build ## Build and run the server application
 	@echo "Starting Goscan Server..."
-	@./bin/goscan
+	@./bin/goscan $(CONFIG)
 
 # Development mode
 dev: ## Start development mode
 	@echo "Starting development mode..."
-	@go run cmd/server/main.go
+	@go run ./cmd/server $(CONFIG)
+
+# Print the ClickHouse DDL. Connects to nothing, so it is safe to pipe anywhere:
+#   make ddl | clickhouse-client --host ... --queries-file -
+ddl: build ## Print ClickHouse DDL for the configured tables
+	@./bin/goscan --ddl $(CONFIG)
+
+check: build ## Validate the configuration without connecting to anything
+	@./bin/goscan --check $(CONFIG)
 
 # Test the application
 test: ## Run tests
 	@echo "Running tests..."
-	@go test -v ./internal/...
-	@go test -v ./pkg/...
+	@go test ./...
 
 # Clean build artifacts
 clean: ## Clean build artifacts
 	@echo "Cleaning..."
 	@rm -rf bin/
-	@rm -f data/goscan.db
 
 # Install dependencies
 deps: ## Install dependencies
@@ -50,10 +60,10 @@ lint: ## Lint Go code
 
 # Show project status
 status: ## Show project status
-	@echo "Project: Goscan Server Service"
-	@echo "Version: 2.0.0"
+	@echo "Project: Goscan"
+	@echo "Version: $(VERSION)"
 	@echo "Go version: $(shell go version)"
-	@echo "API Framework: Gin"
+
 # Generate Swagger documentation
 swagger: ## Generate Swagger documentation
 	@echo "Generating Swagger documentation..."

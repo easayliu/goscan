@@ -20,9 +20,11 @@ type ScheduledJob struct {
 type JobConfig struct {
 	SyncMode       string `json:"sync_mode" yaml:"sync_mode"`
 	UseDistributed bool   `json:"use_distributed" yaml:"use_distributed"`
-	CreateTable    bool   `json:"create_table" yaml:"create_table"`
-	ForceUpdate    bool   `json:"force_update" yaml:"force_update"`
-	Granularity    string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
+	// CreateTable 已废弃：建表统一由 `goscan --ddl` 生成、DDL Job 执行，
+	// 同步进程不再碰表结构。保留字段只为让老配置仍能加载（加载时会告警）。
+	CreateTable bool   `json:"create_table" yaml:"create_table"`
+	ForceUpdate bool   `json:"force_update" yaml:"force_update"`
+	Granularity string `json:"granularity,omitempty" yaml:"granularity,omitempty"`
 }
 
 // RuntimeConfig represents runtime configuration settings
@@ -118,9 +120,10 @@ func (sj *ScheduledJob) Validate() error {
 
 // Validate validates job configuration
 func (jc *JobConfig) Validate() error {
-	// validate sync mode
+	// validate sync mode. cost_report is the notification job's marker rather
+	// than a sync mode, but it travels in the same field.
 	if jc.SyncMode != "" {
-		validSyncModes := []string{"all_periods", "current_period", "range"}
+		validSyncModes := []string{"standard", "sync-optimal", "cost_report"}
 		if !isValidValue(jc.SyncMode, validSyncModes) {
 			return ErrInvalidValue
 		}

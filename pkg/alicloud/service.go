@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
+	"goscan/pkg/ddl"
 	"goscan/pkg/logger"
 	"strings"
 	"time"
@@ -30,8 +31,8 @@ func NewBillService(aliConfig *config.AliCloudConfig, chClient *clickhouse.Clien
 	service := &BillService{
 		aliClient:        aliClient,
 		chClient:         chClient,
-		monthlyTableName: "alicloud_bill_monthly",
-		dailyTableName:   "alicloud_bill_daily",
+		monthlyTableName: ddl.DefaultAliCloudMonthlyTable,
+		dailyTableName:   ddl.DefaultAliCloudDailyTable,
 		config:           aliConfig,
 	}
 
@@ -65,85 +66,7 @@ func (s *BillService) CreateMonthlyBillTable(ctx context.Context) error {
 		return nil
 	}
 
-	schema := `(
-		-- Core identification fields
-		instance_id String,
-		instance_name String,
-		bill_account_id String,
-		bill_account_name String,
-		
-		-- Time fields
-		billing_date Nullable(Date), -- Only has value for DAILY granularity
-		billing_cycle String,
-		
-		-- Product information
-		product_code String,
-		product_name String,
-		product_type String,
-		product_detail String,
-		
-		-- Billing information
-		subscription_type String,
-		pricing_unit String,
-		currency String,
-		billing_type String,
-		
-		-- Usage information
-		usage String,
-		usage_unit String,
-		
-		-- Amount information (core)
-		pretax_gross_amount Float64,
-		invoice_discount Float64,
-		deducted_by_coupons Float64,
-		pretax_amount Float64,
-		currency_amount Float64,
-		payment_amount Float64,
-		outstanding_amount Float64,
-		
-		-- Region information
-		region String,
-		zone String,
-		
-		-- Specification information
-		instance_spec String,
-		internet_ip String,
-		intranet_ip String,
-		
-		-- Tags and grouping
-		resource_group String,
-		tags Map(String, String),
-		cost_unit String,
-		
-		-- Other information
-		service_period String,
-		service_period_unit String,
-		list_price String,
-		list_price_unit String,
-		owner_id String,
-		
-		-- Cost allocation
-		split_item_id String,
-		split_item_name String,
-		split_account_id String,
-		split_account_name String,
-		
-		-- Order information
-		nick_name String,
-		product_detail_code String,
-		
-		-- Bill attribution
-		biz_type String,
-		adjust_type String,
-		adjust_amount Float64,
-		
-		-- Metadata
-		granularity String DEFAULT 'MONTHLY',
-		created_at DateTime64(3) DEFAULT now(),
-		updated_at DateTime64(3) DEFAULT now()
-	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
-	PARTITION BY toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))`
+	schema := s.getMonthlyTableSchema()
 
 	// Create table using automatic table name resolution mechanism
 	if resolver.IsClusterEnabled() {
@@ -182,85 +105,7 @@ func (s *BillService) CreateDailyBillTable(ctx context.Context) error {
 		return nil
 	}
 
-	schema := `(
-		-- Core identification fields
-		instance_id String,
-		instance_name String,
-		bill_account_id String,
-		bill_account_name String,
-		
-		-- Time fields (daily)
-		billing_date Date, -- Must have value for DAILY granularity
-		billing_cycle String,
-		
-		-- Product information
-		product_code String,
-		product_name String,
-		product_type String,
-		product_detail String,
-		
-		-- Billing information
-		subscription_type String,
-		pricing_unit String,
-		currency String,
-		billing_type String,
-		
-		-- Usage information
-		usage String,
-		usage_unit String,
-		
-		-- Amount information (core)
-		pretax_gross_amount Float64,
-		invoice_discount Float64,
-		deducted_by_coupons Float64,
-		pretax_amount Float64,
-		currency_amount Float64,
-		payment_amount Float64,
-		outstanding_amount Float64,
-		
-		-- Region information
-		region String,
-		zone String,
-		
-		-- Specification information
-		instance_spec String,
-		internet_ip String,
-		intranet_ip String,
-		
-		-- Tags and grouping
-		resource_group String,
-		tags Map(String, String),
-		cost_unit String,
-		
-		-- Other information
-		service_period String,
-		service_period_unit String,
-		list_price String,
-		list_price_unit String,
-		owner_id String,
-		
-		-- Cost allocation
-		split_item_id String,
-		split_item_name String,
-		split_account_id String,
-		split_account_name String,
-		
-		-- Order information
-		nick_name String,
-		product_detail_code String,
-		
-		-- Bill attribution
-		biz_type String,
-		adjust_type String,
-		adjust_amount Float64,
-		
-		-- Metadata
-		granularity String DEFAULT 'DAILY',
-		created_at DateTime64(3) DEFAULT now(),
-		updated_at DateTime64(3) DEFAULT now()
-	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_date, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
-	PARTITION BY toYYYYMMDD(billing_date)`
+	schema := s.getDailyTableSchema()
 
 	// Create table using automatic table name resolution mechanism
 	if resolver.IsClusterEnabled() {
@@ -368,116 +213,16 @@ func (s *BillService) CreateDistributedDailyBillTable(ctx context.Context, local
 	return nil
 }
 
-// getMonthlyTableSchema gets monthly table schema (for distributed tables)
+// getMonthlyTableSchema gets monthly table schema. The columns are defined in
+// pkg/ddl and nowhere else, so what the sync writes into and what
+// `goscan --ddl` prints for the DDL Job can never drift apart.
 func (s *BillService) getMonthlyTableSchema() string {
-	return `(
-		instance_id String,
-		instance_name String,
-		bill_account_id String,
-		bill_account_name String,
-		billing_date Nullable(Date), -- NULL for monthly table
-		billing_cycle String,
-		product_code String,
-		product_name String,
-		product_type String,
-		product_detail String,
-		subscription_type String,
-		pricing_unit String,
-		currency String,
-		billing_type String,
-		usage String,
-		usage_unit String,
-		pretax_gross_amount Float64,
-		invoice_discount Float64,
-		deducted_by_coupons Float64,
-		pretax_amount Float64,
-		currency_amount Float64,
-		payment_amount Float64,
-		outstanding_amount Float64,
-		region String,
-		zone String,
-		instance_spec String,
-		internet_ip String,
-		intranet_ip String,
-		resource_group String,
-		tags Map(String, String),
-		cost_unit String,
-		service_period String,
-		service_period_unit String,
-		list_price String,
-		list_price_unit String,
-		owner_id String,
-		split_item_id String,
-		split_item_name String,
-		split_account_id String,
-		split_account_name String,
-		nick_name String,
-		product_detail_code String,
-		biz_type String,
-		adjust_type String,
-		adjust_amount Float64,
-		granularity String DEFAULT 'MONTHLY',
-		created_at DateTime64(3) DEFAULT now(),
-		updated_at DateTime64(3) DEFAULT now()
-	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_cycle, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
-	PARTITION BY toYYYYMM(parseDateTimeBestEffort(billing_cycle || '-01'))`
+	return ddl.AliCloudMonthlyTable(s.monthlyTableName).SchemaClause()
 }
 
-// getDailyTableSchema gets daily table schema (for distributed tables)
+// getDailyTableSchema gets daily table schema. See getMonthlyTableSchema.
 func (s *BillService) getDailyTableSchema() string {
-	return `(
-		instance_id String,
-		instance_name String,
-		bill_account_id String,
-		bill_account_name String,
-		billing_date Date, -- Daily table must have value
-		billing_cycle String,
-		product_code String,
-		product_name String,
-		product_type String,
-		product_detail String,
-		subscription_type String,
-		pricing_unit String,
-		currency String,
-		billing_type String,
-		usage String,
-		usage_unit String,
-		pretax_gross_amount Float64,
-		invoice_discount Float64,
-		deducted_by_coupons Float64,
-		pretax_amount Float64,
-		currency_amount Float64,
-		payment_amount Float64,
-		outstanding_amount Float64,
-		region String,
-		zone String,
-		instance_spec String,
-		internet_ip String,
-		intranet_ip String,
-		resource_group String,
-		tags Map(String, String),
-		cost_unit String,
-		service_period String,
-		service_period_unit String,
-		list_price String,
-		list_price_unit String,
-		owner_id String,
-		split_item_id String,
-		split_item_name String,
-		split_account_id String,
-		split_account_name String,
-		nick_name String,
-		product_detail_code String,
-		biz_type String,
-		adjust_type String,
-		adjust_amount Float64,
-		granularity String DEFAULT 'DAILY',
-		created_at DateTime64(3) DEFAULT now(),
-		updated_at DateTime64(3) DEFAULT now()
-	) ENGINE = ReplacingMergeTree()
-	ORDER BY (billing_date, product_code, instance_id, bill_account_id, subscription_type, payment_amount)
-	PARTITION BY toYYYYMMDD(billing_date)`
+	return ddl.AliCloudDailyTable(s.dailyTableName).SchemaClause()
 }
 
 // SyncMonthlyBillData synchronizes monthly billing data

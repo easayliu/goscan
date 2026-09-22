@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/config"
+	"goscan/pkg/ddl"
 	"goscan/pkg/logger"
 	"sort"
 	"time"
@@ -30,7 +31,7 @@ func NewBillService(volcConfig *config.VolcEngineConfig, chClient *clickhouse.Cl
 	return &billServiceImpl{
 		volcClient: volcClient,
 		chClient:   chClient,
-		tableName:  "volcengine_bill_details",
+		tableName:  billTableName(volcConfig),
 		config:     volcConfig,
 	}, nil
 }
@@ -69,143 +70,18 @@ func (s *billServiceImpl) CreateBillTable(ctx context.Context) error {
 	}
 }
 
-// getBillTableSchema 获取账单表的模式定义
+// billTableName 返回账单表名，配置没写就用默认表名
+func billTableName(cfg *config.VolcEngineConfig) string {
+	if cfg != nil && cfg.BillTable != "" {
+		return cfg.BillTable
+	}
+	return ddl.DefaultVolcEngineBillTable
+}
+
+// getBillTableSchema 获取账单表的模式定义。列定义的唯一来源是 pkg/ddl，
+// 和 `goscan --ddl` 打印给 DDL Job 的那份是同一个，不会各改各的。
 func (s *billServiceImpl) getBillTableSchema() string {
-	return `(
-		-- 核心标识字段
-		BillDetailId String,
-		BillID String,
-		InstanceNo String,
-		
-		-- 时间字段
-		BillPeriod String,
-		BusiPeriod String,
-		ExpenseDate String,
-		ExpenseBeginTime String,
-		ExpenseEndTime String,
-		TradeTime String,
-		
-		-- 用户信息字段
-		PayerID String,
-		PayerUserName String,
-		PayerCustomerName String,
-		SellerID String,
-		SellerUserName String,
-		SellerCustomerName String,
-		OwnerID String,
-		OwnerUserName String,
-		OwnerCustomerName String,
-		
-		-- 产品信息字段
-		Product String,
-		ProductZh String,
-		SolutionZh String,
-		Element String,
-		ElementCode String,
-		Factor String,
-		FactorCode String,
-		
-		-- 配置信息字段
-		ConfigName String,
-		ConfigurationCode String,
-		InstanceName String,
-		
-		-- 地域信息字段
-		Region String,
-		RegionCode String,
-		Zone String,
-		ZoneCode String,
-		CountryRegion String,
-		
-		-- 计费模式信息
-		BillingMode String,
-		BusinessMode String,
-		BillingFunction String,
-		BillingMethodCode String,
-		SellingMode String,
-		SettlementType String,
-		
-		-- 用量信息字段
-		Count String,
-		Unit String,
-		UseDuration String,
-		UseDurationUnit String,
-		DeductionCount String,
-		DeductionUseDuration String,
-		
-		-- 价格信息字段
-		Price String,
-		PriceUnit String,
-		PriceInterval String,
-		MarketPrice String,
-		MeasureInterval String,
-		Formula String,
-		
-		-- 金额信息字段
-		OriginalBillAmount String,
-		PreferentialBillAmount String,
-		DiscountBillAmount String,
-		RoundAmount Float64,
-		PayableAmount String,
-		PreTaxPayableAmount String,
-		SettlePayableAmount String,
-		SettlePreTaxPayableAmount String,
-		PretaxAmount String,
-		PosttaxAmount String,
-		SettlePretaxAmount String,
-		SettlePosttaxAmount String,
-		Tax String,
-		SettleTax String,
-		TaxRate String,
-		PaidAmount String,
-		UnpaidAmount String,
-		CreditCarriedAmount String,
-		
-		-- 实际价值和结算信息
-		RealValue String,
-		PretaxRealValue String,
-		SettleRealValue String,
-		SettlePretaxRealValue String,
-		
-		-- 优惠和抵扣信息
-		CouponAmount String,
-		DiscountInfo String,
-		SavingPlanDeductionDiscountAmount String,
-		SavingPlanDeductionSpID String,
-		SavingPlanOriginalAmount String,
-		ReservationInstance String,
-		
-		-- 货币信息
-		Currency String,
-		CurrencySettlement String,
-		ExchangeRate String,
-		
-		-- 项目和分类信息
-		Project String,
-		ProjectDisplayName String,
-		BillCategory String,
-		SubjectName String,
-		Tag String,
-		
-		-- 折扣相关业务信息
-		DiscountBizBillingFunction String,
-		DiscountBizMeasureInterval String,
-		DiscountBizUnitPrice String,
-		DiscountBizUnitPriceInterval String,
-		
-		-- 其他业务信息
-		MainContractNumber String,
-		OriginalOrderNo String,
-		EffectiveFactor String,
-		ExpandField String,
-		
-		-- 系统字段
-		created_at DateTime64(3) DEFAULT now(),
-		updated_at DateTime64(3) DEFAULT now()
-	) ENGINE = ReplacingMergeTree
-	PARTITION BY toYYYYMM(toDate(ExpenseDate))
-	ORDER BY (BillPeriod, ExpenseDate, InstanceNo, ExpenseBeginTime, Product, ElementCode, PayableAmount)
-	SETTINGS index_granularity = 8192`
+	return ddl.VolcEngineBillTable(s.tableName).SchemaClause()
 }
 
 // SyncBillData 同步账单数据
