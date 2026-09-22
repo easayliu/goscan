@@ -24,6 +24,10 @@ workflow-*.json
 .DS_Store
 Thumbs.db
 
+# Finder / 编辑器复制出来的副本，如 "goscan-deployment copy.yaml"
+* copy.*
+* copy [0-9].*
+
 # 构建产物
 bin/
 dist/

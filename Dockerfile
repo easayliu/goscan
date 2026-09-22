@@ -1,4 +1,7 @@
-FROM golang:1.24-alpine AS builder
+# 构建阶段钉在构建机自己的架构上（BUILDPLATFORM），要哪个架构由 Go 交叉编译，
+# 不走 QEMU —— 多架构镜像里 arm64 那一份是模拟执行编译器，慢十倍不止，
+# 而 Go 交叉编译只是换两个环境变量。
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
 WORKDIR /src
 
 # 依赖单独一层：go.mod / go.sum 没动就能命中 buildcache，改代码不用重下一遍依赖。
@@ -14,8 +17,11 @@ COPY . .
 #
 # CGO_ENABLED=0：sqlite 驱动只是 go.mod 里的间接依赖，没有代码 import 它，
 # 关掉 cgo 出来的是静态二进制，不用再担心 alpine 和 glibc 的事。
+# TARGETOS / TARGETARCH 由 buildx 按 --platform 自动注入
+ARG TARGETOS
+ARG TARGETARCH
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
     -ldflags "-s -w -X main.version=${VERSION}" \
     -o /out/goscan ./cmd/server
 

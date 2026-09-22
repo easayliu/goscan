@@ -22,10 +22,6 @@ jobs:
             goarch: amd64
           - goos: linux
             goarch: arm64
-          - goos: darwin
-            goarch: amd64
-          - goos: darwin
-            goarch: arm64
     
     steps:
     - uses: actions/checkout@v4
@@ -43,11 +39,6 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-go-
     
-    - name: Install cross-compilation dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu musl-tools musl-dev
-    
     - name: Install dependencies
       run: go mod download
     
@@ -59,30 +50,14 @@ jobs:
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
-        CGO_ENABLED: 1
+        # 没有代码 import sqlite，关掉 cgo 出来就是纯静态二进制：不用交叉编译
+        # 工具链，也不再有 GLIBC 版本的问题（和 Dockerfile 里那份一致）
+        CGO_ENABLED: 0
       run: |
-        # 设置交叉编译工具链
-        if [ "$GOOS" = "linux" ]; then
-          if [ "$GOARCH" = "amd64" ]; then
-            export CC=musl-gcc
-            export CXX=musl-g++
-          elif [ "$GOARCH" = "arm64" ]; then
-            export CC=aarch64-linux-gnu-gcc
-            export CXX=aarch64-linux-gnu-g++
-          fi
-        elif [ "$GOOS" = "darwin" ]; then
-          # macOS交叉编译需要禁用CGO
-          export CGO_ENABLED=0
-        fi
         BINARY_NAME=goscan
-        
+
         mkdir -p dist
-        # 为了兼容老旧系统，使用静态链接
-        if [ "$GOOS" = "linux" ]; then
-          go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }} -linkmode external -extldflags '-static'" -o dist/${BINARY_NAME} cmd/server/main.go
-        else
-          go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" -o dist/${BINARY_NAME} cmd/server/main.go
-        fi
+        go build -ldflags "-s -w -X main.version=${{ steps.version.outputs.VERSION }}" -o dist/${BINARY_NAME} ./cmd/server
         
         # 创建发布包
         RELEASE_NAME=goscan-${{ steps.version.outputs.VERSION }}-${GOOS}-${GOARCH}
@@ -90,8 +65,8 @@ jobs:
         
         # 复制文件到发布包
         cp dist/${BINARY_NAME} ${RELEASE_NAME}/
-        cp README.md ${RELEASE_NAME}/ 2>/dev/null || echo "README.md not found"
-        cp config.yaml ${RELEASE_NAME}/ 2>/dev/null || echo "config.yaml not found"
+        cp README.md ${RELEASE_NAME}/
+        cp configs/config.daemon.yaml ${RELEASE_NAME}/config.yaml.example
         
         # 创建安装脚本（仅 Unix 系统）
         if [ "$GOOS" != "windows" ]; then
@@ -137,7 +112,7 @@ jobs:
         User=goscan
         Group=goscan
         WorkingDirectory=/opt/goscan
-        ExecStart=/usr/local/bin/goscan -c /opt/goscan/config.yaml
+        ExecStart=/usr/local/bin/goscan /opt/goscan/config.yaml
         Restart=always
         RestartSec=5
         StandardOutput=journal
@@ -169,7 +144,7 @@ jobs:
         echo "  3. 配置文件位置: /opt/goscan/config.yaml"
         echo ""
         echo "启动命令:"
-        echo "  goscan -c /opt/goscan/config.yaml"
+        echo "  goscan /opt/goscan/config.yaml"
         echo ""
         echo "Run 'goscan --help' to get more options."
         EOF
@@ -231,8 +206,6 @@ jobs:
           echo ""
           echo "- **Linux amd64**: goscan-${{ steps.version.outputs.VERSION }}-linux-amd64.tar.gz"
           echo "- **Linux arm64**: goscan-${{ steps.version.outputs.VERSION }}-linux-arm64.tar.gz"
-          echo "- **macOS amd64**: goscan-${{ steps.version.outputs.VERSION }}-darwin-amd64.tar.gz"
-          echo "- **macOS arm64 (M1/M2)**: goscan-${{ steps.version.outputs.VERSION }}-darwin-arm64.tar.gz"
           echo ""
           echo "### 安装说明"
           echo "1. 下载对应平台的压缩包"
@@ -287,6 +260,8 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        # 两个架构都由 Go 交叉编译（Dockerfile 里 builder 阶段钉在 BUILDPLATFORM），
+        # 所以这里不需要 docker/setup-qemu-action，也不会有模拟执行的几十分钟
         platforms: linux/amd64,linux/arm64
         push: true
         # 不传的话镜像里 `goscan --version` 会一直报 dev，
@@ -295,5 +270,14 @@ jobs:
           VERSION=${{ github.ref_name }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        # 多出来的 attestation manifest 会在镜像列表里显示成 unknown/unknown，
+        # 有些仓库和老版本 containerd 处理不了，这里用不上就关掉
+        provenance: false
+        # 缓存放 registry 而不是 type=gha：GHA 缓存按 ref 隔离，而本工作流只在
+        # v* tag 上触发，于是每个 tag 各写各的 scope、永远读不到上一个 tag 的，
+        # 等于每次发版都从零构建。registry 后端没有这个限制。
+        #
+        # mode=max 必须保留：默认的 min 只导出最终阶段的层，而 go mod download
+        # 那层在 builder 这个中间阶段里，min 模式下根本不会进缓存。
+        cache-from: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache
+        cache-to: type=registry,ref=ghcr.io/${{ github.repository }}:buildcache,mode=max

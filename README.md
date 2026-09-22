@@ -235,8 +235,10 @@ opdash 是只读服务，这条写路径建议由它的后端代调（浏览器�
 
 ## 发布
 
-打 `v*` tag 由 CI 构建镜像推到 GHCR（`.github/workflows/release.yml`），同时出各平台的二进制。
-镜像里的版本号来自构建参数 `VERSION`，`goscan --version` 报的就是 tag。
+打 `v*` tag 由 CI 构建镜像推到 GHCR（`.github/workflows/release.yml`），同时出
+linux amd64 / arm64 的二进制（纯静态，不依赖 GLIBC；macOS 包不再打，本地开发用 `make build`）。
+镜像是 `linux/amd64` + `linux/arm64` 的 manifest，两个架构都由 Go 交叉编译出来，
+不走 QEMU 模拟。镜像里的版本号来自构建参数 `VERSION`，`goscan --version` 报的就是 tag。
 
 ## 开发
 
