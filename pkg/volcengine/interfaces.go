@@ -40,6 +40,9 @@ type BillService interface {
 	// SmartSyncAllData 智能同步所有数据
 	SmartSyncAllData(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error)
 
+	// SmartSyncAllDataWithProgress 智能同步所有数据，每写完一页回调 onProgress(已写入行数, 总行数)
+	SmartSyncAllDataWithProgress(ctx context.Context, billPeriod string, tableName string, isDistributed bool, onProgress func(written, total int)) (*SyncResult, error)
+
 	// GetAPIDataCount 获取API数据总数
 	GetAPIDataCount(ctx context.Context, billPeriod string) (int32, error)
 

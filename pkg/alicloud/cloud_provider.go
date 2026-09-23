@@ -171,6 +171,11 @@ func (p *AliCloudProvider) SyncPeriodData(ctx context.Context, period, granulari
 		EnableValidation: options.EnableValidation,
 		MaxWorkers:       options.MaxWorkers,
 	}
+	if options.ProgressCallback != nil {
+		aliOptions.ProgressCallback = func(processed, total int) {
+			options.ProgressCallback(int64(processed), int64(total), "")
+		}
+	}
 
 	if granularity == "" {
 		var err error

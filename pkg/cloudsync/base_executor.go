@@ -160,14 +160,8 @@ func (e *BaseCloudSyncExecutor) executeOptimalSync(ctx context.Context, config *
 		zap.String("provider", e.provider.GetProviderName()),
 		zap.Int("periods_to_sync", len(inconsistentPeriods)))
 
-	// Clean inconsistent data if auto-clean is enabled
-	if config.AutoClean {
-		if err := e.consistencyChecker.CleanInconsistentData(ctx, inconsistentPeriods); err != nil {
-			return nil, fmt.Errorf("failed to clean inconsistent data: %w", err)
-		}
-	}
-
-	// Sync inconsistent periods
+	// Sync inconsistent periods. Each is cleared right before it is pulled
+	// (see syncPeriods), not all of them up front.
 	return e.syncPeriods(ctx, inconsistentPeriods, config)
 }
 
@@ -190,8 +184,12 @@ func (e *BaseCloudSyncExecutor) executeStandardSync(ctx context.Context, config 
 		if err != nil {
 			return nil, fmt.Errorf("failed to work out which periods need syncing: %w", err)
 		}
-	} else if config.AutoClean {
-		e.clearPeriods(ctx, periods)
+	} else {
+		// Forced: every period is pulled again, and cleared first. Why a
+		// re-pull has to start from an empty period is in clearBeforePull.
+		for _, period := range periods {
+			period.NeedCleanup = true
+		}
 	}
 
 	// Everything asked for is already in the database
@@ -213,11 +211,11 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 	var totalRecords, totalInserted int
 	var allErrors []error
 
-	report := func(done int, period *PeriodInfo) {
+	report := func(done int, period *PeriodInfo, records, recordsTotal int64) {
 		if config.Progress == nil {
 			return
 		}
-		p := SyncProgress{Done: done, Total: len(periods)}
+		p := SyncProgress{Done: done, Total: len(periods), Records: records, RecordsTotal: recordsTotal}
 		if period != nil {
 			p.Period, p.Granularity = period.Period, period.Granularity
 		}
@@ -225,6 +223,13 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 	}
 
 	for i, period := range periods {
+		// A stop request is honoured between passes only. Stopping inside one
+		// would leave its period cleared and half written — and nothing comes
+		// back to repair an old period: sync-optimal only looks at the latest.
+		if stopRequested(config) {
+			return e.cancelledResult(periods, i, totalInserted, allErrors, report), nil
+		}
+
 		logger.Info("syncing period",
 			zap.String("provider", e.provider.GetProviderName()),
 			zap.String("period", period.Period),
@@ -233,18 +238,30 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 			zap.Int("total", len(periods)))
 		// Report before the period starts, so the caller sees which one is in
 		// flight rather than only which ones are already done.
-		report(i, period)
+		report(i, period, 0, 0)
+
+		if config.AutoClean && period.NeedCleanup {
+			e.clearBeforePull(ctx, period)
+		}
 
 		// Create sync options
+		var written int64
 		syncOptions := &SyncOptions{
 			BatchSize:        config.BatchSize,
 			UseDistributed:   config.UseDistributed,
 			EnableValidation: true,
 			MaxWorkers:       config.MaxWorkers,
+			// The provider calls this as each batch of the period lands.
+			ProgressCallback: func(processed, total int64, _ string) {
+				written = processed
+				report(i, period, processed, total)
+			},
 		}
 
-		// Sync this period
+		// Sync this period. Rows written count even when the pass fails later
+		// on: they are in the table.
 		err := e.provider.SyncPeriodData(ctx, period.Period, period.Granularity, syncOptions)
+		totalInserted += int(written)
 		if err != nil {
 			allErrors = append(allErrors, fmt.Errorf("period %s: %w", period.Period, err))
 			logger.Error("period sync failed",
@@ -261,7 +278,7 @@ func (e *BaseCloudSyncExecutor) syncPeriods(ctx context.Context, periods []*Peri
 			zap.String("granularity", period.Granularity))
 	}
 
-	report(len(periods), nil)
+	report(len(periods), nil, 0, 0)
 
 	// If all periods failed
 	if len(allErrors) == len(periods) {
@@ -445,15 +462,23 @@ func granularitiesFor(provider CloudProvider, period, granularity string) []stri
 }
 
 // skipConsistentPeriods drops the periods whose row count already matches what
-// the API reports, and cleans the ones that do not match so the pull replaces
-// them instead of merging into them.
+// the API reports, and marks the ones that do not match (and hold rows) to be
+// cleared before they are pulled, so the pull replaces them instead of merging
+// into them.
 //
 // A period that cannot be checked is kept: re-pulling costs API quota, missing
 // a month costs the numbers on the page.
 func (e *BaseCloudSyncExecutor) skipConsistentPeriods(ctx context.Context, periods []*PeriodInfo, config *SyncConfig) ([]*PeriodInfo, error) {
 	var periodsNeedSync []*PeriodInfo
 
-	for _, period := range periods {
+	for i, period := range periods {
+		// Checking only reads, so a stop can land here at once. The periods
+		// not yet looked at go through unchecked: syncPeriods sees the same
+		// stop before starting any of them and reports them as not run.
+		if stopRequested(config) {
+			return append(periodsNeedSync, periods[i:]...), nil
+		}
+
 		// Check consistency
 		consistent, err := e.consistencyChecker.CheckPeriodConsistency(ctx, period)
 		if err != nil {
@@ -474,24 +499,16 @@ func (e *BaseCloudSyncExecutor) skipConsistentPeriods(ctx context.Context, perio
 			continue
 		}
 
-		// Clean existing data if needed
-		if period.DBCount > 0 && config.AutoClean {
-			if err := e.consistencyChecker.CleanInconsistentData(ctx, []*PeriodInfo{period}); err != nil {
-				logger.Error("failed to clean period data",
-					zap.String("provider", e.provider.GetProviderName()),
-					zap.String("period", period.Period),
-					zap.String("granularity", period.Granularity),
-					zap.Error(err))
-			}
-		}
-
+		// Rows that are there but do not match get cleared — right before the
+		// period is pulled, in syncPeriods, not here.
+		period.NeedCleanup = period.DBCount > 0
 		periodsNeedSync = append(periodsNeedSync, period)
 	}
 
 	return periodsNeedSync, nil
 }
 
-// clearPeriods empties every period a forced run is about to pull again.
+// clearBeforePull empties a period right before it is pulled again.
 //
 // Re-pulling on top of the old rows leans on ReplacingMergeTree to replace them,
 // and it can only replace a line whose key comes back. A line the provider has
@@ -499,19 +516,61 @@ func (e *BaseCloudSyncExecutor) skipConsistentPeriods(ctx context.Context, perio
 // one line shorter and so no longer reaches its old last line_seq — never comes
 // back, and would stay in the table counted twice with nothing to replace it.
 //
-// A period that fails to clear is still pulled, as skipConsistentPeriods does:
-// the pull overwrites every line that still exists, which leaves the table no
-// worse than before and the next consistency check to catch the rest.
-func (e *BaseCloudSyncExecutor) clearPeriods(ctx context.Context, periods []*PeriodInfo) {
-	for _, period := range periods {
-		period.NeedCleanup = true
-		if err := e.consistencyChecker.CleanInconsistentData(ctx, []*PeriodInfo{period}); err != nil {
-			logger.Error("failed to clear period before forced re-pull",
-				zap.String("provider", e.provider.GetProviderName()),
-				zap.String("period", period.Period),
-				zap.String("granularity", period.Granularity),
-				zap.Error(err))
-		}
+// It happens per pass and not for the whole run up front: a run that stops
+// early, by request or by failure, then leaves the passes it never reached
+// exactly as they were, rather than cleared and empty.
+//
+// A period that fails to clear is still pulled: the pull overwrites every line
+// that still exists, which leaves the table no worse than before and the next
+// consistency check to catch the rest.
+func (e *BaseCloudSyncExecutor) clearBeforePull(ctx context.Context, period *PeriodInfo) {
+	if err := e.consistencyChecker.CleanInconsistentData(ctx, []*PeriodInfo{period}); err != nil {
+		logger.Error("failed to clear period before re-pull",
+			zap.String("provider", e.provider.GetProviderName()),
+			zap.String("period", period.Period),
+			zap.String("granularity", period.Granularity),
+			zap.Error(err))
+	}
+}
+
+// stopRequested reports whether the caller has asked the run to stop.
+func stopRequested(config *SyncConfig) bool {
+	if config.Stop == nil {
+		return false
+	}
+	select {
+	case <-config.Stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// cancelledResult describes a run that stopped on request with done of its
+// passes finished.
+func (e *BaseCloudSyncExecutor) cancelledResult(periods []*PeriodInfo, done, written int, errs []error, report func(int, *PeriodInfo, int64, int64)) *SyncResult {
+	notRun := make([]string, 0, len(periods)-done)
+	for _, period := range periods[done:] {
+		notRun = append(notRun, period.Period+" "+period.Granularity)
+	}
+	report(done, nil, 0, 0)
+
+	logger.Info("sync stopped on request",
+		zap.String("provider", e.provider.GetProviderName()),
+		zap.Int("passes_done", done),
+		zap.Int("passes_total", len(periods)),
+		zap.Strings("not_run", notRun))
+
+	message := fmt.Sprintf("%s sync cancelled after %d/%d passes", e.provider.GetProviderName(), done, len(periods))
+	if len(errs) > 0 {
+		message += fmt.Sprintf(", %d of them failed", len(errs))
+	}
+	return &SyncResult{
+		Success:          len(errs) == 0,
+		RecordsProcessed: written,
+		Message:          message,
+		Cancelled:        true,
+		NotRun:           notRun,
 	}
 }
 

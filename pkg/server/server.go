@@ -165,10 +165,12 @@ func (s *HTTPServer) setupAPIRoutes() {
 	// Task management routes (RESTful)
 	tasks := s.router.Group("/tasks")
 	{
-		tasks.GET("", s.handlerSvc.GetTasks)          // List all tasks
-		tasks.POST("", s.handlerSvc.CreateTask)       // Create a new task
-		tasks.GET("/:id", s.handlerSvc.GetTask)       // Get a specific task
-		tasks.DELETE("/:id", s.handlerSvc.DeleteTask) // Delete a specific task
+		tasks.GET("", s.handlerSvc.GetTasks)              // List all tasks
+		tasks.POST("", s.handlerSvc.CreateTask)           // Create a new task
+		tasks.GET("/events", s.handlerSvc.StreamTasks)    // Stream every task's changes (SSE)
+		tasks.GET("/:id", s.handlerSvc.GetTask)           // Get a specific task
+		tasks.GET("/:id/events", s.handlerSvc.StreamTask) // Stream one task's changes (SSE)
+		tasks.DELETE("/:id", s.handlerSvc.DeleteTask)     // Delete a specific task
 	}
 
 	// Sync management routes

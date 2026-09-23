@@ -88,6 +88,12 @@ func (s *billServiceImpl) IntelligentSyncWithPagination(ctx context.Context, bil
 
 // SmartSyncAllData 智能同步所有数据（边获取边写入）
 func (s *billServiceImpl) SmartSyncAllData(ctx context.Context, billPeriod string, tableName string, isDistributed bool) (*SyncResult, error) {
+	return s.SmartSyncAllDataWithProgress(ctx, billPeriod, tableName, isDistributed, nil)
+}
+
+// SmartSyncAllDataWithProgress 同 SmartSyncAllData，每写完一页回调一次 onProgress(已写入行数, 账期总行数)。
+// onProgress 为 nil 时不回调。总行数取自首页的 Total，写入数可能小于它（失败的页会被跳过）。
+func (s *billServiceImpl) SmartSyncAllDataWithProgress(ctx context.Context, billPeriod string, tableName string, isDistributed bool, onProgress func(written, total int)) (*SyncResult, error) {
 	logger.Info("Volcengine intelligent sync started",
 		zap.String("provider", "volcengine"),
 		zap.String("bill_period", billPeriod))
@@ -197,6 +203,9 @@ func (s *billServiceImpl) SmartSyncAllData(ctx context.Context, billPeriod strin
 				zap.String("provider", "volcengine"),
 				zap.Int("page_num", pageNum),
 				zap.Int("inserted_records", processResult.InsertedRecords))
+			if onProgress != nil {
+				onProgress(totalProcessed, int(totalRecords))
+			}
 		}
 
 		// 显示总体进度

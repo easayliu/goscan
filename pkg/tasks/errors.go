@@ -28,6 +28,10 @@ var (
 	// ErrTaskCancelled indicates task was cancelled
 	ErrTaskCancelled = errors.New("task was cancelled")
 
+	// ErrTaskNotCancellable indicates the task cannot be stopped: it has
+	// already finished, or it is not a sync (only syncs stop between passes)
+	ErrTaskNotCancellable = errors.New("task cannot be cancelled")
+
 	// ErrInvalidPeriod indicates invalid billing period
 	ErrInvalidPeriod = errors.New("invalid billing period")
 

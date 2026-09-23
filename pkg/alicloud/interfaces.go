@@ -36,6 +36,9 @@ type DataProcessor interface {
 
 	// GetTotalCount 获取总记录数
 	GetTotalCount() int64
+
+	// SetTotalRecords 设置本次拉取的总记录数（接口首页报的 TotalCount），进度回调据此给出分母
+	SetTotalRecords(total int64)
 }
 
 // BillServiceInterface 账单服务接口

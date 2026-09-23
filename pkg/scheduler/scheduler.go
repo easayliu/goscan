@@ -395,6 +395,13 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 			ts.updateJobStatus(job, JobStatusScheduled)
 			return
 		}
+		if errors.Is(err, tasks.ErrTaskCancelled) {
+			// Someone stopped this run from the UI. It is not a failure, and
+			// the job stays scheduled for its next slot.
+			logger.Info("Scheduled job stopped on request", zap.String("job_name", job.Name))
+			ts.updateJobStatus(job, JobStatusScheduled)
+			return
+		}
 		if err != nil {
 			logger.Error("Scheduled job failed", zap.String("job_name", job.Name), zap.Error(err))
 			ts.updateJobStatus(job, JobStatusFailed)

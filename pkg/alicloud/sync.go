@@ -404,6 +404,12 @@ func (sm *syncManager) executePaginatedSyncImpl(ctx context.Context, paginator P
 			break // 没有更多数据
 		}
 
+		// 首页带着整个账期的 TotalCount，进度回调从这里拿到分母。按天整月同步
+		// 不走这里：它一天一天拉，每天各有各的 TotalCount，月度总数事先不知道。
+		if totalRecords == 0 {
+			processor.SetTotalRecords(int64(response.Data.TotalCount))
+		}
+
 		// 批量处理数据
 		if err := processor.ProcessBatchWithBillingCycle(ctx, tableName, response.Data.Items, response.Data.BillingCycle); err != nil {
 			return fmt.Errorf("failed to process batch: %w", err)

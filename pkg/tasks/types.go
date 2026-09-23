@@ -1,7 +1,6 @@
 package tasks
 
 import (
-	"context"
 	"time"
 
 	"goscan/pkg/cloudsync"
@@ -55,15 +54,23 @@ type Task struct {
 	Status    TaskStatus    `json:"status"`
 	StartTime time.Time     `json:"start_time"`
 	EndTime   time.Time     `json:"end_time"`
-	Duration  time.Duration `json:"duration"`
+	Duration  time.Duration `json:"duration" swaggertype:"integer" example:"1500000000"` // nanoseconds, as time.Duration encodes
 	Config    TaskConfig    `json:"config"`
-	// Progress is where a running sync has got to. It is replaced wholesale on
-	// every update and never modified in place: readers hold the manager's read
-	// lock only long enough to copy the pointer, and serialise afterwards.
-	Progress *TaskProgress      `json:"progress,omitempty"`
-	Result   *TaskResult        `json:"result,omitempty"`
-	Error    string             `json:"error,omitempty"`
-	Cancel   context.CancelFunc `json:"-"`
+	// Progress is where a running sync has got to; absent until the sync first
+	// reports. It is replaced wholesale on every update and never edited in
+	// place, which is what lets a shallow copy of the task be read after the
+	// manager's lock is gone.
+	Progress *TaskProgress `json:"progress,omitempty"`
+	Result   *TaskResult   `json:"result,omitempty"`
+	Error    string        `json:"error,omitempty"`
+	// CancelRequested is set once someone has asked the task to stop. It keeps
+	// running until the pass in flight is written, then ends as cancelled —
+	// or as completed, if that pass was its last.
+	CancelRequested bool `json:"cancel_requested,omitempty"`
+
+	// stop is closed when the cancel is requested; the sync checks it between
+	// passes (cloudsync.SyncConfig.Stop).
+	stop chan struct{}
 }
 
 // TaskProgress says how far a sync has got, in billing periods — the unit the
@@ -74,10 +81,16 @@ type TaskProgress struct {
 	// Granularity names the table that period is going into ("monthly" or
 	// "daily"). A run over both visits every period twice, so without it the
 	// bar looks like it is repeating itself.
-	Granularity string    `json:"granularity,omitempty"`
-	Done        int       `json:"done"`
-	Total       int       `json:"total"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Granularity string `json:"granularity,omitempty"`
+	Done        int    `json:"done"`
+	Total       int    `json:"total"`
+	// Records is how many rows of the period in flight are written so far and
+	// RecordsTotal how many the API said it holds; 0 when that is not known up
+	// front (a whole cycle at daily granularity is fetched one day at a time).
+	// A single period can take minutes, and these are what move meanwhile.
+	Records      int64     `json:"records"`
+	RecordsTotal int64     `json:"records_total,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // TaskResult holds the result of a completed task
@@ -87,12 +100,15 @@ type TaskResult struct {
 	Status           string        `json:"status"`
 	RecordsProcessed int           `json:"records_processed"`
 	RecordsFetched   int           `json:"records_fetched"`
-	Duration         time.Duration `json:"duration"`
+	Duration         time.Duration `json:"duration" swaggertype:"integer" example:"1500000000"` // nanoseconds
 	Success          bool          `json:"success"`
 	Message          string        `json:"message"`
 	Error            string        `json:"error,omitempty"`
 	StartedAt        time.Time     `json:"started_at"`
 	CompletedAt      time.Time     `json:"completed_at"`
+	// NotRun names the passes a cancelled sync never started, e.g.
+	// "2026-04 daily". Their tables were left exactly as they were.
+	NotRun []string `json:"not_run,omitempty"`
 }
 
 // SmartTimeSelection represents smart time selection for sync-optimal mode
@@ -140,6 +156,8 @@ type SyncConfig struct {
 	// next. The task manager points it at the task so /tasks/{id} can answer
 	// "how far along is it" instead of just "still running".
 	Progress cloudsync.ProgressReporter
+	// Stop, once closed, stops the sync after the pass in flight.
+	Stop <-chan struct{}
 }
 
 // TableConfig holds table creation configuration
@@ -161,6 +179,8 @@ type SyncResult struct {
 	StartedAt        time.Time              `json:"started_at"`
 	CompletedAt      time.Time              `json:"completed_at"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+	Cancelled        bool                   `json:"cancelled,omitempty"`
+	NotRun           []string               `json:"not_run,omitempty"`
 }
 
 // DataCheckResult holds data check results

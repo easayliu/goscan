@@ -99,6 +99,9 @@ type TaskManager interface {
 
 	// GetTotalTaskCount 获取总任务数量
 	GetTotalTaskCount() int
+
+	// Subscribe 订阅任务状态变化：taskID 为空时订阅全部任务。用完必须 Close
+	Subscribe(taskID string) (TaskSubscription, error)
 }
 
 // TimeSelector 定义时间选择器接口

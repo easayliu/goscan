@@ -25,6 +25,12 @@ type TaskManagerImpl struct {
 	notificationExecutor *NotificationTaskExecutor
 	executorFactory      *ExecutorFactory
 	maxTasks             int
+
+	// subs are the open task feeds (see Subscribe). Every change to a task is
+	// published to them under tasksMutex; subsMu only guards the set itself and
+	// is always taken after tasksMutex, never before.
+	subsMu sync.Mutex
+	subs   map[*TaskFeed]struct{}
 }
 
 // NewTaskManager creates a new task manager
@@ -87,18 +93,21 @@ func (tm *TaskManagerImpl) ExecuteTask(ctx context.Context, req *TaskRequest) (*
 		return nil, err
 	}
 
-	// Execute task asynchronously
-	go tm.executeTaskInternal(ctx, task)
-
-	// Return initial result
-	return &TaskResult{
+	// Built before the task starts: from then on its goroutine owns the task
+	// and reading Status here would race with it.
+	accepted := &TaskResult{
 		ID:        task.ID,
 		Type:      string(task.Type),
 		Status:    string(task.Status),
 		StartedAt: task.StartTime,
 		Success:   true,
 		Message:   "Task started successfully",
-	}, nil
+	}
+
+	// Execute task asynchronously
+	go tm.executeTaskInternal(ctx, task)
+
+	return accepted, nil
 }
 
 // ExecuteTaskSync runs a task on the calling goroutine and returns only once it
@@ -123,40 +132,41 @@ func (tm *TaskManagerImpl) ExecuteTaskSync(ctx context.Context, req *TaskRequest
 
 	tm.executeTaskInternal(ctx, task)
 
-	if task.Status == TaskStatusFailed {
+	switch task.Status {
+	case TaskStatusFailed:
 		return task.Result, fmt.Errorf("task %s failed: %s", task.ID, task.Error)
+	case TaskStatusCancelled:
+		return task.Result, fmt.Errorf("%w: %s", ErrTaskCancelled, task.ID)
 	}
 	return task.Result, nil
 }
 
-// GetTask retrieves a specific task
+// GetTask retrieves a specific task, as a copy.
+//
+// Callers serialise the result after the lock is gone, while the sync keeps
+// writing Status and Progress on the live task; handing out the task itself
+// made every GET /tasks/{id} during a sync a data race.
 func (tm *TaskManagerImpl) GetTask(taskID string) (*Task, error) {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
 
-	// Check running tasks
-	if task, exists := tm.tasks[taskID]; exists {
-		return task, nil
+	task := tm.findTaskLocked(taskID)
+	if task == nil {
+		return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
-
-	// Check historical tasks
-	for _, task := range tm.taskHistory {
-		if task.ID == taskID {
-			return task, nil
-		}
-	}
-
-	return nil, fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
+	snap := snapshot(task)
+	return &snap, nil
 }
 
-// GetTasks retrieves all active tasks
+// GetTasks retrieves all active tasks, as copies (see GetTask).
 func (tm *TaskManagerImpl) GetTasks() []*Task {
 	tm.tasksMutex.RLock()
 	defer tm.tasksMutex.RUnlock()
 
 	tasks := make([]*Task, 0, len(tm.tasks))
 	for _, task := range tm.tasks {
-		tasks = append(tasks, task)
+		snap := snapshot(task)
+		tasks = append(tasks, &snap)
 	}
 	return tasks
 }
@@ -172,32 +182,36 @@ func (tm *TaskManagerImpl) GetTaskHistory() []*Task {
 	return history
 }
 
-// CancelTask cancels a task
+// CancelTask asks a sync to stop after the pass it is on.
+//
+// It returns as soon as the request is recorded; the task goes on until that
+// pass is written and then ends as cancelled (or completed, if it was the last
+// pass). Stopping mid-pass is deliberately not offered: the period in flight
+// has been cleared for the re-pull, and cutting it off would leave it half
+// written with nothing scheduled to come back for it. Asking twice is fine.
 func (tm *TaskManagerImpl) CancelTask(taskID string) error {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 
-	task, exists := tm.tasks[taskID]
-	if !exists {
+	task := tm.findTaskLocked(taskID)
+	if task == nil {
 		return fmt.Errorf("%w: %s", ErrTaskNotFound, taskID)
 	}
-
-	if task.Status != TaskStatusRunning {
-		return fmt.Errorf("task %s is not running (status: %s)", taskID, task.Status)
+	if snapshot(task).IsFinal() {
+		return fmt.Errorf("%w: task %s has already %s", ErrTaskNotCancellable, taskID, task.Status)
+	}
+	if task.Type != TaskTypeSync {
+		return fmt.Errorf("%w: only syncs can be stopped, task %s is a %s", ErrTaskNotCancellable, taskID, task.Type)
+	}
+	if task.CancelRequested {
+		return nil
 	}
 
-	// Call cancel function
-	if task.Cancel != nil {
-		task.Cancel()
-	}
+	task.CancelRequested = true
+	close(task.stop)
+	tm.publishLocked(task)
 
-	// Update task status
-	task.Status = TaskStatusCancelled
-	task.EndTime = time.Now()
-	task.Duration = task.EndTime.Sub(task.StartTime)
-	task.Error = "Task was cancelled"
-
-	logger.Info("Task cancelled", zap.String("task_id", taskID))
+	logger.Info("Task cancel requested, stopping after the current pass", zap.String("task_id", taskID))
 	return nil
 }
 
@@ -245,8 +259,6 @@ func (tm *TaskManagerImpl) checkTaskLimit() error {
 
 // createTask creates a task
 func (tm *TaskManagerImpl) createTask(req *TaskRequest) *Task {
-	_, cancel := context.WithCancel(tm.ctx)
-
 	return &Task{
 		ID:        req.ID,
 		Type:      req.Type,
@@ -254,7 +266,7 @@ func (tm *TaskManagerImpl) createTask(req *TaskRequest) *Task {
 		Status:    TaskStatusPending,
 		StartTime: time.Now(),
 		Config:    req.Config,
-		Cancel:    cancel,
+		stop:      make(chan struct{}),
 	}
 }
 
@@ -282,6 +294,7 @@ func (tm *TaskManagerImpl) addTask(task *Task) error {
 	}
 
 	tm.tasks[task.ID] = task
+	tm.publishLocked(task)
 	return nil
 }
 
@@ -339,6 +352,7 @@ func (tm *TaskManagerImpl) executeSyncTask(ctx context.Context, task *Task) (*Ta
 		Progress: func(p cloudsync.SyncProgress) {
 			tm.updateTaskProgress(task, p)
 		},
+		Stop: task.stop,
 	}
 
 	// Tables are not created here on purpose: schema changes belong to
@@ -376,10 +390,15 @@ func (tm *TaskManagerImpl) executeNotificationTask(ctx context.Context, task *Ta
 
 // convertSyncResult converts sync result
 func (tm *TaskManagerImpl) convertSyncResult(syncResult *SyncResult, task *Task) *TaskResult {
+	status := TaskStatusCompleted
+	if syncResult.Cancelled {
+		status = TaskStatusCancelled
+	}
 	return &TaskResult{
 		ID:               task.ID,
 		Type:             string(task.Type),
-		Status:           string(TaskStatusCompleted),
+		Status:           string(status),
+		NotRun:           syncResult.NotRun,
 		RecordsProcessed: syncResult.RecordsProcessed,
 		RecordsFetched:   syncResult.RecordsFetched,
 		Duration:         syncResult.Duration,
@@ -396,6 +415,7 @@ func (tm *TaskManagerImpl) updateTaskStatus(task *Task, status TaskStatus) {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 	task.Status = status
+	tm.publishLocked(task)
 }
 
 // updateTaskProgress records how far the sync has got.
@@ -407,12 +427,15 @@ func (tm *TaskManagerImpl) updateTaskProgress(task *Task, p cloudsync.SyncProgre
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
 	task.Progress = &TaskProgress{
-		Period:      p.Period,
-		Granularity: p.Granularity,
-		Done:        p.Done,
-		Total:       p.Total,
-		UpdatedAt:   time.Now(),
+		Period:       p.Period,
+		Granularity:  p.Granularity,
+		Done:         p.Done,
+		Total:        p.Total,
+		Records:      p.Records,
+		RecordsTotal: p.RecordsTotal,
+		UpdatedAt:    time.Now(),
 	}
+	tm.publishLocked(task)
 }
 
 // finishTask completes a task
@@ -425,11 +448,17 @@ func (tm *TaskManagerImpl) finishTask(task *Task, result *TaskResult, err error)
 	task.Duration = task.EndTime.Sub(task.StartTime)
 
 	// Set task status and result
-	if err != nil {
+	switch {
+	case err != nil:
 		task.Status = TaskStatusFailed
 		task.Error = err.Error()
 		logger.Error("Task execution failed", zap.String("task_id", task.ID), zap.Error(err))
-	} else {
+	case result != nil && result.Status == string(TaskStatusCancelled):
+		task.Status = TaskStatusCancelled
+		task.Result = result
+		logger.Info("Task stopped on request", zap.String("task_id", task.ID),
+			zap.Strings("not_run", result.NotRun), zap.Duration("duration", task.Duration))
+	default:
 		task.Status = TaskStatusCompleted
 		task.Result = result
 		logger.Info("Task execution completed", zap.String("task_id", task.ID), zap.Duration("duration", task.Duration))
@@ -443,4 +472,6 @@ func (tm *TaskManagerImpl) finishTask(task *Task, result *TaskResult, err error)
 	if len(tm.taskHistory) > 100 {
 		tm.taskHistory = tm.taskHistory[1:]
 	}
+
+	tm.publishLocked(task)
 }

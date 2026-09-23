@@ -281,17 +281,94 @@ curl -X POST http://goscan.logging.svc.cluster.local:8080/sync \
 一次任务要拉 12 趟 —— 6 个账期各拉一趟月表、一趟日表。日表按天逐日调用云厂商接口，
 因此补一个月的日账单比补一个月的月账单慢得多，补历史时留足时间。
 
-**接口立刻返回，同步在后台跑**，拿 `task_id` 轮询 `GET /tasks/{task_id}` 看结果：
-`status` 是 `running` / `completed` / `failed`，完成后 `result` 里有
-`records_processed`、`duration`，失败的话 `error` 里是原因。`progress` 报的是
+**接口立刻返回，同步在后台跑**，拿 `task_id` 看结果 —— 订阅推送（见下节「实时进度」）
+或者轮询 `GET /tasks/{task_id}`，两者返回的是同一份任务 JSON：
+`status` 是 `pending` / `running` / `completed` / `failed` / `cancelled`，完成后 `result` 里有
+`records_processed`、`duration`（纳秒），失败的话 `error` 里是原因。`progress` 报的是
 「拉到第几趟」——`period` 是当前账期，`granularity` 是这一趟写哪张表，
-`done` / `total` 的单位就是上面那个乘出来的趟数。
+`done` / `total` 的单位就是上面那个乘出来的趟数；`records` / `records_total` 是这一趟
+已经写入的行数和接口报的总行数，一趟要跑好几分钟时靠它们看出还在动（按天拉整月时
+总行数事先不知道，`records_total` 不出现，只有 `records` 在涨）。
+
+### 实时进度（给前端）
+
+不用轮询：任务每变一次（受理、开跑、写完一批、换账期、结束）服务端就推一条，
+用的是 [Server-Sent Events](https://developer.mozilla.org/docs/Web/API/Server-sent_events)，
+浏览器原生 `EventSource` 直接能收，不需要任何库。
+
+| 路径 | 推什么 | 什么时候结束 |
+| --- | --- | --- |
+| `GET /tasks/{id}/events` | 这一个任务 | 任务 `completed` / `failed` / `cancelled` 之后发一条 `done`，然后关连接 |
+| `GET /tasks/events` | 所有任务（手动的、cron 的、日报都算） | 不结束，页面关掉为止 |
+
+每条是 `event: task`，`data` 就是 `GET /tasks/{id}` 返回的那份 JSON。连上时先推当前状态
+（单任务：它自己，已结束的也能查到；全部：所有进行中的任务），之后只推变化：
+
+```text
+event: task
+data: {"id":"6f1c…","provider":"alicloud","status":"running","progress":{"period":"2026-08","granularity":"monthly","done":0,"total":12,"records":3400,"records_total":9120,"updated_at":"…"},…}
+
+event: task
+data: {"id":"6f1c…","status":"completed","result":{"records_processed":109440,…},…}
+
+event: done
+data: {}
+```
+
+```js
+const es = new EventSource(`/api/goscan/tasks/${taskId}/events`)  // 经 opdash 后端转发
+es.addEventListener('task', (e) => render(JSON.parse(e.data)))
+es.addEventListener('done', () => es.close())  // 必须 close，见下
+```
+
+要注意的几件事：
+
+* **收到 `done` 一定要 `close()`**。`EventSource` 断线会自己重连，不关的话每隔几秒
+  重连一次、再拿到一遍已结束的任务、再被关掉，一直循环。任务 id 查不到时返回 404，
+  `EventSource` 遇到非 200 不会重连。
+* **推的是状态不是事件流水**。客户端跟不上时中间的进度会被合并，但每个任务的最终状态
+  一定送到；断线重连后第一条就是最新状态，没有要补的历史，所以也没有 `Last-Event-ID`。
+* **闲着的时候每 15 秒有一行 `: ping` 注释**保活，`EventSource` 会自动忽略；
+  网关的读超时（ingress-nginx 默认 60 秒）只要比它长就不会断。
+* **中间转发不能缓冲**。goscan 已带 `X-Accel-Buffering: no`，nginx / ingress-nginx
+  会逐条放行。opdash 后端转发时同理：Go 的 `httputil.ReverseProxy` 认得 `text/event-stream`，
+  会逐条 flush；自己写转发的，每读到一块就要 flush 给浏览器，不能等响应读完再回。
+* 轮询 `GET /tasks/{id}` 照样能用，拿到的是同一份数据。
+
+### 停止同步
+
+填错参数的补数可能要跑几个小时，期间这朵云的其他同步（包括每天的 cron）都会被 409 挡掉，
+所以任务可以中途停下：
+
+```bash
+curl -X DELETE http://goscan.logging.svc.cluster.local:8080/tasks/6f1c…
+# 202 {"task_id":"6f1c…","status":"cancelling","message":"Stop requested: …"}
+```
+
+**停在两趟之间，不停在一趟中间。** 请求立刻返回 202，但任务会把手上这一趟
+（一个账期 × 一个粒度）写完才停，所以按下去到真正停下要等几秒到几分钟。
+一趟拉之前会先清空这个账期，中途掐断就会留下「清空了、只写了一半」的账期，
+而且老账期之后没人会回来补（`sync-optimal` 只看最新的），所以不提供立即中断。
+按天拉整月算一趟，它是最慢的那种。
+
+前端这样接：
+
+| 看到的 | 显示 |
+| --- | --- |
+| `DELETE` 返回 202 | 按钮变成「正在停止…」，不用再点（再点也无妨） |
+| 推送里 `status: running` 且 `cancel_requested: true` | 同上，还在写最后一趟 |
+| 推送里 `status: cancelled` | 已停。`result.not_run` 列出没跑的趟（如 `"2026-04 daily"`），这些账期的数据原样没动；`result.records_processed` 是停下前写入的行数 |
+| 推送里 `status: completed`（虽然点过停止） | 停止请求到的时候已经是最后一趟，它就正常跑完了 |
+| `DELETE` 返回 409 | 任务已经结束了，或者不是同步任务（日报发送不能停） |
+| `DELETE` 返回 404 | 任务查不到 |
+
+cron 跑的任务一样能停，停下后这个 job 照常等下一次触发，日志里是 `Scheduled job stopped on request`。
 
 状态码就是 opdash 那边要分的几种情况：
 
 | 状态码 | 含义 | 界面上该怎么办 |
 | --- | --- | --- |
-| `200` | 已受理 | 拿 task_id 轮询 |
+| `200` | 已受理 | 拿 task_id 订阅进度（或轮询） |
 | `409` | **这朵云已经有同步在跑** | 提示「正在同步中」，别重复发 |
 | `429` | 并发任务数到上限 | 稍后再试 |
 | `400` | 参数不对 | 报错信息直接显示 |
@@ -310,6 +387,8 @@ opdash 是只读服务，这条写路径建议由它的后端代调（浏览器�
 | --- | --- |
 | `GET /health` | 健康检查，探针用 |
 | `GET /tasks`、`GET /tasks/:id` | 任务列表和单个任务的结果 |
+| `GET /tasks/events`、`GET /tasks/:id/events` | 同上，实时推送（SSE，见「实时进度」） |
+| `DELETE /tasks/:id` | 停止同步，跑完当前这一趟再停（见「停止同步」） |
 | `POST /tasks` | 和 `POST /sync` 等价的通用入口，可自带 `id` 让重试幂等 |
 | `GET /sync`、`GET /sync/history` | 同步状态与历史 |
 | `GET /scheduler/status`、`GET /scheduler/jobs` | 调度器和任务计划 |

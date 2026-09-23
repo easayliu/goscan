@@ -786,6 +786,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/tasks/events": {
+            "get": {
+                "description": "Pushes ` + "`" + `event: task` + "`" + ` for every active task on connect, then one each time any task changes — manual syncs, scheduled ones and notifications alike. The stream stays open; a task whose status is completed, failed or cancelled has finished.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Task Management"
+                ],
+                "summary": "Stream all tasks' progress (Server-Sent Events)",
+                "responses": {
+                    "200": {
+                        "description": "event: task — one per change of any task",
+                        "schema": {
+                            "$ref": "#/definitions/tasks.Task"
+                        }
+                    }
+                }
+            }
+        },
         "/tasks/{id}": {
             "get": {
                 "description": "Get detailed information of a specific task by task ID, including task status, execution progress, error information, etc.",
@@ -812,7 +832,7 @@ const docTemplate = `{
                     "200": {
                         "description": "Task details retrieved successfully",
                         "schema": {
-                            "$ref": "#/definitions/models.TaskResponse"
+                            "$ref": "#/definitions/tasks.Task"
                         }
                     },
                     "400": {
@@ -830,21 +850,59 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Cancel running tasks or delete completed task records. Running tasks will be forcibly stopped.",
-                "consumes": [
-                    "application/json"
-                ],
+                "description": "Asks the sync to stop after the pass (one period × one granularity) it is on. The answer comes at once, with 202: the task keeps running until that pass is written, meanwhile carrying cancel_requested=true, and then ends as cancelled — or as completed, if that pass was its last. Watch it on GET /tasks/{id}/events.\nPasses that never started are listed in result.not_run and their data is untouched; no period is ever left half written. Asking again while it stops is fine.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "Task Management"
                 ],
-                "summary": "Cancel or delete task",
+                "summary": "Stop a running sync",
                 "parameters": [
                     {
                         "type": "string",
-                        "description": "Unique task identifier ID",
+                        "description": "Task ID returned by POST /sync",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "202": {
+                        "description": "Stop requested",
+                        "schema": {
+                            "$ref": "#/definitions/models.MessageResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Task not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Task has already finished, or is not a sync",
+                        "schema": {
+                            "$ref": "#/definitions/models.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/tasks/{id}/events": {
+            "get": {
+                "description": "Pushes the task's state every time it changes, as ` + "`" + `event: task` + "`" + ` with the same JSON GET /tasks/{id} returns. The first event is the current state; when the task completes, fails or is cancelled the last ` + "`" + `task` + "`" + ` event is followed by ` + "`" + `event: done` + "`" + ` and the stream closes.\nUse it from a browser with ` + "`" + `new EventSource('/tasks/{id}/events')` + "`" + ` and call ` + "`" + `close()` + "`" + ` on ` + "`" + `done` + "`" + ` — otherwise EventSource reconnects by itself, gets the finished task once more and is closed again, every few seconds.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "Task Management"
+                ],
+                "summary": "Stream a task's progress (Server-Sent Events)",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Task ID returned by POST /sync",
                         "name": "id",
                         "in": "path",
                         "required": true
@@ -852,19 +910,13 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Task cancelled/deleted successfully",
+                        "description": "event: task — one per change",
                         "schema": {
-                            "$ref": "#/definitions/models.MessageResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Invalid task ID",
-                        "schema": {
-                            "$ref": "#/definitions/models.ErrorResponse"
+                            "$ref": "#/definitions/tasks.Task"
                         }
                     },
                     "404": {
-                        "description": "Task not found or cannot be cancelled",
+                        "description": "Task not found (not active and not among the last 100 finished)",
                         "schema": {
                             "$ref": "#/definitions/models.ErrorResponse"
                         }
@@ -1704,6 +1756,191 @@ const docTemplate = `{
                     "example": 30
                 }
             }
+        },
+        "tasks.Task": {
+            "type": "object",
+            "properties": {
+                "cancel_requested": {
+                    "description": "CancelRequested is set once someone has asked the task to stop. It keeps\nrunning until the pass in flight is written, then ends as cancelled —\nor as completed, if that pass was its last.",
+                    "type": "boolean"
+                },
+                "config": {
+                    "$ref": "#/definitions/tasks.TaskConfig"
+                },
+                "duration": {
+                    "description": "nanoseconds, as time.Duration encodes",
+                    "type": "integer",
+                    "example": 1500000000
+                },
+                "end_time": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "progress": {
+                    "description": "Progress is where a running sync has got to; absent until the sync first\nreports. It is replaced wholesale on every update and never edited in\nplace, which is what lets a shallow copy of the task be read after the\nmanager's lock is gone.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/tasks.TaskProgress"
+                        }
+                    ]
+                },
+                "provider": {
+                    "type": "string"
+                },
+                "result": {
+                    "$ref": "#/definitions/tasks.TaskResult"
+                },
+                "start_time": {
+                    "type": "string"
+                },
+                "status": {
+                    "$ref": "#/definitions/tasks.TaskStatus"
+                },
+                "type": {
+                    "$ref": "#/definitions/tasks.TaskType"
+                }
+            }
+        },
+        "tasks.TaskConfig": {
+            "type": "object",
+            "properties": {
+                "bill_period": {
+                    "type": "string"
+                },
+                "create_table": {
+                    "type": "boolean"
+                },
+                "end_period": {
+                    "type": "string"
+                },
+                "force_update": {
+                    "type": "boolean"
+                },
+                "granularity": {
+                    "description": "For AliCloud",
+                    "type": "string"
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "start_period": {
+                    "type": "string"
+                },
+                "sync_mode": {
+                    "type": "string"
+                },
+                "use_distributed": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "tasks.TaskProgress": {
+            "type": "object",
+            "properties": {
+                "done": {
+                    "type": "integer"
+                },
+                "granularity": {
+                    "description": "Granularity names the table that period is going into (\"monthly\" or\n\"daily\"). A run over both visits every period twice, so without it the\nbar looks like it is repeating itself.",
+                    "type": "string"
+                },
+                "period": {
+                    "type": "string"
+                },
+                "records": {
+                    "description": "Records is how many rows of the period in flight are written so far and\nRecordsTotal how many the API said it holds; 0 when that is not known up\nfront (a whole cycle at daily granularity is fetched one day at a time).\nA single period can take minutes, and these are what move meanwhile.",
+                    "type": "integer"
+                },
+                "records_total": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "tasks.TaskResult": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "type": "string"
+                },
+                "duration": {
+                    "description": "nanoseconds",
+                    "type": "integer",
+                    "example": 1500000000
+                },
+                "error": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "message": {
+                    "type": "string"
+                },
+                "not_run": {
+                    "description": "NotRun names the passes a cancelled sync never started, e.g.\n\"2026-04 daily\". Their tables were left exactly as they were.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "records_fetched": {
+                    "type": "integer"
+                },
+                "records_processed": {
+                    "type": "integer"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "success": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "tasks.TaskStatus": {
+            "type": "string",
+            "enum": [
+                "pending",
+                "running",
+                "completed",
+                "failed",
+                "cancelled"
+            ],
+            "x-enum-varnames": [
+                "TaskStatusPending",
+                "TaskStatusRunning",
+                "TaskStatusCompleted",
+                "TaskStatusFailed",
+                "TaskStatusCancelled"
+            ]
+        },
+        "tasks.TaskType": {
+            "type": "string",
+            "enum": [
+                "sync",
+                "notification"
+            ],
+            "x-enum-varnames": [
+                "TaskTypeSync",
+                "TaskTypeNotification"
+            ]
         }
     }
 }`

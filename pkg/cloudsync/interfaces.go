@@ -87,11 +87,19 @@ type SyncProgress struct {
 	// Periods already finished, and how many there are in total.
 	Done  int `json:"done"`
 	Total int `json:"total"`
+	// Rows written so far for the period in flight, and how many the API said
+	// it holds (0 when the provider cannot tell up front, as for a whole cycle
+	// at daily granularity, which is fetched one day at a time). Periods are
+	// the unit of Done/Total, but one period can take minutes; these are what
+	// keep a progress bar moving in the meantime.
+	Records      int64 `json:"records"`
+	RecordsTotal int64 `json:"records_total,omitempty"`
 }
 
 // ProgressReporter receives SyncProgress as the sync moves from one period to
-// the next. It is called from the sync goroutine, so whoever installs it has to
-// be ready for that (the task manager updates the task under its own lock).
+// the next, and as rows of the period in flight get written. It is called from
+// the sync goroutine, so whoever installs it has to be ready for that (the
+// task manager updates the task under its own lock).
 type ProgressReporter func(SyncProgress)
 
 // ErrorHandler handles and categorizes errors

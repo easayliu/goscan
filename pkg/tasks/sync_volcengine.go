@@ -53,6 +53,7 @@ func (e *VolcEngineSyncExecutor) ExecuteSync(ctx context.Context, config *SyncCo
 	// configutils builds the config from a plain input struct; the progress
 	// reporter is a live callback, so it is attached here rather than there.
 	cloudSyncConfig.Progress = config.Progress
+	cloudSyncConfig.Stop = config.Stop
 
 	// Execute sync using base executor
 	result, err := e.BaseCloudSyncExecutor.ExecuteSync(ctx, cloudSyncConfig)
@@ -148,5 +149,7 @@ func (e *VolcEngineSyncExecutor) convertToTasksSyncResult(result *cloudsync.Sync
 		StartedAt:        output.StartedAt,
 		CompletedAt:      output.CompletedAt,
 		Metadata:         output.Metadata,
+		Cancelled:        result.Cancelled,
+		NotRun:           result.NotRun,
 	}
 }

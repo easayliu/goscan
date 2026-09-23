@@ -75,6 +75,8 @@ func (e *AliCloudSyncExecutor) convertToTasksSyncResult(result *cloudsync.SyncRe
 		StartedAt:        output.StartedAt,
 		CompletedAt:      output.CompletedAt,
 		Metadata:         output.Metadata,
+		Cancelled:        result.Cancelled,
+		NotRun:           result.NotRun,
 	}
 }
 
@@ -105,6 +107,7 @@ func (e *AliCloudSyncExecutor) ExecuteSync(ctx context.Context, config *SyncConf
 	// configutils builds the config from a plain input struct; the progress
 	// reporter is a live callback, so it is attached here rather than there.
 	cloudSyncConfig.Progress = config.Progress
+	cloudSyncConfig.Stop = config.Stop
 	cloudSyncResult, err := e.BaseCloudSyncExecutor.ExecuteSync(ctx, cloudSyncConfig)
 	if err != nil {
 		return nil, err

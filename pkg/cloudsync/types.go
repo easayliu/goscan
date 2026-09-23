@@ -22,6 +22,10 @@ type SyncConfig struct {
 	// pull takes minutes; without this the caller can only show a spinner and
 	// hope. Not serialised: it is a live callback, not configuration.
 	Progress ProgressReporter `json:"-"`
+	// Stop, once closed, asks the sync to stop after the pass in flight: no
+	// further (period, granularity) pass is started, and the one running is
+	// allowed to finish so that no period is left cleared and half written.
+	Stop <-chan struct{} `json:"-"`
 }
 
 // TableConfig represents table configuration for a provider
@@ -52,6 +56,11 @@ type SyncResult struct {
 	Message          string                 `json:"message"`
 	Error            error                  `json:"error,omitempty"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+	// Cancelled is set when the run stopped on request before every pass had
+	// run. NotRun names the passes it never started ("2026-04 daily"); their
+	// tables were not touched, so they hold what they held before the run.
+	Cancelled bool     `json:"cancelled,omitempty"`
+	NotRun    []string `json:"not_run,omitempty"`
 }
 
 // PeriodInfo contains information about a billing period

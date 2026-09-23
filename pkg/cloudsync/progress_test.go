@@ -117,3 +117,44 @@ func TestSyncPeriodsWithoutAReporter(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 }
+
+// recordingProvider reports rows as it writes them, the way the real providers
+// call ProgressCallback after every batch.
+type recordingProvider struct{ stubProvider }
+
+func (p *recordingProvider) SyncPeriodData(ctx context.Context, period, granularity string, opts *SyncOptions) error {
+	if opts.ProgressCallback != nil {
+		opts.ProgressCallback(400, 1000, "")
+		opts.ProgressCallback(1000, 1000, "")
+	}
+	return p.stubProvider.SyncPeriodData(ctx, period, granularity, opts)
+}
+
+// A period can take minutes, so the rows written inside it have to reach the
+// caller as they land, tagged with the period they belong to.
+func TestSyncPeriodsReportsRowsWithinAPeriod(t *testing.T) {
+	var seen []SyncProgress
+	executor := &BaseCloudSyncExecutor{provider: &recordingProvider{}}
+	periods := []*PeriodInfo{{Period: "2026-08", Granularity: "monthly"}}
+
+	if _, err := executor.syncPeriods(context.Background(), periods, &SyncConfig{
+		Progress: func(p SyncProgress) { seen = append(seen, p) },
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []SyncProgress{
+		{Period: "2026-08", Granularity: "monthly", Done: 0, Total: 1},
+		{Period: "2026-08", Granularity: "monthly", Done: 0, Total: 1, Records: 400, RecordsTotal: 1000},
+		{Period: "2026-08", Granularity: "monthly", Done: 0, Total: 1, Records: 1000, RecordsTotal: 1000},
+		{Done: 1, Total: 1},
+	}
+	if len(seen) != len(want) {
+		t.Fatalf("got %d progress reports %+v, want %d", len(seen), seen, len(want))
+	}
+	for i := range want {
+		if seen[i] != want[i] {
+			t.Errorf("report %d = %+v, want %+v", i, seen[i], want[i])
+		}
+	}
+}

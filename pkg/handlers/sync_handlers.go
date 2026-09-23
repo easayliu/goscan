@@ -102,7 +102,7 @@ func (h *HandlerService) CreateTask(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param id path string true "Unique task identifier ID" example:"task_123456789"
-// @Success 200 {object} models.TaskResponse "Task details retrieved successfully"
+// @Success 200 {object} tasks.Task "Task details retrieved successfully"
 // @Failure 400 {object} models.ErrorResponse "Invalid task ID"
 // @Failure 404 {object} models.ErrorResponse "Task not found"
 // @Router /tasks/{id} [get]
@@ -128,16 +128,16 @@ func (h *HandlerService) GetTask(c *gin.Context) {
 	c.JSON(http.StatusOK, task)
 }
 
-// DeleteTask cancels/removes a task
-// @Summary Cancel or delete task
-// @Description Cancel running tasks or delete completed task records. Running tasks will be forcibly stopped.
+// DeleteTask asks a running sync to stop
+// @Summary Stop a running sync
+// @Description Asks the sync to stop after the pass (one period × one granularity) it is on. The answer comes at once, with 202: the task keeps running until that pass is written, meanwhile carrying cancel_requested=true, and then ends as cancelled — or as completed, if that pass was its last. Watch it on GET /tasks/{id}/events.
+// @Description Passes that never started are listed in result.not_run and their data is untouched; no period is ever left half written. Asking again while it stops is fine.
 // @Tags Task Management
-// @Accept json
 // @Produce json
-// @Param id path string true "Unique task identifier ID" example:"task_123456789"
-// @Success 200 {object} models.MessageResponse "Task cancelled/deleted successfully"
-// @Failure 400 {object} models.ErrorResponse "Invalid task ID"
-// @Failure 404 {object} models.ErrorResponse "Task not found or cannot be cancelled"
+// @Param id path string true "Task ID returned by POST /sync"
+// @Success 202 {object} models.MessageResponse "Stop requested"
+// @Failure 404 {object} models.ErrorResponse "Task not found"
+// @Failure 409 {object} models.ErrorResponse "Task has already finished, or is not a sync"
 // @Router /tasks/{id} [delete]
 func (h *HandlerService) DeleteTask(c *gin.Context) {
 	taskID := c.Param("id")
@@ -150,17 +150,24 @@ func (h *HandlerService) DeleteTask(c *gin.Context) {
 	}
 
 	if err := h.taskMgr.CancelTask(taskID); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, tasks.ErrTaskNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, tasks.ErrTaskNotCancellable):
+			status = http.StatusConflict
+		}
+		c.JSON(status, gin.H{
 			"error":   true,
-			"message": "Task not found or cannot be cancelled",
+			"message": err.Error(),
 		})
 		return
 	}
 
-	c.JSON(http.StatusOK, buildTaskResponse(
+	c.JSON(http.StatusAccepted, buildTaskResponse(
 		taskID,
-		"cancelled",
-		"Task cancelled successfully",
+		"cancelling",
+		"Stop requested: the task stops after the pass in flight is written",
 	))
 }
 

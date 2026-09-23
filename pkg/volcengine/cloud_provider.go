@@ -143,8 +143,14 @@ func (p *VolcEngineProvider) SyncPeriodData(ctx context.Context, period, _ strin
 	tableName := ddl.VolcEngineBillTableName(p.config)
 	isDistributed := p.chClient.GetClusterName() != ""
 
-	// Use SmartSyncAllData method
-	_, err := p.billService.SmartSyncAllData(ctx, period, tableName, isDistributed)
+	var onProgress func(written, total int)
+	if options != nil && options.ProgressCallback != nil {
+		onProgress = func(written, total int) {
+			options.ProgressCallback(int64(written), int64(total), "")
+		}
+	}
+
+	_, err := p.billService.SmartSyncAllDataWithProgress(ctx, period, tableName, isDistributed, onProgress)
 	if err != nil {
 		return fmt.Errorf("failed to sync period %s: %w", period, err)
 	}

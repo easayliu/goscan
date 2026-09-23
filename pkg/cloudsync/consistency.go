@@ -102,7 +102,14 @@ func (c *DefaultConsistencyChecker) FindInconsistentPeriods(ctx context.Context,
 	var inconsistentPeriods []*PeriodInfo
 
 	// Check each period for consistency
-	for _, period := range periods {
+	for i, period := range periods {
+		// Only reads so far, so a stop can land here at once. What is not yet
+		// checked is passed on unchecked; the sync sees the same stop before
+		// starting any of it and reports it as not run.
+		if stopRequested(config) {
+			return append(inconsistentPeriods, periods[i:]...), nil
+		}
+
 		consistent, err := c.CheckPeriodConsistency(ctx, period)
 		if err != nil {
 			logger.Warn("failed to check period consistency, marking as inconsistent",
