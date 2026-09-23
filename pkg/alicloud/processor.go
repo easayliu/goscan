@@ -139,6 +139,9 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 	if err != nil {
 		return fmt.Errorf("failed to preprocess bills: %w", err)
 	}
+	// The total came from the API and counts these lines too; they will never
+	// be written, so a bar measured against it would stop short of 100%.
+	p.discountTotal(int64(len(bills) - len(filteredBills)))
 
 	if len(filteredBills) == 0 {
 		logger.Debug("no data after filtering",
@@ -151,6 +154,9 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 	if err != nil {
 		return fmt.Errorf("failed to transform bills: %w", err)
 	}
+
+	// Lines that failed to transform are skipped, and not written either.
+	p.discountTotal(int64(len(filteredBills) - len(transformedRecords)))
 
 	if len(transformedRecords) == 0 {
 		logger.Debug("no data after transformation",
@@ -167,8 +173,8 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 		return fmt.Errorf("failed to write to database: %w", err)
 	}
 
-	// 更新统计信息
-	p.updateProgress(int64(len(filteredBills)))
+	// 更新统计信息：按真正写进表的行数算，和火山引擎的 InsertedRecords 同一口径
+	p.updateProgress(int64(len(transformedRecords)))
 
 	p.logBatchComplete(len(bills), len(filteredBills), len(transformedRecords))
 
@@ -529,6 +535,20 @@ func (p *Processor) SetTotalRecords(total int64) {
 	p.mu.Lock()
 	p.totalRecords = total
 	p.mu.Unlock()
+}
+
+// discountTotal 从总数里扣掉不会写入的行（被过滤、校验不过的），让进度能走到 100%。
+// 总数未知（0）时不动。
+func (p *Processor) discountTotal(n int64) {
+	if n <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.totalRecords == 0 {
+		return
+	}
+	p.totalRecords = max(p.totalRecords-n, 0)
 }
 
 // GetProcessedRecords 获取已处理记录数

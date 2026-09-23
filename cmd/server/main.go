@@ -73,6 +73,12 @@ const usage = `goscan —— 多云账单同步入库
 // version 由构建时的 -ldflags "-X main.version=..." 注入。
 var version = "dev"
 
+// drainTimeout 是关停时等同步任务跑完手上这一趟的上限。这一趟的账期已经清空，
+// 半路掐断就只剩半个账期，事后也没有谁回头补旧账期；可一趟（阿里云按天整月）
+// 能跑好几分钟。deploy/goscan-deployment.yaml 的 terminationGracePeriodSeconds
+// 要比它再多出 HTTP 和调度器关停的 30s，否则等不完就被 SIGKILL。
+const drainTimeout = 10 * time.Minute
+
 type options struct {
 	configPath string
 
@@ -338,18 +344,29 @@ type DaemonApp struct {
 	cancel    context.CancelFunc
 	server    *server.HTTPServer
 	scheduler *scheduler.TaskScheduler
-	wg        sync.WaitGroup
+	// taskMgr is shared by the HTTP API and the scheduler, so /tasks sees and
+	// can stop every run, and a manual and a scheduled sync of one provider
+	// cannot overlap.
+	taskMgr *tasks.TaskManagerImpl
+	wg      sync.WaitGroup
 }
 
 // Start initializes and starts all components of the application
 func (app *DaemonApp) Start(address string, port int) error {
 	logger.Info("Initializing goscan components...")
 
+	taskMgr, err := tasks.NewTaskManager(app.ctx, app.cfg)
+	if err != nil {
+		return fmt.Errorf("failed to create task manager: %w", err)
+	}
+	app.taskMgr = taskMgr
+
 	// Initialize HTTP server
 	serverConfig := &server.Config{
-		Address: address,
-		Port:    port,
-		Config:  app.cfg,
+		Address:     address,
+		Port:        port,
+		Config:      app.cfg,
+		TaskManager: taskMgr,
 	}
 
 	httpServer, err := server.NewHTTPServer(app.ctx, serverConfig)
@@ -360,7 +377,8 @@ func (app *DaemonApp) Start(address string, port int) error {
 
 	// Initialize task scheduler
 	schedulerConfig := &scheduler.Config{
-		Config: app.cfg,
+		Config:      app.cfg,
+		TaskManager: taskMgr,
 	}
 
 	taskScheduler, err := scheduler.NewTaskScheduler(app.ctx, schedulerConfig)
@@ -422,6 +440,18 @@ func (app *DaemonApp) WaitForShutdown() {
 // Shutdown performs graceful shutdown of all components
 func (app *DaemonApp) Shutdown() {
 	logger.Info("Starting graceful shutdown...")
+
+	// Let running syncs finish the pass they are on before anything is
+	// cancelled; the HTTP API stays up meanwhile, so their progress can still
+	// be watched. See drainTimeout.
+	if app.taskMgr != nil {
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), drainTimeout)
+		if err := app.taskMgr.Drain(drainCtx); err != nil {
+			logger.Warn("Cancelling tasks mid-pass, the period in flight may be left half written",
+				zap.Error(err))
+		}
+		cancelDrain()
+	}
 
 	// Cancel context to signal all components to stop
 	app.cancel()

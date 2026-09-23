@@ -167,7 +167,10 @@ spec:
       labels:
         app: goscan
     spec:
-      terminationGracePeriodSeconds: 60
+      # 收到 SIGTERM 后先等同步跑完手上这一趟（最多 10 分钟，见 main.go 的
+      # drainTimeout），再花最多 30s 关 HTTP 和调度器。短了会在一趟中途被
+      # SIGKILL，留下清空了一半的账期。空闲时进程立刻退出，不会真等这么久
+      terminationGracePeriodSeconds: 660
       # 配置错了（云厂商密钥没挂上、cron 写错）就别起来，省得半夜才发现没同步。
       # --check 不连库，起不来的原因只会是配置本身
       initContainers:

@@ -31,6 +31,10 @@ type TaskManagerImpl struct {
 	// is always taken after tasksMutex, never before.
 	subsMu sync.Mutex
 	subs   map[*TaskFeed]struct{}
+
+	// drained is set by Drain: from then on no task is accepted, and it is
+	// closed once the last active task has finished. Guarded by tasksMutex.
+	drained chan struct{}
 }
 
 // NewTaskManager creates a new task manager
@@ -203,16 +207,60 @@ func (tm *TaskManagerImpl) CancelTask(taskID string) error {
 	if task.Type != TaskTypeSync {
 		return fmt.Errorf("%w: only syncs can be stopped, task %s is a %s", ErrTaskNotCancellable, taskID, task.Type)
 	}
-	if task.CancelRequested {
-		return nil
-	}
-
-	task.CancelRequested = true
-	close(task.stop)
-	tm.publishLocked(task)
+	tm.requestStopLocked(task)
 
 	logger.Info("Task cancel requested, stopping after the current pass", zap.String("task_id", taskID))
 	return nil
+}
+
+// requestStopLocked asks a sync to stop after the pass it is on. Asking twice
+// is a no-op. The caller holds tasksMutex for writing.
+func (tm *TaskManagerImpl) requestStopLocked(task *Task) {
+	if task.CancelRequested {
+		return
+	}
+	task.CancelRequested = true
+	if task.stop != nil { // every task from createTask has one
+		close(task.stop)
+	}
+	tm.publishLocked(task)
+}
+
+// Drain prepares for shutdown: it stops taking tasks, asks every running sync
+// to stop after the pass it is on — as CancelTask does — and waits until all
+// active tasks have finished or ctx is done, whichever comes first.
+//
+// This is what keeps a restart from cutting a pass off. The period in flight
+// has been cleared for the re-pull; cancelling the context mid-pass would
+// leave it half written, and nothing comes back later to repair an old period.
+// Cancel the tasks' context only after Drain returns.
+func (tm *TaskManagerImpl) Drain(ctx context.Context) error {
+	tm.tasksMutex.Lock()
+	if tm.drained == nil {
+		tm.drained = make(chan struct{})
+		if len(tm.tasks) == 0 {
+			close(tm.drained)
+		}
+	}
+	for _, task := range tm.tasks {
+		if task.Type == TaskTypeSync {
+			tm.requestStopLocked(task)
+		}
+	}
+	drained := tm.drained
+	active := len(tm.tasks)
+	tm.tasksMutex.Unlock()
+
+	if active > 0 {
+		logger.Info("Waiting for active tasks to finish their current pass", zap.Int("active", active))
+	}
+
+	select {
+	case <-drained:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("tasks still running when the drain ran out of time: %w", ctx.Err())
+	}
 }
 
 // GetRunningTaskCount retrieves count of running tasks
@@ -282,6 +330,10 @@ func (tm *TaskManagerImpl) createTask(req *TaskRequest) *Task {
 func (tm *TaskManagerImpl) addTask(task *Task) error {
 	tm.tasksMutex.Lock()
 	defer tm.tasksMutex.Unlock()
+
+	if tm.drained != nil {
+		return fmt.Errorf("%w: %s %s task not started", ErrShuttingDown, task.Provider, task.Type)
+	}
 
 	for _, existing := range tm.tasks {
 		if existing.Provider != task.Provider || existing.Type != task.Type {
@@ -466,6 +518,9 @@ func (tm *TaskManagerImpl) finishTask(task *Task, result *TaskResult, err error)
 
 	// Remove from active tasks and add to history
 	delete(tm.tasks, task.ID)
+	if tm.drained != nil && len(tm.tasks) == 0 {
+		close(tm.drained)
+	}
 	tm.taskHistory = append(tm.taskHistory, task)
 
 	// Limit history record count

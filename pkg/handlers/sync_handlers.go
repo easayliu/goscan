@@ -186,6 +186,7 @@ func (h *HandlerService) DeleteTask(c *gin.Context) {
 // @Failure 409 {object} models.ErrorResponse "A sync for this provider is already running"
 // @Failure 429 {object} models.ErrorResponse "Too many tasks in flight, retry later"
 // @Failure 500 {object} models.ErrorResponse "Internal server error"
+// @Failure 503 {object} models.ErrorResponse "Shutting down, no new tasks are taken; retry later"
 // @Router /sync [post]
 func (h *HandlerService) TriggerSync(c *gin.Context) {
 	var syncReq models.SyncTriggerRequest
@@ -259,6 +260,8 @@ func respondTaskRejected(c *gin.Context, err error, provider string) {
 		status = http.StatusConflict
 	case errors.Is(err, tasks.ErrTooManyTasks):
 		status = http.StatusTooManyRequests
+	case errors.Is(err, tasks.ErrShuttingDown):
+		status = http.StatusServiceUnavailable
 	}
 
 	logger.Warn("Task was not accepted",

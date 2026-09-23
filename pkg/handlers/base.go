@@ -20,14 +20,20 @@ type HandlerService struct {
 }
 
 // NewHandlerService creates a new handler service
-// Creates new handler service instance
-func NewHandlerService(ctx context.Context, cfg *config.Config) (*HandlerService, error) {
+//
+// taskMgr is the one the scheduler runs its jobs on as well: /tasks, its event
+// streams and DELETE /tasks/{id} only see tasks of the manager they are given,
+// and the one-sync-per-provider guard only holds within a manager. nil creates
+// a private one, for callers that have no scheduler.
+func NewHandlerService(ctx context.Context, cfg *config.Config, taskMgr tasks.TaskManager) (*HandlerService, error) {
 	logger.Info("Initializing handler service")
 
-	// Create task manager
-	taskMgr, err := tasks.NewTaskManager(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create task manager: %w", err)
+	if taskMgr == nil {
+		mgr, err := tasks.NewTaskManager(ctx, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create task manager: %w", err)
+		}
+		taskMgr = mgr
 	}
 
 	return &HandlerService{

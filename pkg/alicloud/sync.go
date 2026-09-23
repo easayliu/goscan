@@ -314,15 +314,14 @@ func (sm *syncManager) syncSpecificDayBillDataImpl(ctx context.Context, billingD
 		tableName = options.DistributedTableName
 	}
 
-	totalRecords, err := sm.syncDayDataImpl(ctx, paginator, processor, tableName, billingDate)
-	if err != nil {
+	// One day is the whole pass here, so its first page's TotalCount is the
+	// pass's total — the paginated path takes it from there for the progress
+	// bar. (A whole cycle at daily granularity goes through syncDayDataImpl
+	// instead: each day has its own TotalCount and the month's is unknown.)
+	if err := sm.executePaginatedSyncImpl(ctx, paginator, processor, tableName,
+		fmt.Sprintf("[阿里云按天同步] 日期 %s", billingDate)); err != nil {
 		return fmt.Errorf("failed to sync data for date %s: %w", billingDate, err)
 	}
-
-	logger.Info("specific date sync completed",
-		zap.String("provider", "alicloud"),
-		zap.String("date", billingDate),
-		zap.Int("total_records", totalRecords))
 	return nil
 }
 
@@ -404,8 +403,9 @@ func (sm *syncManager) executePaginatedSyncImpl(ctx context.Context, paginator P
 			break // 没有更多数据
 		}
 
-		// 首页带着整个账期的 TotalCount，进度回调从这里拿到分母。按天整月同步
-		// 不走这里：它一天一天拉，每天各有各的 TotalCount，月度总数事先不知道。
+		// 首页带着这一趟（整个账期，或单独一天）的 TotalCount，进度回调从这里拿到
+		// 分母。按天整月同步不走这里：它一天一天拉，每天各有各的 TotalCount，
+		// 月度总数事先不知道。
 		if totalRecords == 0 {
 			processor.SetTotalRecords(int64(response.Data.TotalCount))
 		}

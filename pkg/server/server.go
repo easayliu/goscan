@@ -7,6 +7,7 @@ import (
 	"goscan/pkg/handlers"
 	"goscan/pkg/logger"
 	"goscan/pkg/middleware"
+	"goscan/pkg/tasks"
 	"net/http"
 	"time"
 
@@ -33,6 +34,9 @@ type Config struct {
 	Address string
 	Port    int
 	Config  *config.Config
+	// TaskManager is shared with the scheduler, so that scheduled syncs show
+	// up on /tasks and can be stopped there. nil gives the server its own.
+	TaskManager tasks.TaskManager
 }
 
 // HTTPServer represents the HTTP server component
@@ -77,7 +81,7 @@ func NewHTTPServer(ctx context.Context, config *Config) (*HTTPServer, error) {
 	router.Use(cors.Default())                         // CORS
 
 	// Create handler service
-	handlerSvc, err := handlers.NewHandlerService(ctx, config.Config)
+	handlerSvc, err := handlers.NewHandlerService(ctx, config.Config, config.TaskManager)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create handler service: %w", err)
 	}

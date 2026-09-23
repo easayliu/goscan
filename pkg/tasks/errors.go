@@ -32,6 +32,10 @@ var (
 	// already finished, or it is not a sync (only syncs stop between passes)
 	ErrTaskNotCancellable = errors.New("task cannot be cancelled")
 
+	// ErrShuttingDown indicates the manager is draining for shutdown and takes
+	// no new tasks
+	ErrShuttingDown = errors.New("task manager is shutting down")
+
 	// ErrInvalidPeriod indicates invalid billing period
 	ErrInvalidPeriod = errors.New("invalid billing period")
 

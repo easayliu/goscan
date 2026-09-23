@@ -31,6 +31,11 @@ var (
 // Config holds scheduler configuration
 type Config struct {
 	Config *config.Config
+	// TaskManager is the one the HTTP API serves /tasks from. Sharing it is
+	// what makes scheduled runs visible and stoppable there, and what keeps a
+	// manual sync and a cron one of the same provider from running at once.
+	// nil gives the scheduler its own.
+	TaskManager tasks.TaskManager
 }
 
 // TaskScheduler manages scheduled tasks using cron
@@ -73,10 +78,13 @@ func NewTaskScheduler(ctx context.Context, config *Config) (*TaskScheduler, erro
 		cron.WithChain(cron.Recover(cron.DefaultLogger)),
 	)
 
-	// Create task manager
-	taskMgr, err := tasks.NewTaskManager(ctx, config.Config)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create task manager: %w", err)
+	taskMgr := config.TaskManager
+	if taskMgr == nil {
+		mgr, err := tasks.NewTaskManager(ctx, config.Config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create task manager: %w", err)
+		}
+		taskMgr = mgr
 	}
 
 	scheduler := &TaskScheduler{
@@ -395,9 +403,10 @@ func (ts *TaskScheduler) createJobFunction(job *ScheduledJob) func() {
 			ts.updateJobStatus(job, JobStatusScheduled)
 			return
 		}
-		if errors.Is(err, tasks.ErrTaskCancelled) {
-			// Someone stopped this run from the UI. It is not a failure, and
-			// the job stays scheduled for its next slot.
+		if errors.Is(err, tasks.ErrTaskCancelled) || errors.Is(err, tasks.ErrShuttingDown) {
+			// Someone stopped this run from the UI, or the process is going
+			// down and stopped it (or never started it). Not a failure: the
+			// job stays scheduled for its next slot.
 			logger.Info("Scheduled job stopped on request", zap.String("job_name", job.Name))
 			ts.updateJobStatus(job, JobStatusScheduled)
 			return
