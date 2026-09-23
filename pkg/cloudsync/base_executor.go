@@ -190,6 +190,8 @@ func (e *BaseCloudSyncExecutor) executeStandardSync(ctx context.Context, config 
 		if err != nil {
 			return nil, fmt.Errorf("failed to work out which periods need syncing: %w", err)
 		}
+	} else if config.AutoClean {
+		e.clearPeriods(ctx, periods)
 	}
 
 	// Everything asked for is already in the database
@@ -487,6 +489,30 @@ func (e *BaseCloudSyncExecutor) skipConsistentPeriods(ctx context.Context, perio
 	}
 
 	return periodsNeedSync, nil
+}
+
+// clearPeriods empties every period a forced run is about to pull again.
+//
+// Re-pulling on top of the old rows leans on ReplacingMergeTree to replace them,
+// and it can only replace a line whose key comes back. A line the provider has
+// since dropped — a refund that got netted out, an Alibaba Cloud group that is
+// one line shorter and so no longer reaches its old last line_seq — never comes
+// back, and would stay in the table counted twice with nothing to replace it.
+//
+// A period that fails to clear is still pulled, as skipConsistentPeriods does:
+// the pull overwrites every line that still exists, which leaves the table no
+// worse than before and the next consistency check to catch the rest.
+func (e *BaseCloudSyncExecutor) clearPeriods(ctx context.Context, periods []*PeriodInfo) {
+	for _, period := range periods {
+		period.NeedCleanup = true
+		if err := e.consistencyChecker.CleanInconsistentData(ctx, []*PeriodInfo{period}); err != nil {
+			logger.Error("failed to clear period before forced re-pull",
+				zap.String("provider", e.provider.GetProviderName()),
+				zap.String("period", period.Period),
+				zap.String("granularity", period.Granularity),
+				zap.Error(err))
+		}
+	}
 }
 
 // logSyncStart logs the start of synchronization

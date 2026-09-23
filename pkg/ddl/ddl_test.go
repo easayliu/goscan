@@ -310,7 +310,7 @@ func TestPartitionKeysParseLeniently(t *testing.T) {
 
 // Amounts are Decimal, not String and not Float64: see MoneyType.
 func TestAmountColumnsAreDecimal(t *testing.T) {
-	amounts := []string{"PayableAmount", "PaidAmount", "OriginalBillAmount", "PretaxAmount", "CouponAmount", "Price"}
+	amounts := []string{"PayableAmount", "PaidAmount", "OriginalBillAmount", "PretaxAmount", "CouponAmount", "Price", "RoundAmount"}
 	types := make(map[string]string)
 	for _, col := range VolcEngineBillTable("volcengine_bill").Columns {
 		types[col.Name] = col.Type
@@ -318,6 +318,39 @@ func TestAmountColumnsAreDecimal(t *testing.T) {
 	for _, name := range amounts {
 		if types[name] != MoneyType {
 			t.Errorf("%s is %q, want %s", name, types[name], MoneyType)
+		}
+	}
+}
+
+// No bill table stores anything as binary floating point. Checking a list of
+// named amounts is how the Alibaba Cloud tables kept Float64 amounts through
+// the change that moved VolcEngine to Decimal: nobody had put them on the list.
+func TestNoTableStoresFloats(t *testing.T) {
+	for _, table := range Tables(testConfig()) {
+		for _, col := range table.Columns {
+			if strings.Contains(col.Type, "Float") {
+				t.Errorf("%s.%s is %s; amounts are %s", table.Name, col.Name, col.Type, MoneyType)
+			}
+		}
+	}
+}
+
+// Alibaba Cloud has no line id, so its sorting key must keep apart every pair
+// of lines the API returns as distinct: an order and its refund differ only in
+// item, instance-less lines only in region, and anything left over in line_seq.
+func TestAliCloudKeySeparatesDistinctLines(t *testing.T) {
+	for _, table := range []Table{AliCloudMonthlyTable("m"), AliCloudDailyTable("d")} {
+		keys := make(map[string]bool)
+		for _, key := range orderByColumns(table) {
+			keys[key] = true
+		}
+		for _, want := range []string{"item", "region", "zone", "biz_type", "line_seq"} {
+			if !keys[want] {
+				t.Errorf("%s: sorting key lacks %s", table.Name, want)
+			}
+		}
+		if keys["adjust_type"] {
+			t.Errorf("%s: adjust_type is in the sorting key but the SDK never fills it", table.Name)
 		}
 	}
 }

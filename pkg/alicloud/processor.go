@@ -21,6 +21,12 @@ type Processor struct {
 	processedRecords int64
 	totalRecords     int64
 	startTime        time.Time
+
+	// lineSeq counts, per sorting-key group, how many lines this pull has
+	// already written, so the next one in the group gets the next line_seq.
+	// A Processor lives for exactly one pull of one period, which is what makes
+	// the numbering start at 0 again on a re-pull and land on the same slots.
+	lineSeq map[string]uint32
 }
 
 // 实现 DataProcessor 接口
@@ -151,6 +157,10 @@ func (p *Processor) ProcessBatchWithBillingCycle(ctx context.Context, tableName 
 			zap.String("provider", "alicloud"))
 		return nil
 	}
+
+	// Numbered before the write, and once: a retried write resends the same
+	// records with the same line_seq instead of taking new slots.
+	p.assignLineSeq(transformedRecords, p.isDailyTable(tableName))
 
 	// 写入数据库
 	if err := p.writeToDBWithRetry(ctx, tableName, transformedRecords); err != nil {
@@ -292,6 +302,55 @@ func (p *Processor) prepareBatchData(tableName string, records []*BillDetailForD
 	return batch
 }
 
+// assignLineSeq numbers the records of each sorting-key group in the order this
+// pull sees them.
+//
+// Alibaba Cloud has no line id, and nothing guarantees that the business
+// columns in the key tell every pair of lines apart; two that agree on all of
+// them would otherwise collapse into one when ReplacingMergeTree merges. The
+// group is exactly the table's sorting key without line_seq — a finer group
+// would hand out duplicate numbers inside one key and collapse lines again.
+func (p *Processor) assignLineSeq(records []*BillDetailForDB, isDailyTable bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.lineSeq == nil {
+		p.lineSeq = make(map[string]uint32)
+	}
+	for _, record := range records {
+		key := lineGroupKey(record, isDailyTable)
+		record.LineSeq = p.lineSeq[key]
+		p.lineSeq[key]++
+	}
+}
+
+// lineGroupKey is the sorting key of the Alibaba Cloud tables minus line_seq:
+// the period column, then the columns of aliCloudBillKey in pkg/ddl. The two
+// lists have to agree; TestLineGroupKeyMatchesTheSortingKey holds them together.
+func lineGroupKey(r *BillDetailForDB, isDailyTable bool) string {
+	period := r.BillingCycle
+	if isDailyTable {
+		period = ""
+		if r.BillingDate != nil {
+			period = r.BillingDate.Format("2006-01-02")
+		}
+	}
+	// \x1f (unit separator) cannot occur in any of these values, so two
+	// different tuples never join into the same string.
+	return strings.Join([]string{
+		period,
+		r.ProductCode, r.InstanceID, r.BillAccountID, r.SubscriptionType, r.BillingType,
+		r.Item, r.BizType, r.ProductDetailCode, r.Region, r.Zone, r.SplitItemID,
+	}, "\x1f")
+}
+
+// lineGroupColumns names, in order, the table columns lineGroupKey reads after
+// the period column. It exists for the test that keeps it equal to the DDL.
+var lineGroupColumns = []string{
+	"product_code", "instance_id", "bill_account_id", "subscription_type", "billing_type",
+	"item", "biz_type", "product_detail_code", "region", "zone", "split_item_id",
+}
+
 // isDailyTable 判断是否为按天表
 func (p *Processor) isDailyTable(tableName string) bool {
 	return strings.Contains(strings.ToLower(tableName), "daily")
@@ -379,6 +438,7 @@ func (p *Processor) recordToMapWithGranularity(record *BillDetailForDB, isDailyT
 		"pricing_unit":        record.PricingUnit,
 		"currency":            record.Currency,
 		"billing_type":        record.BillingType,
+		"item":                record.Item,
 		"usage":               record.Usage,
 		"usage_unit":          record.UsageUnit,
 		"pretax_gross_amount": record.PretaxGrossAmount,
@@ -410,6 +470,7 @@ func (p *Processor) recordToMapWithGranularity(record *BillDetailForDB, isDailyT
 		"biz_type":            record.BizType,
 		"adjust_type":         record.AdjustType,
 		"adjust_amount":       record.AdjustAmount,
+		"line_seq":            record.LineSeq,
 		"granularity":         record.Granularity,
 		"created_at":          record.CreatedAt,
 		"updated_at":          record.UpdatedAt,
@@ -557,6 +618,7 @@ func (p *Processor) Reset() {
 	p.processedRecords = 0
 	p.totalRecords = 0
 	p.startTime = time.Now()
+	p.lineSeq = nil
 }
 
 // ProcessMultipleBatches 并发处理多个批次

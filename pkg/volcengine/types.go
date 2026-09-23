@@ -299,7 +299,10 @@ func (bd *BillDetail) ToDBMap() map[string]interface{} {
 	data["OriginalBillAmount"] = money("OriginalBillAmount", bd.OriginalBillAmount)
 	data["PreferentialBillAmount"] = money("PreferentialBillAmount", bd.PreferentialBillAmount)
 	data["DiscountBillAmount"] = money("DiscountBillAmount", bd.DiscountBillAmount)
-	data["RoundAmount"] = bd.RoundAmount
+	// RoundAmount is the only amount the API sends as a number rather than
+	// text; NewFromFloat takes the shortest decimal that round-trips, which is
+	// the figure the API printed.
+	data["RoundAmount"] = decimal.NewFromFloat(bd.RoundAmount)
 	data["RealValue"] = money("RealValue", bd.RealValue)
 	data["PretaxRealValue"] = money("PretaxRealValue", bd.PretaxRealValue)
 	data["SettleRealValue"] = money("SettleRealValue", bd.SettleRealValue)

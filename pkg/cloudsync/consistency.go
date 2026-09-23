@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/logger"
+	"goscan/pkg/utils/dateutils"
 	"time"
 
 	"go.uber.org/zap"
@@ -155,7 +156,13 @@ func (c *DefaultConsistencyChecker) CleanInconsistentData(ctx context.Context, p
 	return nil
 }
 
-// getDBCount gets the count of records in database for a specific period
+// getDBCount counts the rows a period holds as the table will look once
+// ReplacingMergeTree has merged, hence FINAL. Without it a period pulled a
+// moment ago counts its old and new copies both, reads as inconsistent against
+// the API, and gets cleaned and pulled again — the same symptom lost lines
+// produce, for an unrelated reason. FINAL is correct on the Distributed table
+// too: the sharding key is the sorting key, so all copies of a line share a
+// shard.
 func (c *DefaultConsistencyChecker) getDBCount(ctx context.Context, period, granularity string) (int64, error) {
 	tableConfig := c.provider.GetTableConfig(granularity)
 	if tableConfig == nil {
@@ -165,30 +172,12 @@ func (c *DefaultConsistencyChecker) getDBCount(ctx context.Context, period, gran
 	resolver := c.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(tableConfig.TableName)
 
-	var query string
-	var args []interface{}
-
-	if granularity == "monthly" {
-		// For monthly data, check with period field and null date field (for alicloud compatibility)
-		if tableConfig.DateField != "" {
-			query = fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ? AND %s IS NULL",
-				actualTableName, tableConfig.PeriodField, tableConfig.DateField)
-		} else {
-			query = fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?",
-				actualTableName, tableConfig.PeriodField)
-		}
-		args = []interface{}{period}
-	} else {
-		// For daily data, check with date field
-		if tableConfig.DateField != "" {
-			query = fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?",
-				actualTableName, tableConfig.DateField)
-		} else {
-			query = fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s = ?",
-				actualTableName, tableConfig.PeriodField)
-		}
-		args = []interface{}{period}
+	condition, err := periodCondition(tableConfig, period, granularity)
+	if err != nil {
+		return 0, err
 	}
+	query := fmt.Sprintf("SELECT count() FROM %s FINAL WHERE %s", actualTableName, condition)
+	args := []interface{}{period}
 
 	rows, err := c.chClient.Query(ctx, query, args...)
 	if err != nil {
@@ -205,6 +194,34 @@ func (c *DefaultConsistencyChecker) getDBCount(ctx context.Context, period, gran
 	}
 
 	return int64(count), nil
+}
+
+// periodCondition is the WHERE clause, with one ? for the period, that selects
+// one period's rows.
+//
+// A monthly table is selected by its period column; where the table also has a
+// date column (Alibaba Cloud's monthly table keeps billing_date NULL) that has
+// to be NULL. A daily table is selected by its date column for one day, and by
+// its cycle column for a whole YYYY-MM cycle — comparing a Date column to
+// '2026-09' does not select the month, it fails.
+func periodCondition(tc *TableConfig, period, granularity string) (string, error) {
+	if granularity == "monthly" {
+		if tc.DateField != "" {
+			return fmt.Sprintf("%s = ? AND %s IS NULL", tc.PeriodField, tc.DateField), nil
+		}
+		return fmt.Sprintf("%s = ?", tc.PeriodField), nil
+	}
+
+	if !dateutils.IsValidBillingDate(period) {
+		if tc.CycleField == "" {
+			return "", fmt.Errorf("daily table %s cannot select the whole cycle %s: no cycle column", tc.TableName, period)
+		}
+		return fmt.Sprintf("%s = ?", tc.CycleField), nil
+	}
+	if tc.DateField != "" {
+		return fmt.Sprintf("%s = ?", tc.DateField), nil
+	}
+	return fmt.Sprintf("%s = ?", tc.PeriodField), nil
 }
 
 // calculatePeriodsToCheck calculates which periods to check for sync-optimal mode

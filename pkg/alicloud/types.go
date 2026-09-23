@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // 注意：请求和响应相关类型已迁移到 request.go 和 response.go 文件
@@ -46,6 +48,10 @@ type BillDetail struct {
 	PricingUnit      string `json:"PricingUnit"`      // 计费单位
 	Currency         string `json:"Currency"`         // 币种
 	BillingType      string `json:"BillingType"`      // 账单类型
+	// Item 是账单行的类型：SubscriptionOrder（预付订单）/ PayAsYouGoBill（后付账单）/
+	// Refund（退款）/ Adjustment（调账）。同一实例的订单与它的退款其余各列都一样，
+	// 只有它能把两行分开，所以它是排序键的一部分（见 pkg/ddl 的 aliCloudBillKey）。
+	Item string `json:"Item"`
 
 	// === 用量信息 ===
 	Usage     string `json:"Usage"`     // 用量
@@ -240,19 +246,20 @@ type BillDetailForDB struct {
 	PricingUnit      string `json:"pricing_unit"`
 	Currency         string `json:"currency"`
 	BillingType      string `json:"billing_type"`
+	Item             string `json:"item"`
 
 	// 用量信息
 	Usage     string `json:"usage"`
 	UsageUnit string `json:"usage_unit"`
 
-	// 金额信息
-	PretaxGrossAmount float64 `json:"pretax_gross_amount"`
-	InvoiceDiscount   float64 `json:"invoice_discount"`
-	DeductedByCoupons float64 `json:"deducted_by_coupons"`
-	PretaxAmount      float64 `json:"pretax_amount"`
-	CurrencyAmount    float64 `json:"currency_amount"`
-	PaymentAmount     float64 `json:"payment_amount"`
-	OutstandingAmount float64 `json:"outstanding_amount"`
+	// 金额信息：库里是 Decimal(20, 8)（pkg/ddl.MoneyType），见 money()
+	PretaxGrossAmount decimal.Decimal `json:"pretax_gross_amount"`
+	InvoiceDiscount   decimal.Decimal `json:"invoice_discount"`
+	DeductedByCoupons decimal.Decimal `json:"deducted_by_coupons"`
+	PretaxAmount      decimal.Decimal `json:"pretax_amount"`
+	CurrencyAmount    decimal.Decimal `json:"currency_amount"`
+	PaymentAmount     decimal.Decimal `json:"payment_amount"`
+	OutstandingAmount decimal.Decimal `json:"outstanding_amount"`
 
 	// 地域信息
 	Region string `json:"region"`
@@ -286,14 +293,27 @@ type BillDetailForDB struct {
 	ProductDetailCode string `json:"product_detail_code"`
 
 	// 账单归属
-	BizType      string  `json:"biz_type"`
-	AdjustType   string  `json:"adjust_type"`
-	AdjustAmount float64 `json:"adjust_amount"`
+	BizType      string          `json:"biz_type"`
+	AdjustType   string          `json:"adjust_type"`
+	AdjustAmount decimal.Decimal `json:"adjust_amount"`
+
+	// LineSeq 在一次拉取里给「排序键其余各列都相同」的行编号 0、1、2…，
+	// 由 Processor 在写入前填（见 pkg/ddl 的 aliCloudBillKey）。
+	LineSeq uint32 `json:"line_seq"`
 
 	// 系统字段
 	Granularity string    `json:"granularity"` // MONTHLY 或 DAILY
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// money 把 SDK 解出来的金额转成库里的 Decimal(20, 8)（见 pkg/ddl.MoneyType）。
+//
+// SDK 已经把 JSON 里的金额解成了 float64，原文拿不回来；NewFromFloat 取的是能还原成
+// 同一个 float64 的最短十进制串，对账单这种十几位有效数字以内的金额，得到的就是接口
+// 原样打印的那个数。要紧的是入库之后不再是浮点：求和在 Decimal 上做，月度汇总不会漂。
+func money(v float64) decimal.Decimal {
+	return decimal.NewFromFloat(v)
 }
 
 // ToDBFormat 转换为数据库格式
@@ -345,17 +365,18 @@ func (bd *BillDetail) ToDBFormatWithBillingCycle(billingCycle string) *BillDetai
 		PricingUnit:      bd.PricingUnit,
 		Currency:         bd.Currency,
 		BillingType:      bd.BillingType,
+		Item:             bd.Item,
 
 		Usage:     bd.Usage,
 		UsageUnit: bd.UsageUnit,
 
-		PretaxGrossAmount: bd.PretaxGrossAmount,
-		InvoiceDiscount:   bd.InvoiceDiscount,
-		DeductedByCoupons: bd.DeductedByCoupons,
-		PretaxAmount:      bd.PretaxAmount,
-		CurrencyAmount:    bd.Currency_Amount,
-		PaymentAmount:     bd.PaymentAmount,
-		OutstandingAmount: bd.OutstandingAmount,
+		PretaxGrossAmount: money(bd.PretaxGrossAmount),
+		InvoiceDiscount:   money(bd.InvoiceDiscount),
+		DeductedByCoupons: money(bd.DeductedByCoupons),
+		PretaxAmount:      money(bd.PretaxAmount),
+		CurrencyAmount:    money(bd.Currency_Amount),
+		PaymentAmount:     money(bd.PaymentAmount),
+		OutstandingAmount: money(bd.OutstandingAmount),
 
 		Region: bd.Region,
 		Zone:   bd.Zone,
@@ -384,7 +405,7 @@ func (bd *BillDetail) ToDBFormatWithBillingCycle(billingCycle string) *BillDetai
 
 		BizType:      bd.BizType,
 		AdjustType:   bd.AdjustType,
-		AdjustAmount: bd.AdjustAmount,
+		AdjustAmount: money(bd.AdjustAmount),
 
 		Granularity: granularity,
 		CreatedAt:   timestamp,
@@ -437,17 +458,18 @@ func (bd *BillDetail) ToDBFormatWithTime(timestamp time.Time) *BillDetailForDB {
 		PricingUnit:      bd.PricingUnit,
 		Currency:         bd.Currency,
 		BillingType:      bd.BillingType,
+		Item:             bd.Item,
 
 		Usage:     bd.Usage,
 		UsageUnit: bd.UsageUnit,
 
-		PretaxGrossAmount: bd.PretaxGrossAmount,
-		InvoiceDiscount:   bd.InvoiceDiscount,
-		DeductedByCoupons: bd.DeductedByCoupons,
-		PretaxAmount:      bd.PretaxAmount,
-		CurrencyAmount:    bd.Currency_Amount,
-		PaymentAmount:     bd.PaymentAmount,
-		OutstandingAmount: bd.OutstandingAmount,
+		PretaxGrossAmount: money(bd.PretaxGrossAmount),
+		InvoiceDiscount:   money(bd.InvoiceDiscount),
+		DeductedByCoupons: money(bd.DeductedByCoupons),
+		PretaxAmount:      money(bd.PretaxAmount),
+		CurrencyAmount:    money(bd.Currency_Amount),
+		PaymentAmount:     money(bd.PaymentAmount),
+		OutstandingAmount: money(bd.OutstandingAmount),
 
 		Region: bd.Region,
 		Zone:   bd.Zone,
@@ -476,7 +498,7 @@ func (bd *BillDetail) ToDBFormatWithTime(timestamp time.Time) *BillDetailForDB {
 
 		BizType:      bd.BizType,
 		AdjustType:   bd.AdjustType,
-		AdjustAmount: bd.AdjustAmount,
+		AdjustAmount: money(bd.AdjustAmount),
 
 		Granularity: granularity,
 		CreatedAt:   timestamp,

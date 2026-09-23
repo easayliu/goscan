@@ -187,19 +187,14 @@ func GenerateDatesInMonth(billingCycle string) ([]string, error) {
 		return nil, fmt.Errorf("failed to parse billing cycle: %w", err)
 	}
 
-	// Get the first and last day of the month
-	year := startTime.Year()
+	// Walk the days while they are still in the month. Comparing the day of
+	// the month against the last day's, as this used to, does not stop at the
+	// month's end: February ran on to 28 March, and a 31-day month never
+	// stopped at all, since no day is ever past the 31st.
 	month := startTime.Month()
-	firstDay := time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
-	lastDay := firstDay.AddDate(0, 1, -1)
-
-	// Generate date list
 	var dates []string
-	current := firstDay
-
-	for current.Day() <= lastDay.Day() {
+	for current := time.Date(startTime.Year(), month, 1, 0, 0, 0, 0, time.UTC); current.Month() == month; current = current.AddDate(0, 0, 1) {
 		dates = append(dates, current.Format(LayoutDate))
-		current = current.AddDate(0, 0, 1)
 	}
 
 	return dates, nil

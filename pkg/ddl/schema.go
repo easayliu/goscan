@@ -225,7 +225,9 @@ func columnTypeWithDefault(c Column) string {
 // A table created before the schema change of 2026-09 (amounts as String, the
 // payable amount inside the sorting key, rand() sharding) therefore has to be
 // dropped and recreated — the header below says so, and the bill tables are
-// cheap to refill: point the sync at the periods again.
+// cheap to refill: point the sync at the periods again. The same goes for the
+// Alibaba Cloud tables created before item and line_seq joined their sorting
+// key and their amounts became Decimal.
 //
 // CREATE DATABASE is deliberately not part of it: creating the database needs
 // ON CLUSTER too, and whether to create it at all is the operator's call.
@@ -239,6 +241,12 @@ func Render(tables []Table, o Options) string {
 	b.WriteString("-- partition key and column types are fixed at CREATE. Tables created before\n")
 	b.WriteString("-- 2026-09 (String amounts, PayableAmount / payment_amount in the sorting key,\n")
 	b.WriteString("-- rand() sharding) must be dropped and recreated, then re-synced.\n")
+	b.WriteString("-- The Alibaba Cloud tables changed again later in 2026-09 (Float64 amounts,\n")
+	b.WriteString("-- no item / line_seq in the sorting key): ones created before that must be\n")
+	b.WriteString("-- dropped and recreated too. The backfill below would add the two columns\n")
+	b.WriteString("-- but not put them in the key, and lines sharing a key would still merge away.\n")
+	b.WriteString("-- The VolcEngine table only changed RoundAmount to Decimal, which\n")
+	b.WriteString("-- ALTER TABLE ... MODIFY COLUMN can do in place.\n")
 	if o.Cluster != "" {
 		fmt.Fprintf(&b, "-- Cluster mode (`%s`): rows live in the _local tables and the sync writes\n", o.Cluster)
 		b.WriteString("-- into the Distributed tables of the same name on top of them.\n")

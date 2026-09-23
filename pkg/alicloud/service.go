@@ -466,7 +466,9 @@ func (s *BillService) DropOldTable(ctx context.Context, tableName string) error 
 
 // CheckDailyDataExists checks if daily table data exists for specified date
 func (s *BillService) CheckDailyDataExists(ctx context.Context, tableName, billingDate string) (bool, int64, error) {
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE billing_date = '%s'", tableName, billingDate)
+	// FINAL: count what the table holds once merged, not the copies a re-pull
+	// has not yet had merged away (see cloudsync's getDBCount).
+	query := fmt.Sprintf("SELECT count() FROM %s FINAL WHERE billing_date = '%s'", tableName, billingDate)
 
 	rows, err := s.chClient.Query(ctx, query)
 	if err != nil {
@@ -486,7 +488,9 @@ func (s *BillService) CheckDailyDataExists(ctx context.Context, tableName, billi
 
 // CheckMonthlyDataExists checks if monthly table data exists for specified billing cycle
 func (s *BillService) CheckMonthlyDataExists(ctx context.Context, tableName, billingCycle string) (bool, int64, error) {
-	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE billing_cycle = '%s'", tableName, billingCycle)
+	// FINAL: count what the table holds once merged, not the copies a re-pull
+	// has not yet had merged away (see cloudsync's getDBCount).
+	query := fmt.Sprintf("SELECT count() FROM %s FINAL WHERE billing_cycle = '%s'", tableName, billingCycle)
 
 	rows, err := s.chClient.Query(ctx, query)
 	if err != nil {
@@ -570,6 +574,13 @@ func (s *BillService) CheckMonthlyDataExistsWithOptimize(ctx context.Context, ta
 
 // GetDailyAPIDataCount gets API data total count for specified date
 func (s *BillService) GetDailyAPIDataCount(ctx context.Context, billingDate string) (int32, error) {
+	// A whole cycle is a daily period too (a backfill over months at daily
+	// granularity asks for exactly that), and it holds the lines of every day
+	// the daily sync walks. Count the same days so the two numbers compare.
+	if !IsValidBillingDate(billingDate) {
+		return s.getCycleDailyAPIDataCount(ctx, billingDate)
+	}
+
 	logger.Debug("getting daily API data count",
 		zap.String("provider", "alicloud"),
 		zap.String("billing_date", billingDate))
@@ -607,6 +618,25 @@ func (s *BillService) GetDailyAPIDataCount(ctx context.Context, billingDate stri
 		zap.String("billing_date", billingDate),
 		zap.Int32("count", totalCount))
 	return totalCount, nil
+}
+
+// getCycleDailyAPIDataCount sums the daily line counts over every day of a
+// billing cycle, the same days syncDailyBillDataImpl pulls.
+func (s *BillService) getCycleDailyAPIDataCount(ctx context.Context, billingCycle string) (int32, error) {
+	dates, err := GenerateDatesInMonth(billingCycle)
+	if err != nil {
+		return 0, fmt.Errorf("invalid daily period %s: %w", billingCycle, err)
+	}
+
+	var total int32
+	for _, date := range dates {
+		count, err := s.GetDailyAPIDataCount(ctx, date)
+		if err != nil {
+			return 0, fmt.Errorf("failed to count %s: %w", date, err)
+		}
+		total += count
+	}
+	return total, nil
 }
 
 // GetMonthlyAPIDataCount gets API data total count for specified month

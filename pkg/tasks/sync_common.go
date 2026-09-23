@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/logger"
+	"goscan/pkg/utils/dateutils"
 	"strings"
 	"time"
 
@@ -414,10 +415,16 @@ func (c *CommonDataCleaner) CleanPeriodData(ctx context.Context, tableName, peri
 	resolver := c.chClient.GetTableNameResolver()
 	actualTableName := resolver.ResolveQueryTarget(tableName)
 
-	// Try partition drop first (more efficient)
-	partitionValue, canUsePartition := c.calculatePartitionValue(period, conditionField, provider)
+	// Try partition drop first (more efficient, and immediate where a DELETE
+	// is a mutation that lands whenever it lands)
+	partitionValues, canUsePartition := c.calculatePartitionValues(period, conditionField, provider)
 	if canUsePartition {
-		return c.dropPartitionByValue(ctx, actualTableName, partitionValue, provider, period)
+		for _, partitionValue := range partitionValues {
+			if err := c.dropPartitionByValue(ctx, actualTableName, partitionValue, provider, period); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 
 	// Fallback to condition-based cleanup
@@ -425,27 +432,42 @@ func (c *CommonDataCleaner) CleanPeriodData(ctx context.Context, tableName, peri
 	return c.conditionBasedCleanup(ctx, actualTableName, condition, provider, period)
 }
 
-// calculatePartitionValue calculates partition value for DROP PARTITION operation
-func (c *CommonDataCleaner) calculatePartitionValue(period, conditionField, provider string) (string, bool) {
+// calculatePartitionValues works out which partitions hold one period, for
+// DROP PARTITION.
+func (c *CommonDataCleaner) calculatePartitionValues(period, conditionField, provider string) ([]string, bool) {
 	switch provider {
 	case "alicloud":
 		if conditionField == "billing_cycle" {
 			// Monthly table: PARTITION BY toYYYYMM(parseDateTimeBestEffortOrZero(concat(billing_cycle, '-01')))
 			// period = "2025-08" -> partition = "202508"
-			return strings.ReplaceAll(period, "-", ""), true
+			return []string{strings.ReplaceAll(period, "-", "")}, true
 		} else if conditionField == "billing_date" {
 			// Daily table: PARTITION BY toYYYYMMDD(billing_date)
 			// period = "2025-09-16" -> partition = "20250916"
-			return strings.ReplaceAll(period, "-", ""), true
+			if dateutils.IsValidBillingDate(period) {
+				return []string{strings.ReplaceAll(period, "-", "")}, true
+			}
+			// A whole cycle is one partition per day. Dropping '202509' here
+			// would name a day that does not exist, match nothing, and report
+			// success while every row of the month stays put.
+			dates, err := dateutils.GenerateDatesInMonth(period)
+			if err != nil {
+				return nil, false
+			}
+			values := make([]string, 0, len(dates))
+			for _, date := range dates {
+				values = append(values, strings.ReplaceAll(date, "-", ""))
+			}
+			return values, true
 		}
 	case "volcengine":
 		if conditionField == "BillPeriod" {
 			// VolcEngine table: PARTITION BY toYYYYMM(toDate(parseDateTimeBestEffortOrZero(ExpenseDate)))
 			// period = "2025-08" -> partition = "202508"
-			return strings.ReplaceAll(period, "-", ""), true
+			return []string{strings.ReplaceAll(period, "-", "")}, true
 		}
 	}
-	return "", false
+	return nil, false
 }
 
 // dropPartitionByValue drops partition by specific partition value

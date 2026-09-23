@@ -279,7 +279,11 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 
 	// for VolcEngine, special handling of field type conversion is needed
 	dateSelectExpr := info.DateColumn
-	amountSumExpr := fmt.Sprintf("SUM(%s)", info.AmountColumn)
+	// Amounts are Decimal on every bill table (pkg/ddl.MoneyType). Sum them as
+	// Decimal and convert the total once: summing per-row floats is the drift
+	// the column type exists to avoid, and a bare SUM would come back as a
+	// Decimal that the float TotalAmount cannot be scanned from.
+	amountSumExpr := fmt.Sprintf("toFloat64(SUM(%s))", info.AmountColumn)
 	amountWhereExpr := info.AmountColumn
 	dateWhereExpr := info.DateColumn
 
@@ -288,10 +292,6 @@ func (a *dataAggregator) buildQuery(info DatabaseTableInfo, resolvedTableName st
 		// empty one, which would fail the whole report rather than one row.
 		dateSelectExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
 		dateWhereExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
-		// Amounts are Decimal since the 2026-09 schema change (they used to be
-		// String, hence the old toFloat64OrZero); the report wants a float.
-		amountSumExpr = fmt.Sprintf("SUM(toFloat64(%s))", info.AmountColumn)
-		amountWhereExpr = fmt.Sprintf("toFloat64(%s)", info.AmountColumn)
 	}
 
 	// build postpaid filter condition
@@ -345,7 +345,11 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 
 	// for VolcEngine, special handling of field type conversion is needed
 	dateSelectExpr := info.DateColumn
-	amountSumExpr := fmt.Sprintf("SUM(%s)", info.AmountColumn)
+	// Amounts are Decimal on every bill table (pkg/ddl.MoneyType). Sum them as
+	// Decimal and convert the total once: summing per-row floats is the drift
+	// the column type exists to avoid, and a bare SUM would come back as a
+	// Decimal that the float TotalAmount cannot be scanned from.
+	amountSumExpr := fmt.Sprintf("toFloat64(SUM(%s))", info.AmountColumn)
 	amountWhereExpr := info.AmountColumn
 	dateWhereExpr := info.DateColumn
 
@@ -354,10 +358,6 @@ func (a *dataAggregator) buildLegacyQuery(info DatabaseTableInfo, resolvedTableN
 		// empty one, which would fail the whole report rather than one row.
 		dateSelectExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
 		dateWhereExpr = fmt.Sprintf("toDate(parseDateTimeBestEffortOrZero(%s))", info.DateColumn)
-		// Amounts are Decimal since the 2026-09 schema change (they used to be
-		// String, hence the old toFloat64OrZero); the report wants a float.
-		amountSumExpr = fmt.Sprintf("SUM(toFloat64(%s))", info.AmountColumn)
-		amountWhereExpr = fmt.Sprintf("toFloat64(%s)", info.AmountColumn)
 	}
 
 	// build postpaid filter condition

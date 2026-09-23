@@ -108,9 +108,23 @@ func VolcEngineBillTable(name string) Table {
 
 // aliCloudBillKey identifies one Alibaba Cloud bill line within a period. There
 // is no single id in the response, so the identity is spelled out: whose account,
-// which product and instance, under which billing arrangement, and which split /
-// adjustment record it is. As with VolcEngine, no amount is part of it.
-const aliCloudBillKey = "product_code, instance_id, bill_account_id, subscription_type, billing_type, product_detail_code, split_item_id, adjust_type"
+// which product and instance, under which billing arrangement, what kind of line
+// it is, where it ran and which split record it belongs to. As with VolcEngine,
+// no amount is part of it.
+//
+// item is what tells an order from its refund or an adjustment: those lines
+// agree on every other column, so leaving it out collapsed a charge and its
+// refund into whichever merged last. region / zone keep apart the lines that
+// have no instance at all (resource packages, marketplace, SMS), where the
+// instance id cannot. adjust_type is not here because the SDK never fills it.
+//
+// line_seq closes the gap no business column can: two lines that still agree on
+// everything above. The sync numbers the lines of each such group 0, 1, 2… as
+// it pulls a period, so a re-pull lands on the same slots and replaces them,
+// while two genuinely different lines no longer share a key. It relies on the
+// sync clearing a period before re-pulling it — otherwise a group that shrank
+// between pulls would keep its old tail.
+const aliCloudBillKey = "product_code, instance_id, bill_account_id, subscription_type, billing_type, item, biz_type, product_detail_code, region, zone, split_item_id, line_seq"
 
 // AliCloudMonthlyTable is the Alibaba Cloud monthly bill table.
 func AliCloudMonthlyTable(name string) Table {
@@ -202,7 +216,7 @@ var volcEngineBillColumns = []Column{
 	{Name: "OriginalBillAmount", Type: MoneyType, Section: "金额信息字段"},
 	{Name: "PreferentialBillAmount", Type: MoneyType},
 	{Name: "DiscountBillAmount", Type: MoneyType},
-	{Name: "RoundAmount", Type: "Float64"},
+	{Name: "RoundAmount", Type: MoneyType},
 	{Name: "PayableAmount", Type: MoneyType},
 	{Name: "PreTaxPayableAmount", Type: MoneyType},
 	{Name: "SettlePayableAmount", Type: MoneyType},
@@ -262,15 +276,16 @@ var aliCloudMonthlyColumns = []Column{
 	{Name: "pricing_unit", Type: "String"},
 	{Name: "currency", Type: "String"},
 	{Name: "billing_type", Type: "String"},
+	{Name: "item", Type: "String", Comment: "bill line type: SubscriptionOrder / PayAsYouGoBill / Refund / Adjustment"},
 	{Name: "usage", Type: "String"},
 	{Name: "usage_unit", Type: "String"},
-	{Name: "pretax_gross_amount", Type: "Float64"},
-	{Name: "invoice_discount", Type: "Float64"},
-	{Name: "deducted_by_coupons", Type: "Float64"},
-	{Name: "pretax_amount", Type: "Float64"},
-	{Name: "currency_amount", Type: "Float64"},
-	{Name: "payment_amount", Type: "Float64"},
-	{Name: "outstanding_amount", Type: "Float64"},
+	{Name: "pretax_gross_amount", Type: MoneyType},
+	{Name: "invoice_discount", Type: MoneyType},
+	{Name: "deducted_by_coupons", Type: MoneyType},
+	{Name: "pretax_amount", Type: MoneyType},
+	{Name: "currency_amount", Type: MoneyType},
+	{Name: "payment_amount", Type: MoneyType},
+	{Name: "outstanding_amount", Type: MoneyType},
 	{Name: "region", Type: "String"},
 	{Name: "zone", Type: "String"},
 	{Name: "instance_spec", Type: "String"},
@@ -292,7 +307,8 @@ var aliCloudMonthlyColumns = []Column{
 	{Name: "product_detail_code", Type: "String"},
 	{Name: "biz_type", Type: "String"},
 	{Name: "adjust_type", Type: "String"},
-	{Name: "adjust_amount", Type: "Float64"},
+	{Name: "adjust_amount", Type: MoneyType},
+	{Name: "line_seq", Type: "UInt32", Comment: "ordinal among lines sharing the rest of the sorting key in one pull"},
 	{Name: "granularity", Type: "String", Default: "'MONTHLY'"},
 	{Name: "created_at", Type: "DateTime64(3)", Default: "now()"},
 	{Name: "updated_at", Type: "DateTime64(3)", Default: "now()"},
@@ -313,15 +329,16 @@ var aliCloudDailyColumns = []Column{
 	{Name: "pricing_unit", Type: "String"},
 	{Name: "currency", Type: "String"},
 	{Name: "billing_type", Type: "String"},
+	{Name: "item", Type: "String", Comment: "bill line type: SubscriptionOrder / PayAsYouGoBill / Refund / Adjustment"},
 	{Name: "usage", Type: "String"},
 	{Name: "usage_unit", Type: "String"},
-	{Name: "pretax_gross_amount", Type: "Float64"},
-	{Name: "invoice_discount", Type: "Float64"},
-	{Name: "deducted_by_coupons", Type: "Float64"},
-	{Name: "pretax_amount", Type: "Float64"},
-	{Name: "currency_amount", Type: "Float64"},
-	{Name: "payment_amount", Type: "Float64"},
-	{Name: "outstanding_amount", Type: "Float64"},
+	{Name: "pretax_gross_amount", Type: MoneyType},
+	{Name: "invoice_discount", Type: MoneyType},
+	{Name: "deducted_by_coupons", Type: MoneyType},
+	{Name: "pretax_amount", Type: MoneyType},
+	{Name: "currency_amount", Type: MoneyType},
+	{Name: "payment_amount", Type: MoneyType},
+	{Name: "outstanding_amount", Type: MoneyType},
 	{Name: "region", Type: "String"},
 	{Name: "zone", Type: "String"},
 	{Name: "instance_spec", Type: "String"},
@@ -343,7 +360,8 @@ var aliCloudDailyColumns = []Column{
 	{Name: "product_detail_code", Type: "String"},
 	{Name: "biz_type", Type: "String"},
 	{Name: "adjust_type", Type: "String"},
-	{Name: "adjust_amount", Type: "Float64"},
+	{Name: "adjust_amount", Type: MoneyType},
+	{Name: "line_seq", Type: "UInt32", Comment: "ordinal among lines sharing the rest of the sorting key in one pull"},
 	{Name: "granularity", Type: "String", Default: "'DAILY'"},
 	{Name: "created_at", Type: "DateTime64(3)", Default: "now()"},
 	{Name: "updated_at", Type: "DateTime64(3)", Default: "now()"},

@@ -468,6 +468,7 @@ func (c *Client) convertAPIResponse(response *bssopenapi.DescribeInstanceBillRes
 			PricingUnit:      item.ListPriceUnit,
 			Currency:         item.Currency,
 			BillingType:      item.BillingType,
+			Item:             item.Item,
 
 			// 用量信息
 			Usage:     item.Usage,

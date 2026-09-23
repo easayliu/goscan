@@ -135,3 +135,30 @@ func TestForceUpdateOverridesSyncOptimal(t *testing.T) {
 		t.Errorf("provider pulled %v, want the period it was forced to pull", provider.syncedPairs)
 	}
 }
+
+// A forced re-pull empties each period first. Replacing in place only reaches
+// lines whose key comes back; a line the provider has since dropped would
+// otherwise stay behind and be counted on top of the fresh pull.
+func TestForceUpdateClearsEachPeriodBeforePulling(t *testing.T) {
+	provider := &stubProvider{}
+	checker := &stubChecker{consistent: true}
+	executor := &BaseCloudSyncExecutor{provider: provider, consistencyChecker: checker}
+
+	if _, err := executor.executeStandardSync(context.Background(), &SyncConfig{
+		StartPeriod: "2026-07",
+		EndPeriod:   "2026-08",
+		Granularity: "monthly",
+		ForceUpdate: true,
+		AutoClean:   true,
+	}); err != nil {
+		t.Fatalf("executeStandardSync: %v", err)
+	}
+
+	want := []string{"2026-07 monthly", "2026-08 monthly"}
+	if !equal(checker.cleaned, want) {
+		t.Errorf("cleaned %v, want %v", checker.cleaned, want)
+	}
+	if !equal(provider.syncedPairs, want) {
+		t.Errorf("pulled %v, want %v", provider.syncedPairs, want)
+	}
+}

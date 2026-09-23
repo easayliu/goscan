@@ -30,9 +30,13 @@ type TableConfig struct {
 	DistributedTable string `json:"distributed_table"` // distributed table name
 	PeriodField      string `json:"period_field"`      // field name for period (e.g., "billing_cycle", "BillPeriod")
 	DateField        string `json:"date_field"`        // field name for date (e.g., "billing_date", "ExpenseDate")
-	ProviderField    string `json:"provider_field"`    // field name for provider
-	Granularity      string `json:"granularity"`       // "monthly" | "daily"
-	Schema           string `json:"schema"`            // table schema SQL
+	// CycleField is the YYYY-MM billing cycle column of a daily table. A daily
+	// period can be one day or a whole cycle, and the whole cycle is counted and
+	// cleaned through this column. Empty for tables that are not daily.
+	CycleField    string `json:"cycle_field,omitempty"`
+	ProviderField string `json:"provider_field"` // field name for provider
+	Granularity   string `json:"granularity"`    // "monthly" | "daily"
+	Schema        string `json:"schema"`         // table schema SQL
 }
 
 // SyncResult represents the result of a synchronization operation

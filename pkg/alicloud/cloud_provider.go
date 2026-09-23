@@ -118,6 +118,7 @@ func (p *AliCloudProvider) GetTableConfig(granularity string) *cloudsync.TableCo
 			DistributedTable: "", // Will be determined by table name resolver
 			PeriodField:      "billing_date",
 			DateField:        "billing_date",
+			CycleField:       "billing_cycle",
 			ProviderField:    "provider",
 			Granularity:      "daily",
 		}
