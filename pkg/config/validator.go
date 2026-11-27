@@ -118,6 +118,66 @@ func credentialsPresent(present bool, anyCredential func() bool) bool {
 	return present && anyCredential()
 }
 
+// validateVolcEngineAccounts 校验多账号配置。
+//
+// 几个账号的账单进同一张表，核对条数和重拉前清数据都靠 PayerID 区分；有一个
+// 账号没填，它的同步就会按整月清表，把别的账号的数据一起清掉。所以一旦配了
+// accounts，主账号和每个额外账号都必须有 PayerID，且互不相同。
+func validateVolcEngineAccounts(config *VolcEngineConfig) error {
+	if config.PayerID != "" && !isDigits(config.PayerID) {
+		return fmt.Errorf("payer_id %q 应为纯数字的账号 ID", config.PayerID)
+	}
+	if len(config.Accounts) == 0 {
+		return nil
+	}
+	if config.PayerID == "" {
+		return fmt.Errorf("%w: payer_id（配了 accounts 时主账号也必须填 payer_id）", ErrMissingRequired)
+	}
+
+	names := map[string]bool{}
+	payers := map[string]string{config.PayerID: "主账号"}
+	for i, a := range config.Accounts {
+		if a.Name == "" {
+			return fmt.Errorf("%w: accounts[%d].name", ErrMissingRequired, i)
+		}
+		for _, ch := range a.Name {
+			if !(ch >= 'a' && ch <= 'z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
+				return fmt.Errorf("accounts[%d].name %q 只能用小写字母、数字、- 和 _", i, a.Name)
+			}
+		}
+		if names[a.Name] {
+			return fmt.Errorf("accounts[%d].name %q 重复", i, a.Name)
+		}
+		names[a.Name] = true
+
+		envPrefix := VolcEngineAccountEnvPrefix(a.Name)
+		if a.AccessKey == "" || a.SecretKey == "" {
+			return fmt.Errorf("%w: 火山账号 %q 的 access_key / secret_key（检查环境变量 %sACCESS_KEY、%sSECRET_KEY）",
+				ErrMissingRequired, a.Name, envPrefix, envPrefix)
+		}
+		if !isDigits(a.PayerID) {
+			return fmt.Errorf("火山账号 %q 的 payer_id %q 应为纯数字的账号 ID", a.Name, a.PayerID)
+		}
+		if other, dup := payers[a.PayerID]; dup {
+			return fmt.Errorf("火山账号 %q 的 payer_id %s 与 %s 相同", a.Name, a.PayerID, other)
+		}
+		payers[a.PayerID] = a.Name
+	}
+	return nil
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // validateVolcEngineConfig 验证火山引擎配置
 func validateVolcEngineConfig(config *VolcEngineConfig) error {
 	if config.AccessKey == "" {
@@ -130,6 +190,10 @@ func validateVolcEngineConfig(config *VolcEngineConfig) error {
 
 	if config.Region == "" {
 		return fmt.Errorf("%w: region", ErrMissingRequired)
+	}
+
+	if err := validateVolcEngineAccounts(config); err != nil {
+		return err
 	}
 
 	if config.Timeout <= 0 {
@@ -274,6 +338,20 @@ func (c *Config) validateJobCredentials() error {
 	}
 
 	for _, job := range c.Scheduler.Jobs {
+		if account, ok := VolcEngineAccountFromProvider(job.Provider); ok && account != "" {
+			ve, err := c.GetVolcEngineConfig().ForAccount(account)
+			if err != nil {
+				return fmt.Errorf("%w: 任务 %q 指向的火山账号 %q 不在 cloud_providers.volcengine.accounts 里",
+					ErrVolcEngineConfig, job.Name, account)
+			}
+			if ve.AccessKey == "" || ve.SecretKey == "" {
+				p := VolcEngineAccountEnvPrefix(account)
+				return fmt.Errorf("%w: 任务 %q 要同步火山账号 %q，但 access_key / secret_key 没配"+
+					"（容器里检查 %sACCESS_KEY、%sSECRET_KEY 这两个环境变量挂上没有）",
+					ErrVolcEngineConfig, job.Name, account, p, p)
+			}
+			continue
+		}
 		switch job.Provider {
 		case "volcengine":
 			ve := c.GetVolcEngineConfig()

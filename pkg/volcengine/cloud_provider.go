@@ -99,7 +99,7 @@ func (p *VolcEngineProvider) GetTableConfig(granularity string) *cloudsync.Table
 		tableName = baseTable + "_local" // for cleanup operations, which act per node
 	}
 
-	return &cloudsync.TableConfig{
+	tc := &cloudsync.TableConfig{
 		TableName:        tableName,
 		DistributedTable: distributedTable,
 		PeriodField:      "BillPeriod",
@@ -107,6 +107,12 @@ func (p *VolcEngineProvider) GetTableConfig(granularity string) *cloudsync.Table
 		ProviderField:    "provider",
 		Granularity:      "monthly",
 	}
+	// Several accounts share the bill table: count and clean this account's
+	// rows only. The validator has made sure PayerID is all digits.
+	if p.config.PayerID != "" {
+		tc.Scope = fmt.Sprintf("PayerID = '%s'", p.config.PayerID)
+	}
+	return tc
 }
 
 // GetPeriodField returns the period field name

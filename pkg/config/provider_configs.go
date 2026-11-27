@@ -1,6 +1,10 @@
 package config
 
-import "os"
+import (
+	"fmt"
+	"os"
+	"strings"
+)
 
 // CloudProvidersConfig 云服务提供商配置集合
 type CloudProvidersConfig struct {
@@ -34,6 +38,63 @@ type VolcEngineConfig struct {
 	DefaultStartPeriod  string `json:"default_start_period" yaml:"default_start_period"`   // 默认开始账期 YYYY-MM
 	DefaultEndPeriod    string `json:"default_end_period" yaml:"default_end_period"`       // 默认结束账期 YYYY-MM
 	SkipEmptyPeriods    bool   `json:"skip_empty_periods" yaml:"skip_empty_periods"`       // 是否跳过空账期
+
+	// === 多账号 ===
+	// PayerID 是上面这组 access_key 所属的付款账号 ID。只拉一个账号时可以不填；
+	// 配了 Accounts 就必须填：几个账号的账单进同一张表，核对条数、重拉前清数据
+	// 都得按 PayerID 只动自己那一份，否则会把别的账号的整月数据清掉。
+	PayerID string `json:"payer_id" yaml:"payer_id"`
+	// Accounts 是额外的火山账号。每个账号沿用上面的 region / host / 表名等设置，
+	// 只换凭据和 PayerID；定时任务里用 provider: "volcengine:<name>" 指过来。
+	Accounts []VolcEngineAccount `json:"accounts,omitempty" yaml:"accounts,omitempty"`
+}
+
+// VolcEngineAccount 一个额外的火山账号。
+//
+// 凭据留空时从环境变量 VOLCENGINE_<NAME>_ACCESS_KEY / VOLCENGINE_<NAME>_SECRET_KEY
+// 读（<NAME> 是 name 转大写、- 换成 _），和主账号一样由 Secret 注入。
+type VolcEngineAccount struct {
+	Name      string `json:"name" yaml:"name"`
+	AccessKey string `json:"access_key" yaml:"access_key"`
+	SecretKey string `json:"secret_key" yaml:"secret_key"`
+	PayerID   string `json:"payer_id" yaml:"payer_id"`
+}
+
+// VolcEngineProviderPrefix 额外账号的 provider 写法：volcengine:<name>。
+const VolcEngineProviderPrefix = "volcengine:"
+
+// VolcEngineAccountFromProvider 从 provider 名里取出账号名。
+// "volcengine" 是主账号（返回 "", true），"volcengine:xxx" 是账号 xxx，其他返回 false。
+func VolcEngineAccountFromProvider(provider string) (string, bool) {
+	if provider == "volcengine" {
+		return "", true
+	}
+	if strings.HasPrefix(provider, VolcEngineProviderPrefix) {
+		return strings.TrimPrefix(provider, VolcEngineProviderPrefix), true
+	}
+	return "", false
+}
+
+// VolcEngineAccountEnvPrefix 账号凭据环境变量的前缀，如 avatar -> VOLCENGINE_AVATAR_。
+func VolcEngineAccountEnvPrefix(name string) string {
+	return "VOLCENGINE_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")) + "_"
+}
+
+// ForAccount 返回指定账号的配置：主账号（name 为空）就是自己；额外账号是一份
+// 拷贝，只换凭据和 PayerID，其余设置（表名、region 等）与主账号相同。
+func (c *VolcEngineConfig) ForAccount(name string) (*VolcEngineConfig, error) {
+	if name == "" {
+		return c, nil
+	}
+	for _, a := range c.Accounts {
+		if a.Name == name {
+			cp := *c
+			cp.AccessKey, cp.SecretKey, cp.PayerID = a.AccessKey, a.SecretKey, a.PayerID
+			cp.Accounts = nil
+			return &cp, nil
+		}
+	}
+	return nil, fmt.Errorf("volcengine account %q is not configured", name)
 }
 
 // AliCloudConfig 阿里云配置
@@ -284,9 +345,20 @@ func mergeVolcEngineEnvVars(config *Config) {
 		"VOLCENGINE_DEFAULT_START_PERIOD":  &ve.DefaultStartPeriod,
 		"VOLCENGINE_DEFAULT_END_PERIOD":    &ve.DefaultEndPeriod,
 		"VOLCENGINE_BILL_TABLE":            &ve.BillTable,
+		"VOLCENGINE_PAYER_ID":              &ve.PayerID,
 	}
 
 	applyEnvMappings(envMappings)
+
+	for i := range ve.Accounts {
+		a := &ve.Accounts[i]
+		prefix := VolcEngineAccountEnvPrefix(a.Name)
+		applyEnvMappings(map[string]interface{}{
+			prefix + "ACCESS_KEY": &a.AccessKey,
+			prefix + "SECRET_KEY": &a.SecretKey,
+			prefix + "PAYER_ID":   &a.PayerID,
+		})
+	}
 
 	// 布尔值单独处理
 	if debug := os.Getenv("VOLCENGINE_DEBUG"); debug != "" {

@@ -37,7 +37,13 @@ type TableConfig struct {
 	// CycleField is the YYYY-MM billing cycle column of a daily table. A daily
 	// period can be one day or a whole cycle, and the whole cycle is counted and
 	// cleaned through this column. Empty for tables that are not daily.
-	CycleField    string `json:"cycle_field,omitempty"`
+	CycleField string `json:"cycle_field,omitempty"`
+	// Scope, when set, is an extra WHERE condition that limits this provider
+	// to its own rows of a table it shares with others — several VolcEngine
+	// accounts in one bill table, told apart by PayerID. Counting and cleaning
+	// a period then touch that account's rows only; cleaning goes by DELETE
+	// instead of DROP PARTITION, which would take every account's month.
+	Scope         string `json:"scope,omitempty"`
 	ProviderField string `json:"provider_field"` // field name for provider
 	Granularity   string `json:"granularity"`    // "monthly" | "daily"
 	Schema        string `json:"schema"`         // table schema SQL

@@ -235,6 +235,14 @@ func (f *ExecutorFactory) registerBuiltinExecutors() {
 		return NewVolcEngineSyncExecutor(f.config, f.chClient), nil
 	})
 
+	// Extra VolcEngine accounts run as provider "volcengine:<name>"
+	for _, account := range f.config.GetVolcEngineConfig().Accounts {
+		name := account.Name
+		f.registry.RegisterExecutor(config.VolcEngineProviderPrefix+name, func(ctx context.Context) (SyncExecutor, error) {
+			return NewVolcEngineAccountSyncExecutor(f.config, f.chClient, name)
+		})
+	}
+
 	// Register Alibaba Cloud executor
 	f.registry.RegisterExecutor("alicloud", func(ctx context.Context) (SyncExecutor, error) {
 		return NewAliCloudSyncExecutor(f.config, f.chClient), nil

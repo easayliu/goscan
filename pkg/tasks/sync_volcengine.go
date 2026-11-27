@@ -17,8 +17,20 @@ type VolcEngineSyncExecutor struct {
 
 // NewVolcEngineSyncExecutor creates a new VolcEngine sync executor using the common framework
 func NewVolcEngineSyncExecutor(cfg *config.Config, chClient *clickhouse.Client) *VolcEngineSyncExecutor {
-	// Create the VolcEngine provider
-	volcConfig := cfg.GetVolcEngineConfig()
+	return newVolcEngineSyncExecutor(cfg, cfg.GetVolcEngineConfig(), chClient)
+}
+
+// NewVolcEngineAccountSyncExecutor creates an executor for one of the extra
+// accounts in cloud_providers.volcengine.accounts.
+func NewVolcEngineAccountSyncExecutor(cfg *config.Config, chClient *clickhouse.Client, account string) (*VolcEngineSyncExecutor, error) {
+	volcConfig, err := cfg.GetVolcEngineConfig().ForAccount(account)
+	if err != nil {
+		return nil, err
+	}
+	return newVolcEngineSyncExecutor(cfg, volcConfig, chClient), nil
+}
+
+func newVolcEngineSyncExecutor(cfg *config.Config, volcConfig *config.VolcEngineConfig, chClient *clickhouse.Client) *VolcEngineSyncExecutor {
 	provider := volcengine.NewVolcEngineProvider(volcConfig, chClient)
 
 	// Create data cleaner from base sync executor

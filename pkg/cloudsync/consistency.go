@@ -6,6 +6,7 @@ import (
 	"goscan/pkg/clickhouse"
 	"goscan/pkg/logger"
 	"goscan/pkg/utils/dateutils"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -139,11 +140,22 @@ func (c *DefaultConsistencyChecker) CleanInconsistentData(ctx context.Context, p
 				zap.String("granularity", period.Granularity))
 
 			tableConfig := c.provider.GetTableConfig(period.Granularity)
-			err := c.dataCleaner.CleanPeriodData(ctx,
-				tableConfig.TableName,
-				period.Period,
-				tableConfig.PeriodField,
-				c.provider.GetProviderName())
+			var err error
+			if tableConfig.Scope != "" {
+				// Shared table: only this account's rows of the period go.
+				var cond string
+				if cond, err = periodCondition(tableConfig, period.Period, period.Granularity); err == nil {
+					cond = strings.Replace(cond, "?", quoteSQLString(period.Period), 1)
+					err = c.dataCleaner.CleanTableData(ctx, tableConfig.TableName,
+						fmt.Sprintf("%s AND %s", cond, tableConfig.Scope))
+				}
+			} else {
+				err = c.dataCleaner.CleanPeriodData(ctx,
+					tableConfig.TableName,
+					period.Period,
+					tableConfig.PeriodField,
+					c.provider.GetProviderName())
+			}
 
 			if err != nil {
 				logger.Error("failed to clean period data",
@@ -182,6 +194,9 @@ func (c *DefaultConsistencyChecker) getDBCount(ctx context.Context, period, gran
 	condition, err := periodCondition(tableConfig, period, granularity)
 	if err != nil {
 		return 0, err
+	}
+	if tableConfig.Scope != "" {
+		condition += " AND " + tableConfig.Scope
 	}
 	query := fmt.Sprintf("SELECT count() FROM %s FINAL WHERE %s", actualTableName, condition)
 	args := []interface{}{period}
@@ -229,6 +244,11 @@ func periodCondition(tc *TableConfig, period, granularity string) (string, error
 		return fmt.Sprintf("%s = ?", tc.DateField), nil
 	}
 	return fmt.Sprintf("%s = ?", tc.PeriodField), nil
+}
+
+// quoteSQLString renders s as a single-quoted ClickHouse string literal.
+func quoteSQLString(s string) string {
+	return "'" + strings.ReplaceAll(strings.ReplaceAll(s, `\`, `\\`), "'", `\'`) + "'"
 }
 
 // calculatePeriodsToCheck calculates which periods to check for sync-optimal mode

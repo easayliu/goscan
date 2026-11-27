@@ -82,6 +82,15 @@ cloud_providers:
     max_historical_months: 12
     auto_detect_periods: true
     skip_empty_periods: true
+    # 多账号：几个火山账号的账单进同一张表，靠 PayerID 区分。
+    # 只有一个账号时 payer_id 可以不填；配了 accounts 就必须填，
+    # 否则主账号重拉时会按整月清表，把别的账号的数据一起清掉。
+    payer_id: "" # 主账号的付款账号 ID，也可走 VOLCENGINE_PAYER_ID
+    # accounts:
+    #   - name: avatar            # 定时任务里写 provider: "volcengine:avatar"
+    #     payer_id: "2134017190"
+    #     access_key: ""          # 留空则读 VOLCENGINE_AVATAR_ACCESS_KEY
+    #     secret_key: ""          # 留空则读 VOLCENGINE_AVATAR_SECRET_KEY
 
   alicloud:
     access_key_id: "" # 建议走 ALICLOUD_ACCESS_KEY_ID 环境变量
