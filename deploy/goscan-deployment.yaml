@@ -18,7 +18,7 @@
 # 集群外或者服务没起来时，也可以起一个一次性 Pod：
 #
 #   kubectl -n logging run goscan-backfill --rm -it --restart=Never \
-#     --image=harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest -- \
+#     --image=harbor-intranet.afanticar.com/ghcr/easayliu/goscan:0.6.2 -- \
 #     --once /etc/goscan/config.yaml --provider alicloud --start 2026-01 --end 2026-06
 #
 # （真要这么跑得把下面的 ConfigMap / Secret 也挂上，`kubectl -n logging create job
@@ -35,6 +35,9 @@ stringData:
   # ConfigMap 是明文的，密钥不该进去
   volcengine-access-key: ""
   volcengine-secret-key: ""
+  # 第二个火山账号 avatar（广州阿凡达营销服务有限公司，2134017190）
+  volcengine-avatar-access-key: ""
+  volcengine-avatar-secret-key: ""
   alicloud-access-key-id: ""
   alicloud-access-key-secret: ""
   # 写账单表的 ClickHouse 账号
@@ -82,6 +85,14 @@ data:
             sync_mode: "sync-optimal"
             force_update: true
 
+        # 第二个火山账号，账号配置见 cloud_providers.volcengine.accounts
+        - name: "volcengine_avatar_daily_sync"
+          provider: "volcengine:avatar"
+          cron: "10 2 * * *"
+          config:
+            sync_mode: "sync-optimal"
+            force_update: true
+
         - name: "alicloud_daily_sync"
           provider: "alicloud"
           cron: "0 3 * * *"
@@ -116,6 +127,11 @@ data:
         max_historical_months: 12
         auto_detect_periods: true
         skip_empty_periods: true
+        # 多个账号共用 volcengine_bill，按 PayerID 区分；配了 accounts 主账号也必须填
+        payer_id: "2100041849"   # 广州阿凡提电子科技有限公司
+        accounts:
+          - name: avatar          # 广州阿凡达营销服务有限公司，凭据走 VOLCENGINE_AVATAR_*
+            payer_id: "2134017190"
 
       alicloud:
         access_key_id: ""
@@ -175,7 +191,7 @@ spec:
       # --check 不连库，起不来的原因只会是配置本身
       initContainers:
         - name: check-config
-          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest
+          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:0.6.2
           args: ["--check", "/etc/goscan/config.yaml"]
           envFrom:
             - configMapRef:
@@ -187,6 +203,12 @@ spec:
             - name: VOLCENGINE_SECRET_KEY
               valueFrom:
                 secretKeyRef: { name: goscan-credentials, key: volcengine-secret-key }
+            - name: VOLCENGINE_AVATAR_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: volcengine-avatar-access-key }
+            - name: VOLCENGINE_AVATAR_SECRET_KEY
+              valueFrom:
+                secretKeyRef: { name: goscan-credentials, key: volcengine-avatar-secret-key }
             - name: ALICLOUD_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef: { name: goscan-credentials, key: alicloud-access-key-id }
@@ -206,7 +228,7 @@ spec:
       containers:
         - name: goscan
           # 打 v* tag 由 CI 推到 GHCR，见 README「发布」
-          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:latest
+          image: harbor-intranet.afanticar.com/ghcr/easayliu/goscan:0.6.2
           args: ["/etc/goscan/config.yaml"]
           envFrom:
             - configMapRef:
